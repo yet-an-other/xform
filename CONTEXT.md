@@ -14,8 +14,16 @@ _Avoid_: dashboard (that's the page), manager, admin console
 The xray-core proxy server being monitored, running on the same host as the panel.
 _Avoid_: the core, the proxy (alone), the backend
 
+**API**:
+The panel's JSON interface used by the dashboard. It exposes current observations and durable history; it never changes xray.
+_Avoid_: REST service, backend, control API
+
+**Host**:
+The machine running xray and the panel.
+_Avoid_: server, node, machine (alone)
+
 **Dashboard**:
-The single page the panel serves, showing server stats, xray status, and the users table.
+The single page the panel presents, showing host stats, xray status, and the users table.
 _Avoid_: home page, main screen
 
 **User**:
