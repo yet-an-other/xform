@@ -58,6 +58,7 @@
   <header>
     <h1>xform</h1>
     <span class="pill up" id="xrayPill">● xray running</span>
+    <span class="pill" id="verPill">xray v26.4.13</span>
     <span class="pill" id="uptimePill">uptime —</span>
     <span class="spacer"></span>
     <span class="refresh" id="refreshInfo">refreshing every 5s</span>
@@ -92,7 +93,7 @@
     <h3>Users</h3>
     <table>
       <thead><tr>
-        <th></th><th>User</th><th>Up</th><th>Down</th><th>Total</th>
+        <th></th><th>User</th><th>Protocol</th><th>Up</th><th>Down</th><th>Total</th>
         <th>Speed now</th><th>Online IPs</th><th>Last seen</th>
       </tr></thead>
       <tbody id="rows"></tbody>
@@ -108,11 +109,11 @@
 <script>
 // ---- mock data -------------------------------------------------------------
 const users = [
-  { email: "alice@example.com",   up: 12.4e9, down: 148.2e9, ips: ["203.0.113.10"],           online: true,  lastSeen: Date.now() },
-  { email: "bob@example.com",     up: 3.1e9,  down: 41.7e9,  ips: ["198.51.100.7", "198.51.100.8"], online: true, lastSeen: Date.now() },
-  { email: "carol@example.com",   up: 890e6,  down: 9.3e9,   ips: [],                          online: false, lastSeen: Date.now() - 47*60e3 },
-  { email: "dave@example.com",    up: 22.8e9, down: 310.5e9, ips: [],                          online: false, lastSeen: Date.now() - 26*3600e3 },
-  { email: "erin@example.com",    up: 112e6,  down: 1.9e9,   ips: ["192.0.2.55"],              online: true,  lastSeen: Date.now() },
+  { email: "alice@example.com",   proto: "VLESS", security: "XTLS-Reality", up: 12.4e9, down: 148.2e9, ips: ["203.0.113.10"],           online: true,  lastSeen: Date.now() },
+  { email: "bob@example.com",     proto: "VLESS", security: "XTLS-Reality", up: 3.1e9,  down: 41.7e9,  ips: ["198.51.100.7", "198.51.100.8"], online: true, lastSeen: Date.now() },
+  { email: "carol@example.com",   proto: "Trojan", security: "TLS",        up: 890e6,  down: 9.3e9,   ips: [],                          online: false, lastSeen: Date.now() - 47*60e3 },
+  { email: "dave@example.com",    proto: "VMess", security: "WS + TLS",    up: 22.8e9, down: 310.5e9, ips: [],                          online: false, lastSeen: Date.now() - 26*3600e3 },
+  { email: "erin@example.com",    proto: "VLESS", security: "XTLS-Reality", up: 112e6,  down: 1.9e9,   ips: ["192.0.2.55"],              online: true,  lastSeen: Date.now() },
 ];
 const speeds = new Map(users.map(u => [u.email, { up: 0, down: 0 }]));
 let outage = false;
@@ -155,6 +156,7 @@ function tick() {
   pill.className = "pill " + (outage ? "down" : "up");
 
   if (!outage) {
+    set("verPill", "xray v26.4.13");
     set("uptimePill", "uptime " + dur(Date.now() - t0));
     // random-walk speeds, accumulate counters
     let sumUp = 0, sumDown = 0;
@@ -178,6 +180,7 @@ function tick() {
     set("xmem", fmtB(84e6 + Math.random()*8e6));
     set("xgor", Math.floor(180 + Math.random()*40) + " goroutines");
   } else {
+    set("verPill", "xray —");
     set("uptimePill", "uptime —");
     for (const u of users) { const s = speeds.get(u.email); s.up = s.down = 0; }
   }
@@ -188,6 +191,7 @@ function tick() {
     return `<tr>
       <td><span class="dot ${u.online && !outage ? "on" : "off"}"></span></td>
       <td class="email">${u.email}</td>
+      <td><span class="muted">${u.proto} ·</span> ${u.security}</td>
       <td>${fmtB(u.up)}</td><td>${fmtB(u.down)}</td><td>${fmtB(u.up+u.down)}</td>
       <td>${outage ? '<span class="muted">stale</span>' :
         (s.up || s.down ? `↑ ${fmtS(s.up)} ↓ ${fmtS(s.down)}` : '<span class="muted">idle</span>')}</td>
