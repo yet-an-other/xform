@@ -1,5 +1,9 @@
 import { useEffect, useState } from "react";
 
+import { Badge } from "@/components/ui/badge";
+import { Card } from "@/components/ui/card";
+import { Skeleton } from "@/components/ui/skeleton";
+
 export interface HostStats {
   collected_at: number;
   cpu_percent: number;
@@ -54,23 +58,37 @@ interface MetricCardProps {
 
 function MetricCard({ title, value, detail, percent }: MetricCardProps) {
   return (
-    <article className="metric-card">
-      <div className="metric-card__header">
-        <h2>{title}</h2>
-        <span className="metric-card__value">{value}</span>
+    <Card className="min-h-[190px] gap-0 p-6 max-sm:min-h-[170px] max-sm:p-5">
+      <div className="flex items-baseline justify-between gap-4">
+        <h2 className="text-muted-foreground text-xs font-bold tracking-[0.13em] uppercase">
+          {title}
+        </h2>
+        <span className="font-mono text-2xl font-semibold tracking-tight">{value}</span>
       </div>
       <div
         aria-label={`${title} usage`}
         aria-valuemax={100}
         aria-valuemin={0}
         aria-valuenow={Math.round(percent)}
-        className="meter"
+        className="bg-secondary mt-9 mb-4 h-1.5 overflow-hidden rounded-full"
         role="progressbar"
       >
-        <span className="meter__fill" style={{ width: `${percent}%` }} />
+        <span
+          className="block h-full rounded-full bg-gradient-to-r from-[#3fb98e] to-[#6ee6b9] shadow-[0_0_14px_rgba(85,214,168,0.3)] transition-[width] duration-300 motion-reduce:transition-none"
+          style={{ width: `${percent}%` }}
+        />
       </div>
-      <p>{detail}</p>
-    </article>
+      <p className="text-muted-foreground text-sm">{detail}</p>
+    </Card>
+  );
+}
+
+function HostDetail({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="flex items-center justify-between gap-5 px-5 py-4 max-sm:flex-col max-sm:items-start max-sm:gap-2">
+      <span className="text-muted-foreground text-xs">{label}</span>
+      <strong className="truncate font-mono text-xs font-semibold">{value}</strong>
+    </div>
   );
 }
 
@@ -109,23 +127,37 @@ function App() {
   }, []);
 
   return (
-    <main>
-      <header className="page-header">
+    <main className="mx-auto w-[min(1180px,calc(100%-40px))] pt-16 pb-12 max-sm:w-[calc(100%-28px)] max-sm:pt-10">
+      <header className="mb-8 flex items-end justify-between gap-6 max-sm:items-start">
         <div>
-          <p className="eyebrow">xform panel</p>
-          <h1>Server</h1>
+          <p className="text-primary mb-2 font-mono text-xs font-bold tracking-[0.16em] uppercase">
+            xform panel
+          </p>
+          <h1 className="text-[clamp(2.25rem,6vw,4rem)] leading-none font-semibold tracking-[-0.055em]">
+            Server
+          </h1>
         </div>
-        <span className="live-status">
-          <span aria-hidden="true" className="live-status__dot" />
+        <Badge
+          className="border-primary/30 bg-accent text-accent-foreground gap-2 px-3 py-1.5 text-[0.78rem] font-bold tracking-[0.08em] uppercase"
+          variant="outline"
+        >
+          <span
+            aria-hidden="true"
+            className="bg-primary size-[7px] rounded-full shadow-[0_0_0_4px_rgba(85,214,168,0.12)]"
+          />
           Live
-        </span>
+        </Badge>
       </header>
 
-      {error ? <p className="error-banner">Unable to refresh: {error}</p> : null}
+      {error ? (
+        <p className="border-destructive/30 bg-destructive/10 mb-4 rounded-lg border px-4 py-3 text-sm text-[#ffc3c8]">
+          Unable to refresh: {error}
+        </p>
+      ) : null}
 
       {stats ? (
         <>
-          <section aria-label="Server resources" className="metrics-grid">
+          <section aria-label="Server resources" className="grid gap-4 md:grid-cols-3">
             <MetricCard
               detail={`${stats.cpu_cores} ${stats.cpu_cores === 1 ? "core" : "cores"}`}
               percent={stats.cpu_percent}
@@ -146,25 +178,28 @@ function App() {
             />
           </section>
 
-          <section aria-label="Host details" className="host-details">
-            <div>
-              <span>Host uptime</span>
-              <strong>{formatUptime(stats.uptime_seconds)}</strong>
-            </div>
-            <div>
-              <span>Load average</span>
-              <strong>{stats.load_avg.map((value) => value.toFixed(2)).join(" / ")}</strong>
-            </div>
-            <div>
-              <span>Last collected</span>
-              <strong>{new Date(stats.collected_at * 1000).toLocaleTimeString()}</strong>
-            </div>
+          <section
+            aria-label="Host details"
+            className="divide-border bg-surface/80 mt-4 grid divide-y rounded-xl border md:grid-cols-3 md:divide-x md:divide-y-0"
+          >
+            <HostDetail label="Host uptime" value={formatUptime(stats.uptime_seconds)} />
+            <HostDetail
+              label="Load average"
+              value={stats.load_avg.map((value) => value.toFixed(2)).join(" / ")}
+            />
+            <HostDetail
+              label="Last collected"
+              value={new Date(stats.collected_at * 1000).toLocaleTimeString()}
+            />
           </section>
         </>
       ) : (
-        <p className="loading" role="status">
-          Collecting live host stats…
-        </p>
+        <div className="grid gap-4 md:grid-cols-3" role="status">
+          <span className="sr-only">Collecting live host stats…</span>
+          <Skeleton className="min-h-[190px] rounded-xl" />
+          <Skeleton className="min-h-[190px] rounded-xl" />
+          <Skeleton className="min-h-[190px] rounded-xl" />
+        </div>
       )}
     </main>
   );
