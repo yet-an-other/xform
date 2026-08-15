@@ -10,9 +10,9 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/yet-an-other/xform/internal/dashboard"
 	"github.com/yet-an-other/xform/internal/hoststats"
 	"github.com/yet-an-other/xform/internal/httpapi"
-	"github.com/yet-an-other/xform/web"
 )
 
 const defaultListenAddress = "127.0.0.1:9090"
@@ -23,15 +23,19 @@ func main() {
 		listenAddress = defaultListenAddress
 	}
 
+	shutdownSignal, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+
+	hostStats := hoststats.NewCache(hoststats.NewCollector(), 5*time.Second)
+	hostStats.Start(shutdownSignal)
+
 	server := &http.Server{
 		Addr:              listenAddress,
-		Handler:           newHandler(),
+		Handler:           newHandler(hostStats),
 		ReadHeaderTimeout: 5 * time.Second,
 		IdleTimeout:       60 * time.Second,
 	}
 
-	shutdownSignal, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
-	defer stop()
 	go func() {
 		<-shutdownSignal.Done()
 		shutdownContext, cancel := context.WithTimeout(context.Background(), 10*time.Second)
@@ -48,6 +52,6 @@ func main() {
 	}
 }
 
-func newHandler() http.Handler {
-	return httpapi.New(hoststats.NewCollector(), web.Handler())
+func newHandler(snapshots *hoststats.Cache) http.Handler {
+	return httpapi.New(snapshots, dashboard.Handler())
 }

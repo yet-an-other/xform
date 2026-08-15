@@ -16,7 +16,7 @@ type fixedHostStats struct {
 	stats hoststats.Stats
 }
 
-func (f fixedHostStats) Collect(context.Context) (hoststats.Stats, error) {
+func (f fixedHostStats) Latest(context.Context) (hoststats.Stats, error) {
 	return f.stats, nil
 }
 

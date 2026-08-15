@@ -9,16 +9,16 @@ import (
 	"github.com/yet-an-other/xform/internal/hoststats"
 )
 
-type hostStatsCollector interface {
-	Collect(context.Context) (hoststats.Stats, error)
+type hostStatsSnapshots interface {
+	Latest(context.Context) (hoststats.Stats, error)
 }
 
 // New returns the HTTP handler for the API and dashboard.
-func New(collector hostStatsCollector, dashboard http.Handler) http.Handler {
+func New(snapshots hostStatsSnapshots, dashboard http.Handler) http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /api/v1/server", func(response http.ResponseWriter, request *http.Request) {
 		response.Header().Set("Cache-Control", "no-store")
-		stats, err := collector.Collect(request.Context())
+		stats, err := snapshots.Latest(request.Context())
 		if err != nil {
 			writeJSON(response, http.StatusInternalServerError, map[string]string{"error": "host stats unavailable"})
 			return

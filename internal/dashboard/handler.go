@@ -1,5 +1,5 @@
-// Package web serves the production React dashboard embedded in the xform binary.
-package web
+// Package dashboard serves the production React dashboard embedded in the xform binary.
+package dashboard
 
 import (
 	"bytes"
@@ -11,8 +11,7 @@ import (
 	"time"
 )
 
-//go:generate npm ci
-//go:generate npm run build
+//go:generate sh -c "cd ../../web && npm ci && npm run build"
 
 //go:embed all:dist
 var dashboardFiles embed.FS
