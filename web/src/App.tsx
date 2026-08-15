@@ -74,7 +74,7 @@ function MetricCard({ title, value, detail, percent }: MetricCardProps) {
         role="progressbar"
       >
         <span
-          className="block h-full rounded-full bg-gradient-to-r from-[#3fb98e] to-[#6ee6b9] shadow-[0_0_14px_rgba(85,214,168,0.3)] transition-[width] duration-300 motion-reduce:transition-none"
+          className="from-meter-start to-meter-end shadow-primary/30 block h-full rounded-full bg-gradient-to-r shadow-[0_0_14px] transition-[width] duration-300 motion-reduce:transition-none"
           style={{ width: `${percent}%` }}
         />
       </div>
@@ -143,14 +143,14 @@ function App() {
         >
           <span
             aria-hidden="true"
-            className="bg-primary size-[7px] rounded-full shadow-[0_0_0_4px_rgba(85,214,168,0.12)]"
+            className="bg-primary shadow-primary/10 size-[7px] rounded-full shadow-[0_0_0_4px]"
           />
           Live
         </Badge>
       </header>
 
       {error ? (
-        <p className="border-destructive/30 bg-destructive/10 mb-4 rounded-lg border px-4 py-3 text-sm text-[#ffc3c8]">
+        <p className="border-destructive/30 bg-destructive/10 text-destructive-foreground mb-4 rounded-lg border px-4 py-3 text-sm">
           Unable to refresh: {error}
         </p>
       ) : null}
