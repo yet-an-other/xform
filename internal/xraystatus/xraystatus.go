@@ -5,6 +5,8 @@ package xraystatus
 
 import (
 	"context"
+	"log/slog"
+	"sync"
 	"time"
 )
 
@@ -47,6 +49,10 @@ type Collector struct {
 	version  VersionRunner
 	unitName string
 	now      func() time.Time
+
+	mu        sync.Mutex
+	queryErr  string // last logged unit-query failure; "" when healthy
+	binaryErr string // last logged version-read failure; "" when healthy
 }
 
 // NewCollector creates a Collector for the named systemd unit.
@@ -68,9 +74,13 @@ func (c *Collector) Collect(ctx context.Context) (Status, error) {
 
 	info, err := c.unit.QueryUnit(ctx, c.unitName)
 	if err != nil {
+		// The failure reason stays observable even though the payload
+		// degrades to "unreachable" (SPEC.md §5: 200 always).
+		c.logFailure(&c.queryErr, "cannot query xray unit; reporting unreachable", err)
 		status.Status = StatusUnreachable
 		return status, nil
 	}
+	c.logRecovery(&c.queryErr, "xray unit query recovered")
 
 	if info.ActiveState != "active" {
 		status.Status = StatusStopped
@@ -82,7 +92,33 @@ func (c *Collector) Collect(ctx context.Context) (Status, error) {
 		status.UptimeSeconds = uint64(c.now().Sub(info.ActiveSince).Seconds())
 	}
 	if version, err := c.version.Version(ctx, info.ExecPath); err == nil {
+		c.logRecovery(&c.binaryErr, "xray version read recovered")
 		status.Version = &version
+	} else {
+		c.logFailure(&c.binaryErr, "cannot read xray version from the unit's binary", err)
 	}
 	return status, nil
+}
+
+// logFailure logs a persistent failure once — when it starts or its message
+// changes — instead of on every 5s poll. slot points to a Collector field.
+func (c *Collector) logFailure(slot *string, msg string, err error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if *slot == err.Error() {
+		return
+	}
+	*slot = err.Error()
+	slog.Warn(msg, "unit", c.unitName, "error", err)
+}
+
+// logRecovery logs once when a failure cleared by logFailure goes away.
+func (c *Collector) logRecovery(slot *string, msg string) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if *slot == "" {
+		return
+	}
+	*slot = ""
+	slog.Info(msg, "unit", c.unitName)
 }
