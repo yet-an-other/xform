@@ -1,0 +1,67 @@
+name: release
+
+# Releases are tag-gated: pushing v* is the approval that publishes binaries the
+# host updater auto-installs (ADR-0004). workflow_dispatch re-cuts an existing tag.
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing tag to re-release (rebuild and re-upload assets)
+        required: true
+        type: string
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    env:
+      VERSION: ${{ inputs.tag || github.ref_name }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.tag || github.ref_name }}
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: internal/go.mod
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 26
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+
+      # The dashboard is rebuilt from source so a release is a function of the
+      # tag, not of the committed dist/ (which stays a dev convenience).
+      - name: Build the dashboard into the embed directory
+        working-directory: web
+        run: npm ci && npm run build
+
+      - name: Build static binaries
+        working-directory: internal
+        run: |
+          for arch in amd64 arm64; do
+            CGO_ENABLED=0 GOOS=linux GOARCH=$arch go build \
+              -ldflags "-s -w -X main.version=$VERSION" \
+              -o "$GITHUB_WORKSPACE/xform-linux-$arch" ./cmd/xform
+          done
+
+      - name: Checksums
+        run: sha256sum xform-linux-amd64 xform-linux-arm64 > checksums.txt
+
+      # Full releases only, never the prerelease flag: /releases/latest (which
+      # the updater polls) ignores prereleases and drafts.
+      - name: Publish release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          assets="xform-linux-amd64 xform-linux-arm64 checksums.txt"
+          if gh release view "$VERSION" >/dev/null 2>&1; then
+            gh release upload "$VERSION" --clobber $assets
+          else
+            gh release create "$VERSION" --generate-notes $assets
+          fi

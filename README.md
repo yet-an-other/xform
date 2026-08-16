@@ -11,7 +11,7 @@ internal/hoststats/   host-stats collector + 5s snapshot cache
 internal/config/      XFORM_* environment configuration
 internal/cmd/xform/   the binary: wiring, embedded dashboard, committed dist/
 web/                  pure TypeScript: React 19 + Vite + Tailwind v4 + shadcn/ui
-deploy/               nginx reference configs and systemd unit
+deploy/               nginx reference configs, systemd units, and the updater script
 SPEC.md               panel specification · CONTEXT.md — domain glossary · docs/adr/ — decisions
 ```
 
@@ -86,6 +86,20 @@ Every user must have an `email` in the xray config — per-user stats don't exis
 
 Access the panel through the reverse proxy shape above or an SSH tunnel (`ssh -L 9090:127.0.0.1:9090 HOST`) — it serves plain HTTP on loopback; TLS terminates at the proxy.
 
+### Automatic updates
+
+Pushing a `v*` tag builds and publishes a GitHub release with `xform-linux-amd64`, `xform-linux-arm64`, and `checksums.txt` (see [ADR-0004](docs/adr/0004-tag-gated-releases-with-sha-verified-auto-updater.md)). The host installs new releases itself once the updater is in place:
+
+```sh
+scp deploy/xform-update.sh root@HOST:/usr/local/sbin/xform-update
+scp deploy/xform-update.service deploy/xform-update.timer root@HOST:/etc/systemd/system/
+ssh root@HOST 'chmod 0755 /usr/local/sbin/xform-update && systemctl daemon-reload && systemctl enable --now xform-update.timer'
+```
+
+The timer runs daily (`Persistent=true`, so a host that was off catches up). The script skips quietly when the local binary already matches the release's checksums; otherwise it verifies, swaps atomically, restarts `xform.service`, and health-checks it — the previous binary stays at `/usr/local/bin/xform.prev`. Watch it with `journalctl -u xform-update.service`. Roll back by hand: `mv /usr/local/bin/xform.prev /usr/local/bin/xform && systemctl restart xform`.
+
+Run it once by hand after installing (`systemctl start xform-update.service`) to verify the path end to end.
+
 ## Develop
 
 ```sh
@@ -104,3 +118,5 @@ npm --prefix web run dev
 ```
 
 After changing the frontend, commit the regenerated `internal/cmd/xform/dist` so `go build` remains self-contained. `go generate ./cmd/xform` (from `internal/`) runs `npm ci` and rebuilds it.
+
+CI runs the checks above on every push (`.github/workflows/ci.yml`); pushing a `v*` tag runs the release pipeline (`.github/workflows/release.yml`) that rebuilds the dashboard from source and publishes the static binaries the updater consumes.

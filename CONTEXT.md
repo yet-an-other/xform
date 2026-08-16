@@ -34,6 +34,14 @@ _Avoid_: client, account, customer, subscriber
 A user who no longer exists in xray's configuration but whose history the panel retains. Gone users are hidden by default, never erased.
 _Avoid_: deleted user, removed user, inactive user
 
+**Release**:
+A published, versioned build of the panel, cut from a git tag. The updater consumes releases, never arbitrary commits.
+_Avoid_: build, version (alone)
+
+**Updater**:
+The host-side automation that installs the latest release of the panel and restarts it.
+_Avoid_: auto-update, agent, cron job (that's its schedule, not the thing)
+
 ### Metrics
 
 **Traffic**:

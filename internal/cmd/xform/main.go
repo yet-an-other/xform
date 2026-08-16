@@ -15,6 +15,9 @@ import (
 	"github.com/yet-an-other/xform/internal/hoststats"
 )
 
+// version is stamped at release time via -ldflags "-X main.version=<tag>".
+var version = "dev"
+
 func main() {
 	cfg := config.Load()
 
@@ -41,6 +44,7 @@ func main() {
 	}()
 
 	slog.Info("xform listening",
+		"version", version,
 		"address", cfg.ListenAddress,
 		"xray_api", cfg.XrayAPIAddress,
 		"xray_config", cfg.XrayConfigPath,
