@@ -11,16 +11,12 @@ import (
 	"time"
 
 	"github.com/yet-an-other/xform/internal/api"
+	"github.com/yet-an-other/xform/internal/config"
 	"github.com/yet-an-other/xform/internal/hoststats"
 )
 
-const defaultListenAddress = "127.0.0.1:9090"
-
 func main() {
-	listenAddress := os.Getenv("XFORM_LISTEN")
-	if listenAddress == "" {
-		listenAddress = defaultListenAddress
-	}
+	cfg := config.Load()
 
 	shutdownSignal, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
@@ -29,7 +25,7 @@ func main() {
 	hostStats.Start(shutdownSignal)
 
 	server := &http.Server{
-		Addr:              listenAddress,
+		Addr:              cfg.ListenAddress,
 		Handler:           newHandler(hostStats),
 		ReadHeaderTimeout: 5 * time.Second,
 		IdleTimeout:       60 * time.Second,
@@ -44,7 +40,14 @@ func main() {
 		}
 	}()
 
-	slog.Info("xform listening", "address", listenAddress)
+	slog.Info("xform listening",
+		"address", cfg.ListenAddress,
+		"xray_api", cfg.XrayAPIAddress,
+		"xray_config", cfg.XrayConfigPath,
+		"db", cfg.DBPath,
+		"xray_unit", cfg.XrayUnitName,
+		"password_set", cfg.Password != "",
+	)
 	if err := server.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 		slog.Error("serve xform", "error", err)
 		os.Exit(1)

@@ -8,6 +8,9 @@ ExecStart=/usr/local/bin/xform
 Restart=on-failure
 RestartSec=5
 
+# Creates /var/lib/xform (default XFORM_DB location) with the service's owner.
+StateDirectory=xform
+
 # Same-origin through a reverse proxy or SSH tunnel only; never expose directly.
 Environment=XFORM_LISTEN=127.0.0.1:9090
 # Environment=XFORM_PASSWORD=change-me
