@@ -8,6 +8,10 @@ import { defineConfig } from "vitest/config";
 const root = path.dirname(fileURLToPath(import.meta.url));
 
 export default defineConfig({
+  // Mount-point agnostic: relative asset URLs let the built dashboard hang
+  // under any subpath behind a prefix-stripping proxy (see deploy/). Revisit
+  // if client-side routing with deep links is ever added.
+  base: "./",
   plugins: [react(), tailwindcss()],
   resolve: {
     alias: { "@": path.resolve(root, "./src") },

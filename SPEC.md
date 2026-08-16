@@ -162,6 +162,7 @@ Two same-origin deployment shapes (ADR-0001):
 
 - **Embedded (default)**: one Go binary serving the built SPA (embedded via `embed`), the API, and the collector. Install = scp binary + systemd unit + env vars; no web server prerequisite.
 - **Proxy-hosted**: nginx (or the host's existing reverse proxy) serves the built SPA as static files and reverse-proxies `/api/*` to the Go API on loopback. Reference config: `deploy/nginx.conf.example`. Gotcha: `proxy_pass` must carry **no URI part**, otherwise `/api/v1/*` is rewritten to `/v1/*`.
+- **Subpath mounting**: the SPA is built mount-point agnostic (Vite `base: "./"`, relative API client), so either shape can hang under a subpath of an existing vhost (e.g. `/xform/`). The proxy strips the prefix — a deliberate `proxy_pass` URI rewrite, the one intentional exception to the gotcha above — and redirects the bare subpath to its trailing-slash form. Commented variants ship in both `deploy/` reference configs.
 
 - Configuration via env: `XFORM_LISTEN` (default `127.0.0.1:9090`), `XFORM_PASSWORD` (required), `XFORM_XRAY_API` (default `127.0.0.1:8080`), `XFORM_XRAY_CONFIG` (default `/usr/local/etc/xray/config.json`), `XFORM_DB` (default `/var/lib/xform/xform.db`), `XFORM_XRAY_UNIT` (default `xray.service`).
 - Ships with a systemd unit (`xform.service`, `After=xray.service`). TLS terminates at the reverse proxy in both shapes — the panel itself serves plain HTTP on loopback.

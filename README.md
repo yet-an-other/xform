@@ -51,6 +51,8 @@ Two same-origin shapes are supported (see [ADR-0001](docs/adr/0001-two-same-orig
 
 The API emits no CORS headers; the dashboard is always served same-origin.
 
+**Subpath mounting**: the dashboard is built mount-point agnostic (relative asset and API URLs), so either shape can hang under a subpath of an existing vhost (e.g. `https://HOST/xform/`) instead of a dedicated one. The proxy strips the prefix before requests reach the binary — no Go changes needed — and the bare subpath must redirect to its trailing-slash form. Commented subpath variants ship in both reference configs.
+
 ## Install on the host
 
 The panel runs on the same host as xray. Cross-compile on any machine (pure Go, no cgo), copy the binary and unit over, and start the service:

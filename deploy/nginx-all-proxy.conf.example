@@ -29,3 +29,20 @@ server {
         proxy_set_header X-Forwarded-Proto $scheme;
     }
 }
+
+# ── Subpath variant ──────────────────────────────────────────────────────────
+# The dashboard is built mount-point agnostic (relative asset and API URLs),
+# so the panel can hang under a subpath of an existing vhost instead of having
+# one of its own. Here the URI part on proxy_pass is DELIBERATE: it strips the
+# /xform prefix before the request reaches the binary — the one intentional
+# exception to the no-URI gotcha above. The bare /xform must redirect to
+# /xform/, or the page's relative URLs resolve against the wrong directory.
+#
+# location = /xform { return 308 /xform/; }
+# location /xform/ {
+#     proxy_pass http://127.0.0.1:9090/;
+#     proxy_set_header Host              $host;
+#     proxy_set_header X-Real-IP         $remote_addr;
+#     proxy_set_header X-Forwarded-For   $proxy_add_x_forwarded_for;
+#     proxy_set_header X-Forwarded-Proto $scheme;
+# }

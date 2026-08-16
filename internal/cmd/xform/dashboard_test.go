@@ -25,11 +25,17 @@ func TestHandlerServesBuiltDashboardAndAssets(t *testing.T) {
 		t.Fatal("page does not contain the React root")
 	}
 
-	assetPath := regexp.MustCompile(`src="(/[^"]+\.js)"`).FindStringSubmatch(pageResponse.Body.String())
-	if len(assetPath) != 2 {
+	assetRef := regexp.MustCompile(`src="([^"]+\.js)"`).FindStringSubmatch(pageResponse.Body.String())
+	if len(assetRef) != 2 {
 		t.Fatal("page does not reference a built JavaScript asset")
 	}
-	assetRequest := httptest.NewRequest(http.MethodGet, assetPath[1], nil)
+	// Resolve the reference the way a browser at / would, whether the build
+	// emits it relative (mount-point agnostic) or absolute.
+	assetPath := assetRef[1]
+	if !strings.HasPrefix(assetPath, "/") {
+		assetPath = "/" + strings.TrimPrefix(assetPath, "./")
+	}
+	assetRequest := httptest.NewRequest(http.MethodGet, assetPath, nil)
 	assetResponse := httptest.NewRecorder()
 
 	handler.ServeHTTP(assetResponse, assetRequest)

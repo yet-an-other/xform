@@ -1,5 +1,7 @@
 // Typed client for the panel's API (SPEC §5). One function per endpoint —
-// the only module that knows URLs, headers, and payload shapes.
+// the only module that knows URLs, headers, and payload shapes. URLs are
+// relative so the dashboard works mounted under any subpath: the browser
+// resolves them next to wherever the page was loaded from.
 
 export interface HostStats {
   collected_at: number;
@@ -15,7 +17,7 @@ export interface HostStats {
 }
 
 export async function fetchServerStats(signal?: AbortSignal): Promise<HostStats> {
-  const response = await fetch("/api/v1/server", {
+  const response = await fetch("api/v1/server", {
     cache: "no-store",
     headers: { Accept: "application/json" },
     signal,
