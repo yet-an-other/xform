@@ -14,6 +14,7 @@ import (
 	"github.com/yet-an-other/xform/internal/api"
 	"github.com/yet-an-other/xform/internal/hoststats"
 	"github.com/yet-an-other/xform/internal/session"
+	"github.com/yet-an-other/xform/internal/xraystatus"
 )
 
 type fixedHostStats struct {
@@ -26,13 +27,26 @@ func (f fixedHostStats) Latest(context.Context) (hoststats.Stats, error) {
 
 const testPassword = "test-panel-password"
 
-// newHandler wires the API with a real session manager against a stub dashboard.
+// newHandler wires the API with a real session manager against stub sources.
 func newHandler(snapshots hostStatsSnapshots) http.Handler {
-	return api.New(snapshots, session.NewManager(testPassword, time.Now), http.NotFoundHandler())
+	return api.New(snapshots, fixedXrayStatus{}, session.NewManager(testPassword, time.Now), http.NotFoundHandler())
 }
 
 type hostStatsSnapshots interface {
 	Latest(context.Context) (hoststats.Stats, error)
+}
+
+// fixedXrayStatus serves one canned xray status.
+type fixedXrayStatus struct {
+	status xraystatus.Status
+	err    error
+}
+
+func (f fixedXrayStatus) Latest(context.Context) (xraystatus.Status, error) {
+	if f.err != nil {
+		return xraystatus.Status{}, f.err
+	}
+	return f.status, nil
 }
 
 // login establishes a session through the real login endpoint and returns its cookie.
@@ -222,7 +236,66 @@ func TestLogoutRevokesAndClears(t *testing.T) {
 	}
 }
 
-// failingSessions simulates an entropy failure in the session manager.
+func TestXrayEndpointReturnsStatusContract(t *testing.T) {
+	version := "26.4.13"
+	want := xraystatus.Status{
+		CollectedAt:   1_723_800_000,
+		Status:        "running",
+		Version:       &version,
+		UptimeSeconds: 1_216_800,
+	}
+	handler := api.New(fixedHostStats{}, fixedXrayStatus{status: want}, session.NewManager(testPassword, time.Now), http.NotFoundHandler())
+	request := httptest.NewRequest(http.MethodGet, "/api/v1/xray", nil)
+	request.AddCookie(login(t, handler, testPassword))
+	response := httptest.NewRecorder()
+
+	handler.ServeHTTP(response, request)
+
+	if response.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d; body = %s", response.Code, http.StatusOK, response.Body.String())
+	}
+
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(response.Body.Bytes(), &fields); err != nil {
+		t.Fatalf("decode response fields: %v", err)
+	}
+	wantFields := map[string]struct{}{
+		"collected_at": {}, "status": {}, "version": {}, "uptime_seconds": {},
+	}
+	gotFields := make(map[string]struct{}, len(fields))
+	for field := range fields {
+		gotFields[field] = struct{}{}
+	}
+	if !reflect.DeepEqual(gotFields, wantFields) {
+		t.Fatalf("response fields = %v, want %v", gotFields, wantFields)
+	}
+
+	var got xraystatus.Status
+	if err := json.Unmarshal(response.Body.Bytes(), &got); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("response = %#v, want %#v", got, want)
+	}
+
+	// A stopped xray reports a null version, not a 5xx (SPEC.md §5: 200 always).
+	stopped := api.New(fixedHostStats{}, fixedXrayStatus{status: xraystatus.Status{
+		CollectedAt: 1_723_800_000, Status: "stopped",
+	}}, session.NewManager(testPassword, time.Now), http.NotFoundHandler())
+	request = httptest.NewRequest(http.MethodGet, "/api/v1/xray", nil)
+	request.AddCookie(login(t, stopped, testPassword))
+	response = httptest.NewRecorder()
+
+	stopped.ServeHTTP(response, request)
+
+	if response.Code != http.StatusOK {
+		t.Fatalf("stopped status = %d, want %d", response.Code, http.StatusOK)
+	}
+	if !strings.Contains(response.Body.String(), `"version":null`) {
+		t.Errorf("stopped body = %s, want a null version", response.Body.String())
+	}
+}
+
 type failingSessions struct{}
 
 func (failingSessions) Login(string) (string, bool, error) {
@@ -232,7 +305,7 @@ func (failingSessions) Validate(string) bool { return false }
 func (failingSessions) Logout(string)        {}
 
 func TestLoginFailureInSessionManagerIs500Not401(t *testing.T) {
-	handler := api.New(fixedHostStats{}, failingSessions{}, http.NotFoundHandler())
+	handler := api.New(fixedHostStats{}, fixedXrayStatus{}, failingSessions{}, http.NotFoundHandler())
 	request := httptest.NewRequest(http.MethodPost, "/api/v1/login",
 		strings.NewReader(`{"password": "anything"}`))
 	response := httptest.NewRecorder()

@@ -25,8 +25,17 @@ export class UnauthenticatedError extends Error {
   }
 }
 
-export async function fetchServerStats(signal?: AbortSignal): Promise<HostStats> {
-  const response = await fetch("api/v1/server", {
+// XrayStatus is the panel's view of the xray service (host-level for now:
+// systemd unit state + binary version; gRPC-derived fields arrive later).
+export interface XrayStatus {
+  collected_at: number;
+  status: "running" | "stopped" | "unreachable";
+  version: string | null;
+  uptime_seconds: number;
+}
+
+async function getJSON<T>(path: string, signal?: AbortSignal): Promise<T> {
+  const response = await fetch(path, {
     cache: "no-store",
     headers: { Accept: "application/json" },
     signal,
@@ -35,9 +44,17 @@ export async function fetchServerStats(signal?: AbortSignal): Promise<HostStats>
     throw new UnauthenticatedError();
   }
   if (!response.ok) {
-    throw new Error(`server returned ${response.status}`);
+    throw new Error(`panel returned ${response.status}`);
   }
-  return (await response.json()) as HostStats;
+  return (await response.json()) as T;
+}
+
+export function fetchServerStats(signal?: AbortSignal): Promise<HostStats> {
+  return getJSON<HostStats>("api/v1/server", signal);
+}
+
+export function fetchXrayStatus(signal?: AbortSignal): Promise<XrayStatus> {
+  return getJSON<XrayStatus>("api/v1/xray", signal);
 }
 
 // login posts the password; true on 204, false on a 401 mismatch.

@@ -14,6 +14,7 @@ import (
 	"github.com/yet-an-other/xform/internal/config"
 	"github.com/yet-an-other/xform/internal/hoststats"
 	"github.com/yet-an-other/xform/internal/session"
+	"github.com/yet-an-other/xform/internal/xraystatus"
 )
 
 // version is stamped at release time via -ldflags "-X main.version=<tag>".
@@ -31,11 +32,16 @@ func main() {
 
 	hostStats := hoststats.NewCache(hoststats.NewCollector(), 5*time.Second)
 	hostStats.Start(shutdownSignal)
+	xrayStatus := xraystatus.NewCache(
+		xraystatus.NewCollector(xraystatus.SystemdUnit{}, xraystatus.BinaryVersion{}, cfg.XrayUnitName),
+		5*time.Second,
+	)
+	xrayStatus.Start(shutdownSignal)
 	sessions := session.NewManager(cfg.Password, time.Now)
 
 	server := &http.Server{
 		Addr:              cfg.ListenAddress,
-		Handler:           newHandler(hostStats, sessions),
+		Handler:           newHandler(hostStats, xrayStatus, sessions),
 		ReadHeaderTimeout: 5 * time.Second,
 		IdleTimeout:       60 * time.Second,
 	}
@@ -64,6 +70,6 @@ func main() {
 	}
 }
 
-func newHandler(snapshots *hoststats.Cache, sessions *session.Manager) http.Handler {
-	return api.New(snapshots, sessions, newDashboardHandler())
+func newHandler(snapshots *hoststats.Cache, statuses *xraystatus.Cache, sessions *session.Manager) http.Handler {
+	return api.New(snapshots, statuses, sessions, newDashboardHandler())
 }

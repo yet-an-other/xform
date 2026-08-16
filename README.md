@@ -26,7 +26,7 @@ XFORM_PASSWORD=change-me ./xform
 
 The panel listens on `127.0.0.1:9090` by default (override with `XFORM_LISTEN`). Open <http://127.0.0.1:9090> and log in with the `XFORM_PASSWORD` value. All `/api/*` endpoints except `login`/`healthz` require the `xform_session` cookie (SPEC.md §5).
 
-xray/user collection is intentionally not implemented yet; the `XFORM_XRAY_*` and `XFORM_DB` settings below are wired into the binary but consumed by later slices.
+The xray service status (running/stopped/unreachable, version, uptime) is live from systemd and the xray binary — `XFORM_XRAY_UNIT` is honored. gRPC-based xray stats and user collection are intentionally not implemented yet; `XFORM_XRAY_API` and `XFORM_DB` are wired into the binary but consumed by later slices.
 
 ## Configuration
 

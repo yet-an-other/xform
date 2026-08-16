@@ -3,7 +3,14 @@ import { useEffect, useState } from "react";
 import { MetricCard } from "@/components/metric-card";
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
-import { fetchServerStats, logout, UnauthenticatedError, type HostStats } from "@/lib/api";
+import {
+  fetchServerStats,
+  fetchXrayStatus,
+  logout,
+  UnauthenticatedError,
+  type HostStats,
+  type XrayStatus,
+} from "@/lib/api";
 import { formatBytes, formatUptime, percentUsed } from "@/lib/format";
 
 const POLL_INTERVAL_MS = 5_000;
@@ -17,8 +24,46 @@ function HostDetail({ label, value }: { label: string; value: string }) {
   );
 }
 
+function XrayPills({ xray }: { xray: XrayStatus }) {
+  const dotClass =
+    xray.status === "running"
+      ? "bg-primary shadow-primary/10"
+      : xray.status === "stopped"
+        ? "bg-destructive shadow-destructive/10"
+        : "bg-warning shadow-warning/10";
+
+  return (
+    <>
+      <Badge
+        className="gap-2 px-3 py-1.5 text-[0.78rem] font-bold tracking-[0.08em] uppercase"
+        variant="outline"
+      >
+        <span
+          aria-hidden="true"
+          className={`size-[7px] rounded-full shadow-[0_0_0_4px] ${dotClass}`}
+        />
+        xray {xray.status}
+      </Badge>
+      {xray.version ? (
+        <Badge className="px-3 py-1.5 font-mono text-[0.78rem] font-semibold" variant="outline">
+          {xray.version}
+        </Badge>
+      ) : null}
+      {xray.status === "running" ? (
+        <Badge
+          className="px-3 py-1.5 text-[0.78rem] font-bold tracking-[0.08em] uppercase"
+          variant="outline"
+        >
+          up {formatUptime(xray.uptime_seconds)}
+        </Badge>
+      ) : null}
+    </>
+  );
+}
+
 export function Dashboard({ onUnauthenticated }: { onUnauthenticated: () => void }) {
   const [stats, setStats] = useState<HostStats | null>(null);
+  const [xray, setXray] = useState<XrayStatus | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
@@ -26,7 +71,12 @@ export function Dashboard({ onUnauthenticated }: { onUnauthenticated: () => void
 
     async function poll() {
       try {
-        setStats(await fetchServerStats(controller.signal));
+        const [serverStats, xrayStats] = await Promise.all([
+          fetchServerStats(controller.signal),
+          fetchXrayStatus(controller.signal),
+        ]);
+        setStats(serverStats);
+        setXray(xrayStats);
         setError(null);
       } catch (cause) {
         if (cause instanceof UnauthenticatedError) {
@@ -34,7 +84,7 @@ export function Dashboard({ onUnauthenticated }: { onUnauthenticated: () => void
           return;
         }
         if (!controller.signal.aborted) {
-          setError(cause instanceof Error ? cause.message : "host stats unavailable");
+          setError(cause instanceof Error ? cause.message : "panel unavailable");
         }
       }
     }
@@ -67,7 +117,8 @@ export function Dashboard({ onUnauthenticated }: { onUnauthenticated: () => void
             Server
           </h1>
         </div>
-        <div className="flex items-center gap-3">
+        <div className="flex items-center gap-3 max-sm:flex-wrap">
+          {xray ? <XrayPills xray={xray} /> : null}
           <Badge
             className="border-primary/30 bg-accent text-accent-foreground gap-2 px-3 py-1.5 text-[0.78rem] font-bold tracking-[0.08em] uppercase"
             variant="outline"
@@ -87,6 +138,15 @@ export function Dashboard({ onUnauthenticated }: { onUnauthenticated: () => void
           </button>
         </div>
       </header>
+
+      {xray && xray.status !== "running" ? (
+        <p
+          role="alert"
+          className="mb-4 rounded-lg border border-warning/30 bg-warning/10 px-4 py-3 text-sm text-warning-foreground"
+        >
+          xray is {xray.status} — the panel is degraded; host stats stay live.
+        </p>
+      ) : null}
 
       {error ? (
         <p className="border-destructive/30 bg-destructive/10 text-destructive-foreground mb-4 rounded-lg border px-4 py-3 text-sm">
