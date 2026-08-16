@@ -1,7 +1,7 @@
 import { act, cleanup, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import App from "./App";
+import { Dashboard } from "./dashboard";
 
 const stats = {
   collected_at: 1_723_800_000,
@@ -34,7 +34,7 @@ describe("host stats", () => {
       ),
     );
 
-    render(<App />);
+    render(<Dashboard />);
 
     expect(await screen.findByText("23.4%")).toBeInTheDocument();
     expect(screen.getByRole("heading", { name: "CPU" })).toBeInTheDocument();
@@ -59,7 +59,7 @@ describe("host stats", () => {
       );
     vi.stubGlobal("fetch", fetchStats);
 
-    render(<App />);
+    render(<Dashboard />);
     await act(async () => {
       await Promise.resolve();
     });
