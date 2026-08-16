@@ -11,7 +11,7 @@ internal/hoststats/   host-stats collector + 5s snapshot cache
 internal/config/      XFORM_* environment configuration
 internal/cmd/xform/   the binary: wiring, embedded dashboard, committed dist/
 web/                  pure TypeScript: React 19 + Vite + Tailwind v4 + shadcn/ui
-deploy/               nginx reference config and systemd unit
+deploy/               nginx reference configs and systemd unit
 SPEC.md               panel specification · CONTEXT.md — domain glossary · docs/adr/ — decisions
 ```
 
@@ -46,6 +46,7 @@ All runtime settings are environment variables (defaults from SPEC.md §7):
 Two same-origin shapes are supported (see [ADR-0001](docs/adr/0001-two-same-origin-deployment-shapes.md)):
 
 - **Embedded (default)** — the binary above serves the dashboard itself; nothing else to install.
+- **Embedded, fronted by a proxy** — nginx terminates TLS and proxies everything to the binary, which still serves the embedded dashboard. Reference config: [`deploy/nginx-all-proxy.conf.example`](deploy/nginx-all-proxy.conf.example).
 - **Proxy-hosted** — nginx serves the built dashboard and proxies `/api/*` to the binary on loopback. Reference config: [`deploy/nginx.conf.example`](deploy/nginx.conf.example); systemd unit: [`deploy/xform.service`](deploy/xform.service).
 
 The API emits no CORS headers; the dashboard is always served same-origin.

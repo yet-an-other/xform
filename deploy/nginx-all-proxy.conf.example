@@ -1,0 +1,31 @@
+# xform — embedded shape behind a TLS-terminating reverse proxy (ADR-0001)
+#
+# nginx proxies EVERYTHING to the xform binary on loopback; the binary serves
+# the embedded dashboard and the panel's JSON API. Same-origin is preserved, so
+# no CORS headers are needed and the session cookie works unchanged. Use this
+# when nginx is only there to terminate TLS. For nginx serving the built
+# dashboard as static files instead, see nginx.conf.example.
+#
+# The binary already sets the right Cache-Control per resource (immutable
+# /assets/*, no-cache index.html, no-store API) — pass them through untouched.
+
+server {
+    listen 443 ssl;
+    server_name panel.example.net;
+
+    # ssl_certificate     /etc/letsencrypt/live/panel.example.net/fullchain.pem;
+    # ssl_certificate_key /etc/letsencrypt/live/panel.example.net/privkey.pem;
+
+    # NOTE: on the real host :443 is usually owned by xray (Reality). Put the
+    # panel on another port (listen 8443 ssl;) or share 443 via SNI routing.
+
+    location / {
+        # GOTCHA: no URI part on proxy_pass. With a URI (even just "/"), nginx
+        # rewrites /api/v1/server to /v1/server and the API 404s.
+        proxy_pass http://127.0.0.1:9090;
+        proxy_set_header Host              $host;
+        proxy_set_header X-Real-IP         $remote_addr;
+        proxy_set_header X-Forwarded-For   $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+    }
+}
