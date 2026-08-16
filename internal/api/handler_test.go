@@ -1,4 +1,4 @@
-package httpapi_test
+package api_test
 
 import (
 	"context"
@@ -8,15 +8,15 @@ import (
 	"reflect"
 	"testing"
 
+	"github.com/yet-an-other/xform/internal/api"
 	"github.com/yet-an-other/xform/internal/hoststats"
-	"github.com/yet-an-other/xform/internal/httpapi"
 )
 
 type fixedHostStats struct {
 	stats hoststats.Stats
 }
 
-func (f fixedHostStats) Collect(context.Context) (hoststats.Stats, error) {
+func (f fixedHostStats) Latest(context.Context) (hoststats.Stats, error) {
 	return f.stats, nil
 }
 
@@ -33,7 +33,7 @@ func TestServerEndpointReturnsHostStatsContract(t *testing.T) {
 		UptimeSeconds:  1_987_200,
 		LoadAvg:        [3]float64{0.42, 0.38, 0.31},
 	}
-	handler := httpapi.New(fixedHostStats{stats: want}, http.NotFoundHandler())
+	handler := api.New(fixedHostStats{stats: want}, http.NotFoundHandler())
 	request := httptest.NewRequest(http.MethodGet, "/api/v1/server", nil)
 	response := httptest.NewRecorder()
 

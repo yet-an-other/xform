@@ -1,5 +1,4 @@
-// Package web serves the production React dashboard embedded in the xform binary.
-package web
+package main
 
 import (
 	"bytes"
@@ -11,14 +10,13 @@ import (
 	"time"
 )
 
-//go:generate npm ci
-//go:generate npm run build
+//go:generate sh -c "cd ../../../web && npm ci && npm run build"
 
 //go:embed all:dist
 var dashboardFiles embed.FS
 
-// Handler returns an HTTP handler for the embedded dashboard and its assets.
-func Handler() http.Handler {
+// newDashboardHandler returns an HTTP handler for the embedded dashboard and its assets.
+func newDashboardHandler() http.Handler {
 	assets, err := fs.Sub(dashboardFiles, "dist")
 	if err != nil {
 		panic("open embedded dashboard: " + err.Error())

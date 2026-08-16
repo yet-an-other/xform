@@ -1,4 +1,4 @@
-module github.com/yet-an-other/xform
+module github.com/yet-an-other/xform/internal
 
 go 1.26.0
 

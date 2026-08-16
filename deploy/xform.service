@@ -1,0 +1,20 @@
+[Unit]
+Description=xform — read-only monitoring panel for xray
+After=xray.service
+
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/xform
+Restart=on-failure
+RestartSec=5
+
+# Same-origin through a reverse proxy or SSH tunnel only; never expose directly.
+Environment=XFORM_LISTEN=127.0.0.1:9090
+# Environment=XFORM_PASSWORD=change-me
+# Environment=XFORM_XRAY_API=127.0.0.1:8080
+# Environment=XFORM_XRAY_CONFIG=/usr/local/etc/xray/config.json
+# Environment=XFORM_DB=/var/lib/xform/xform.db
+# Environment=XFORM_XRAY_UNIT=xray.service
+
+[Install]
+WantedBy=multi-user.target
