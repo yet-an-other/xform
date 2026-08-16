@@ -3,7 +3,7 @@ import { useEffect, useState } from "react";
 import { MetricCard } from "@/components/metric-card";
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
-import { fetchServerStats, type HostStats } from "@/lib/api";
+import { fetchServerStats, logout, UnauthenticatedError, type HostStats } from "@/lib/api";
 import { formatBytes, formatUptime, percentUsed } from "@/lib/format";
 
 const POLL_INTERVAL_MS = 5_000;
@@ -17,7 +17,7 @@ function HostDetail({ label, value }: { label: string; value: string }) {
   );
 }
 
-export function Dashboard() {
+export function Dashboard({ onUnauthenticated }: { onUnauthenticated: () => void }) {
   const [stats, setStats] = useState<HostStats | null>(null);
   const [error, setError] = useState<string | null>(null);
 
@@ -29,6 +29,10 @@ export function Dashboard() {
         setStats(await fetchServerStats(controller.signal));
         setError(null);
       } catch (cause) {
+        if (cause instanceof UnauthenticatedError) {
+          onUnauthenticated();
+          return;
+        }
         if (!controller.signal.aborted) {
           setError(cause instanceof Error ? cause.message : "host stats unavailable");
         }
@@ -41,7 +45,16 @@ export function Dashboard() {
       window.clearInterval(interval);
       controller.abort();
     };
-  }, []);
+  }, [onUnauthenticated]);
+
+  async function signOut() {
+    try {
+      await logout();
+      onUnauthenticated();
+    } catch {
+      setError("could not reach the panel — the session may still be active");
+    }
+  }
 
   return (
     <main className="mx-auto w-[min(1180px,calc(100%-40px))] pt-16 pb-12 max-sm:w-[calc(100%-28px)] max-sm:pt-10">
@@ -54,16 +67,25 @@ export function Dashboard() {
             Server
           </h1>
         </div>
-        <Badge
-          className="border-primary/30 bg-accent text-accent-foreground gap-2 px-3 py-1.5 text-[0.78rem] font-bold tracking-[0.08em] uppercase"
-          variant="outline"
-        >
-          <span
-            aria-hidden="true"
-            className="bg-primary shadow-primary/10 size-[7px] rounded-full shadow-[0_0_0_4px]"
-          />
-          Live
-        </Badge>
+        <div className="flex items-center gap-3">
+          <Badge
+            className="border-primary/30 bg-accent text-accent-foreground gap-2 px-3 py-1.5 text-[0.78rem] font-bold tracking-[0.08em] uppercase"
+            variant="outline"
+          >
+            <span
+              aria-hidden="true"
+              className="bg-primary shadow-primary/10 size-[7px] rounded-full shadow-[0_0_0_4px]"
+            />
+            Live
+          </Badge>
+          <button
+            type="button"
+            onClick={() => void signOut()}
+            className="border-border text-muted-foreground hover:text-foreground rounded-lg border px-3 py-1.5 text-[0.78rem] font-bold tracking-[0.08em] uppercase"
+          >
+            Log out
+          </button>
+        </div>
       </header>
 
       {error ? (

@@ -7,16 +7,73 @@ import (
 	"net/http"
 
 	"github.com/yet-an-other/xform/internal/hoststats"
+	"github.com/yet-an-other/xform/internal/session"
 )
 
 type hostStatsSnapshots interface {
 	Latest(context.Context) (hoststats.Stats, error)
 }
 
-// New returns the HTTP handler for the API and dashboard.
-func New(snapshots hostStatsSnapshots, dashboard http.Handler) http.Handler {
+type sessionManager interface {
+	Login(password string) (token string, ok bool, err error)
+	Validate(token string) bool
+	Logout(token string)
+}
+
+const sessionCookieName = "xform_session"
+
+// New returns the HTTP handler for the API and dashboard. Every /api/ route
+// except login and healthz requires a session (SPEC.md §5); the dashboard
+// itself loads openly and lets the SPA route to its login page on 401.
+func New(snapshots hostStatsSnapshots, sessions sessionManager, dashboard http.Handler) http.Handler {
+	requireSession := func(next http.HandlerFunc) http.HandlerFunc {
+		return func(response http.ResponseWriter, request *http.Request) {
+			cookie, err := request.Cookie(sessionCookieName)
+			if err != nil || !sessions.Validate(cookie.Value) {
+				writeJSON(response, http.StatusUnauthorized, map[string]string{"error": "unauthenticated"})
+				return
+			}
+			// Slide both sides of the 24h expiry: the store entry (via
+			// Validate) and the cookie's Max-Age.
+			setSessionCookie(response, cookie.Value)
+			next(response, request)
+		}
+	}
+
 	mux := http.NewServeMux()
-	mux.HandleFunc("GET /api/v1/server", func(response http.ResponseWriter, request *http.Request) {
+	mux.HandleFunc("POST /api/v1/login", func(response http.ResponseWriter, request *http.Request) {
+		var body struct {
+			Password string `json:"password"`
+		}
+		if err := json.NewDecoder(request.Body).Decode(&body); err != nil || body.Password == "" {
+			writeJSON(response, http.StatusBadRequest, map[string]string{"error": "invalid request"})
+			return
+		}
+		token, ok, err := sessions.Login(body.Password)
+		if err != nil {
+			writeJSON(response, http.StatusInternalServerError, map[string]string{"error": "login unavailable"})
+			return
+		}
+		if !ok {
+			writeJSON(response, http.StatusUnauthorized, map[string]string{"error": "invalid password"})
+			return
+		}
+		setSessionCookie(response, token)
+		response.WriteHeader(http.StatusNoContent)
+	})
+	mux.HandleFunc("POST /api/v1/logout", requireSession(func(response http.ResponseWriter, request *http.Request) {
+		cookie, _ := request.Cookie(sessionCookieName) // requireSession guarantees it
+		sessions.Logout(cookie.Value)
+		http.SetCookie(response, &http.Cookie{
+			Name: sessionCookieName, MaxAge: -1, Path: "/",
+			HttpOnly: true, Secure: true, SameSite: http.SameSiteLaxMode,
+		})
+		response.WriteHeader(http.StatusNoContent)
+	}))
+	mux.HandleFunc("GET /api/v1/healthz", func(response http.ResponseWriter, _ *http.Request) {
+		writeJSON(response, http.StatusOK, map[string]string{"status": "ok"})
+	})
+	mux.HandleFunc("GET /api/v1/server", requireSession(func(response http.ResponseWriter, request *http.Request) {
 		response.Header().Set("Cache-Control", "no-store")
 		stats, err := snapshots.Latest(request.Context())
 		if err != nil {
@@ -25,12 +82,23 @@ func New(snapshots hostStatsSnapshots, dashboard http.Handler) http.Handler {
 		}
 
 		writeJSON(response, http.StatusOK, stats)
-	})
-	mux.HandleFunc("/api/", func(response http.ResponseWriter, _ *http.Request) {
+	}))
+	mux.Handle("/api/", requireSession(func(response http.ResponseWriter, _ *http.Request) {
 		writeJSON(response, http.StatusNotFound, map[string]string{"error": "not found"})
-	})
+	}))
 	mux.Handle("/", dashboard)
 	return mux
+}
+
+// setSessionCookie issues the session cookie per SPEC.md §5: HttpOnly,
+// SameSite=Lax, Secure always (browsers exempt localhost, and every other
+// access path is TLS-terminated).
+func setSessionCookie(response http.ResponseWriter, token string) {
+	http.SetCookie(response, &http.Cookie{
+		Name: sessionCookieName, Value: token, Path: "/",
+		MaxAge:   int(session.TTL.Seconds()),
+		HttpOnly: true, Secure: true, SameSite: http.SameSiteLaxMode,
+	})
 }
 
 func writeJSON(response http.ResponseWriter, status int, value any) {

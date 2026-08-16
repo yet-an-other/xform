@@ -6,12 +6,13 @@
 # panel, and health-checks it. The previous binary is kept as xform.prev.
 #
 # Overrides: XFORM_INSTALL_PATH, XFORM_SERVICE, XFORM_HEALTH_URL.
+# The default health URL is the one unauthenticated endpoint, so no session is needed.
 set -euo pipefail
 
 REPO="yet-an-other/xform"
 INSTALL_PATH="${XFORM_INSTALL_PATH:-/usr/local/bin/xform}"
 SERVICE="${XFORM_SERVICE:-xform.service}"
-HEALTH_URL="${XFORM_HEALTH_URL:-http://127.0.0.1:9090/api/v1/server}"
+HEALTH_URL="${XFORM_HEALTH_URL:-http://127.0.0.1:9090/api/v1/healthz}"
 
 exec 9>/var/lock/xform-update.lock
 flock -n 9 || exit 0 # another run in progress — the next timer tick retries

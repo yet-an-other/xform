@@ -1,4 +1,4 @@
-import { act, cleanup, render, screen } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { Dashboard } from "./dashboard";
@@ -34,7 +34,7 @@ describe("host stats", () => {
       ),
     );
 
-    render(<Dashboard />);
+    render(<Dashboard onUnauthenticated={() => {}} />);
 
     expect(await screen.findByText("23.4%")).toBeInTheDocument();
     expect(screen.getByRole("heading", { name: "CPU" })).toBeInTheDocument();
@@ -59,7 +59,7 @@ describe("host stats", () => {
       );
     vi.stubGlobal("fetch", fetchStats);
 
-    render(<Dashboard />);
+    render(<Dashboard onUnauthenticated={() => {}} />);
     await act(async () => {
       await Promise.resolve();
     });
@@ -71,5 +71,38 @@ describe("host stats", () => {
 
     expect(fetchStats).toHaveBeenCalledTimes(2);
     expect(screen.getByText("61.2%")).toBeInTheDocument();
+  });
+
+  it("yields to the login page when the session expires", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(new Response('{"error":"unauthenticated"}', { status: 401 })),
+    );
+    const onUnauthenticated = vi.fn();
+    render(<Dashboard onUnauthenticated={onUnauthenticated} />);
+
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    expect(onUnauthenticated).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps the session and shows an error when logout cannot reach the panel", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi
+        .fn()
+        .mockResolvedValueOnce(new Response(JSON.stringify(stats), { status: 200 }))
+        .mockRejectedValueOnce(new TypeError("fetch failed")),
+    );
+    const onUnauthenticated = vi.fn();
+    render(<Dashboard onUnauthenticated={onUnauthenticated} />);
+
+    expect(await screen.findByText("23.4%")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: /log out/i }));
+
+    expect(await screen.findByText(/may still be active/i)).toBeInTheDocument();
+    expect(onUnauthenticated).not.toHaveBeenCalled();
   });
 });

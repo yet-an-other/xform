@@ -21,12 +21,12 @@ Go 1.26 or newer is required. The production dashboard is committed under `inter
 
 ```sh
 cd internal && go build -o ../xform ./cmd/xform
-./xform
+XFORM_PASSWORD=change-me ./xform
 ```
 
-The panel listens on `127.0.0.1:9090` by default (override with `XFORM_LISTEN`). Open <http://127.0.0.1:9090>. Live host data is also available from `GET /api/v1/server`.
+The panel listens on `127.0.0.1:9090` by default (override with `XFORM_LISTEN`). Open <http://127.0.0.1:9090> and log in with the `XFORM_PASSWORD` value. All `/api/*` endpoints except `login`/`healthz` require the `xform_session` cookie (SPEC.md §5).
 
-Authentication and xray/user collection are intentionally not implemented yet; the `XFORM_PASSWORD`, `XFORM_XRAY_*`, and `XFORM_DB` settings below are wired into the binary but consumed by later slices.
+xray/user collection is intentionally not implemented yet; the `XFORM_XRAY_*` and `XFORM_DB` settings below are wired into the binary but consumed by later slices.
 
 ## Configuration
 
@@ -35,7 +35,7 @@ All runtime settings are environment variables (defaults from SPEC.md §7):
 | Variable | Default | Purpose |
 | --- | --- | --- |
 | `XFORM_LISTEN` | `127.0.0.1:9090` | Panel listen address |
-| `XFORM_PASSWORD` | — | Login password (placeholder until auth lands) |
+| `XFORM_PASSWORD` | none — **required** | Login password (constant-time compare) |
 | `XFORM_XRAY_API` | `127.0.0.1:8080` | xray gRPC StatsService address |
 | `XFORM_XRAY_CONFIG` | `/usr/local/etc/xray/config.json` | xray config file (user roster) |
 | `XFORM_DB` | `/var/lib/xform/xform.db` | SQLite database file |

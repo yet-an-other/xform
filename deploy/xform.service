@@ -13,6 +13,7 @@ StateDirectory=xform
 
 # Same-origin through a reverse proxy or SSH tunnel only; never expose directly.
 Environment=XFORM_LISTEN=127.0.0.1:9090
+# REQUIRED: the panel refuses to start without a login password.
 # Environment=XFORM_PASSWORD=change-me
 # Environment=XFORM_XRAY_API=127.0.0.1:8080
 # Environment=XFORM_XRAY_CONFIG=/usr/local/etc/xray/config.json

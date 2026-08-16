@@ -24,8 +24,12 @@ func clearEnv(t *testing.T) {
 
 func TestLoadDefaultsMatchSpec(t *testing.T) {
 	clearEnv(t)
+	t.Setenv("XFORM_PASSWORD", "test-password")
 
-	cfg := config.Load()
+	cfg, err := config.Load()
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
 
 	if cfg.ListenAddress != "127.0.0.1:9090" {
 		t.Errorf("ListenAddress = %q, want %q", cfg.ListenAddress, "127.0.0.1:9090")
@@ -42,8 +46,8 @@ func TestLoadDefaultsMatchSpec(t *testing.T) {
 	if cfg.XrayUnitName != "xray.service" {
 		t.Errorf("XrayUnitName = %q, want %q", cfg.XrayUnitName, "xray.service")
 	}
-	if cfg.Password != "" {
-		t.Errorf("Password = %q, want empty until login lands", cfg.Password)
+	if cfg.Password != "test-password" {
+		t.Errorf("Password = %q, want the XFORM_PASSWORD value", cfg.Password)
 	}
 }
 
@@ -56,7 +60,10 @@ func TestLoadReadsEnvOverrides(t *testing.T) {
 	t.Setenv("XFORM_DB", "/srv/xform/panel.db")
 	t.Setenv("XFORM_XRAY_UNIT", "xray-vless.service")
 
-	cfg := config.Load()
+	cfg, err := config.Load()
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
 
 	if cfg.ListenAddress != "0.0.0.0:8080" {
 		t.Errorf("ListenAddress = %q, want the XFORM_LISTEN override", cfg.ListenAddress)
@@ -75,5 +82,13 @@ func TestLoadReadsEnvOverrides(t *testing.T) {
 	}
 	if cfg.XrayUnitName != "xray-vless.service" {
 		t.Errorf("XrayUnitName = %q, want the XFORM_XRAY_UNIT override", cfg.XrayUnitName)
+	}
+}
+
+func TestLoadRequiresPassword(t *testing.T) {
+	clearEnv(t)
+
+	if _, err := config.Load(); err == nil {
+		t.Fatal("load succeeded without XFORM_PASSWORD, want an error (SPEC.md §7 requires it)")
 	}
 }

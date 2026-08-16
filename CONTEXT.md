@@ -42,6 +42,10 @@ _Avoid_: build, version (alone)
 The host-side automation that installs the latest release of the panel and restarts it.
 _Avoid_: auto-update, agent, cron job (that's its schedule, not the thing)
 
+**Session**:
+A successful login's continuing right to use the API, carried by the `xform_session` cookie. It expires 24h after last use and never survives a panel restart.
+_Avoid_: login (that's the act that starts one), token, cookie (those are its carrier)
+
 ### Metrics
 
 **Traffic**:
