@@ -8,7 +8,7 @@ Primary sources: Xray-core source and git history (github.com/XTLS/Xray-core), G
 1. **Import `github.com/xtls/xray-core/app/stats/command` as a Go library** — it is the official, self-contained generated gRPC client and it is what production tools (compassvpn/xray-exporter, kutovoys/xray-checker) do. The one non-obvious pitfall: **release tags like `v26.7.28` are NOT valid Go module versions** (the module path has no `/v26` suffix, so the proxy rejects them); you must `go get github.com/xtls/xray-core@v1.260327.0` using XTLS's parallel `v1.YYMMDD.N` tags (or a `@main` pseudo-version), and your toolchain must satisfy xray-core's bleeding-edge `go 1.26` directive. If that is too heavy, `command.proto` is fully self-contained (zero imports) — copying it and running protoc/buf is a clean fallback.
 2. **Dial loopback plaintext**: `grpc.NewClient("127.0.0.1:PORT", grpc.WithTransportCredentials(insecure.NewCredentials()))`. The xray gRPC API has **no authentication and no TLS** (`grpc.NewServer()` with zero options in source); binding `127.0.0.1` and enabling only `StatsService` in config is the entire security model (`HandlerService` on the same port can add/remove users).
 3. **Version floor**: `GetStats`/`QueryStats`/`GetSysStats` exist since v1.0.0 (2020); `GetStatsOnline`/`GetStatsOnlineIpList` since **v24.11.11**; per-IP `last_seen` since **v25.2.18**; `GetAllOnlineUsers` since **v26.1.13**; `GetUsersStats` since **v26.4.13**. For xform, gate the online-user RPCs on server version or just handle `Unimplemented` errors gracefully.
-4. **systemd**: use `github.com/coreos/go-systemd/v22/dbus` — `NewSystemdConnectionContext` + `GetUnitPropertiesContext` (`ActiveState`, `SubState`, `ActiveEnterTimestamp` in µs). Do not parse `systemctl show`.
+4. **systemd**: use `github.com/coreos/go-systemd/v22/dbus` — `NewSystemConnectionContext` (system bus; fall back to the root-only `NewSystemdConnectionContext` private socket) + `GetUnitPropertiesContext` (`ActiveState`, `SubState`, `ActiveEnterTimestamp` in µs). Do not parse `systemctl show`.
 5. **System stats**: use `github.com/shirou/gopsutil/v4` (note the `/v4` path) — `cpu.Percent`, `mem.VirtualMemory`, `disk.Usage`, `host.Uptime`.
 
 ---
@@ -170,7 +170,7 @@ Note these are stats for the **xray process only** — host CPU/RAM/disk must co
 
 **Recommendation: `github.com/coreos/go-systemd/v22/dbus` over D-Bus, not `systemctl show` parsing.** Parsing CLI output is brittle (locale, formatting, `--value` flag availability varies by systemd version); the D-Bus API is the stable interface `systemctl` itself uses.
 
-- Package: [pkg.go.dev/github.com/coreos/go-systemd/v22/dbus](https://pkg.go.dev/github.com/coreos/go-systemd/v22/dbus) — `NewSystemdConnectionContext(ctx)` (private direct connection to systemd, no dbus-daemon needed) or `NewSystemConnectionContext(ctx)` (system bus); always `Close()`.
+- Package: [pkg.go.dev/github.com/coreos/go-systemd/v22/dbus](https://pkg.go.dev/github.com/coreos/go-systemd/v22/dbus) — `NewSystemConnectionContext(ctx)` (system bus; **preferred for unprivileged clients**) or `NewSystemdConnectionContext(ctx)` (private direct connection to systemd, no dbus-daemon needed — **root only**, see caveat below); always `Close()`.
 - Reads: `GetUnitPropertiesContext(ctx, unit)` returns `map[string]any` of all unit properties; `GetUnitPropertyContext(ctx, unit, name)` for one (the non-`Context` variants are deprecated).
 - The properties live on `org.freedesktop.systemd1.Unit`: `ActiveState`, `SubState` (strings), and `ActiveEnterTimestamp` — per the [systemd D-Bus API spec](https://www.freedesktop.org/software/systemd/man/latest/org.freedesktop.systemd1.html): "ActiveEnterTimestamp ... contain[s] CLOCK_REALTIME ... 64-bit microsecond timestamps of the last time a unit ... entered the active state". So **uptime = now − ActiveEnterTimestamp/1e6 seconds** (guard for 0 = never active).
 
@@ -188,9 +188,12 @@ import (
 
 func main() {
 	ctx := context.Background()
-	conn, err := dbus.NewSystemdConnectionContext(ctx)
+	conn, err := dbus.NewSystemConnectionContext(ctx) // system bus: works unprivileged
 	if err != nil {
-		log.Fatal(err)
+		conn, err = dbus.NewSystemdConnectionContext(ctx) // private socket: root only
+		if err != nil {
+			log.Fatal(err)
+		}
 	}
 	defer conn.Close()
 
@@ -209,7 +212,7 @@ func main() {
 }
 ```
 
-Caveats: needs Linux with systemd (fine for the xray host; xform's panel must degrade elsewhere); reading properties requires no elevated privileges for world-readable units, but a private connection must run on the host.
+Caveats: needs Linux with systemd (fine for the xray host; xform's panel must degrade elsewhere); reading properties requires no elevated privileges for world-readable units on either bus, but the private socket is unusable unprivileged: PID 1 creates `/run/systemd/private` `0700 root:root`, so `NewSystemdConnectionContext` fails with EPERM for non-root even though the property reads themselves are unprivileged. Unprivileged panels (xform's shipped unit runs as a dedicated user) must take the system bus; the private connection only suits root-run or dbus-less hosts.
 
 ---
 

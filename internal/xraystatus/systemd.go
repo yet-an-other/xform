@@ -13,13 +13,22 @@ import (
 // systemd the connection simply fails and the collector reports unreachable.
 type SystemdUnit struct{}
 
-// QueryUnit implements UnitQuerier. It opens a fresh private connection per
-// query: at the collector's 5s cadence the socket setup is negligible, and a
+// QueryUnit implements UnitQuerier. It opens a fresh connection per query:
+// at the collector's 5s cadence the socket setup is negligible, and a
 // stateless connection can never silently rot (docs/research §4: always Close).
+//
+// The system bus is preferred because the panel deploys as an unprivileged
+// user: PID 1 creates /run/systemd/private root-only (0700), so a private
+// connection fails with EPERM for anyone but root. The private socket stays
+// as a fallback for root-run hosts without a dbus daemon. Property reads on
+// either bus need no elevated privileges (§4).
 func (SystemdUnit) QueryUnit(ctx context.Context, name string) (UnitInfo, error) {
-	conn, err := dbus.NewSystemdConnectionContext(ctx)
+	conn, err := dbus.NewSystemConnectionContext(ctx)
 	if err != nil {
-		return UnitInfo{}, fmt.Errorf("connect to systemd: %w", err)
+		conn, err = dbus.NewSystemdConnectionContext(ctx)
+		if err != nil {
+			return UnitInfo{}, fmt.Errorf("connect to systemd: %w", err)
+		}
 	}
 	defer conn.Close()
 
