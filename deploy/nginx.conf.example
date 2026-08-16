@@ -12,7 +12,7 @@ server {
     # ssl_certificate     /etc/letsencrypt/live/panel.example.net/fullchain.pem;
     # ssl_certificate_key /etc/letsencrypt/live/panel.example.net/privkey.pem;
 
-    # Built dashboard (npm --prefix web run build; copy of internal/dashboard/dist).
+    # Built dashboard (npm --prefix web run build; copy of internal/cmd/xform/dist).
     root /var/www/xform/dist;
     index index.html;
 

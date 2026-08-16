@@ -5,20 +5,21 @@ xform is a read-only monitoring panel for a single xray instance. The Go binary 
 ## Layout
 
 ```
-cmd/xform/        binary entrypoint (wiring only)
-internal/         API, host-stats collector, embedded dashboard adapter
-internal/dashboard/dist/   built dashboard, committed so clean checkouts build
-web/              pure TypeScript: React 19 + Vite + Tailwind v4 + shadcn/ui
-deploy/           nginx reference config and systemd unit
-SPEC.md           panel specification · CONTEXT.md — domain glossary · docs/adr/ — decisions
+internal/             the Go module (go.mod lives here — the repo root is language-neutral)
+internal/api/         JSON API handlers
+internal/hoststats/   host-stats collector + 5s snapshot cache
+internal/cmd/xform/   the binary: wiring, embedded dashboard, committed dist/
+web/                  pure TypeScript: React 19 + Vite + Tailwind v4 + shadcn/ui
+deploy/               nginx reference config and systemd unit
+SPEC.md               panel specification · CONTEXT.md — domain glossary · docs/adr/ — decisions
 ```
 
 ## Run
 
-Go 1.26 or newer is required. The production dashboard is committed under `internal/dashboard/dist`, so a normal Go build produces the complete binary:
+Go 1.26 or newer is required. The production dashboard is committed under `internal/cmd/xform/dist`, so a normal Go build produces the complete binary:
 
 ```sh
-go build ./cmd/xform
+cd internal && go build -o ../xform ./cmd/xform
 ./xform
 ```
 
@@ -38,9 +39,8 @@ The API emits no CORS headers; the dashboard is always served same-origin.
 ## Develop
 
 ```sh
-# Go tests and checks
-go test ./...
-go vet ./...
+# Go tests and checks (from the module directory)
+cd internal && go test ./... && go vet ./...
 
 # Frontend tests, typechecking, and production build (into internal/dashboard/dist)
 npm ci --prefix web
@@ -53,4 +53,4 @@ npm --prefix web run build
 npm --prefix web run dev
 ```
 
-After changing the frontend, commit the regenerated `internal/dashboard/dist` so `go build` remains self-contained. `go generate ./internal/dashboard` runs `npm ci` and rebuilds it.
+After changing the frontend, commit the regenerated `internal/cmd/xform/dist` so `go build` remains self-contained. `go generate ./cmd/xform` (from `internal/`) runs `npm ci` and rebuilds it.

@@ -10,9 +10,8 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/yet-an-other/xform/internal/dashboard"
+	"github.com/yet-an-other/xform/internal/api"
 	"github.com/yet-an-other/xform/internal/hoststats"
-	"github.com/yet-an-other/xform/internal/httpapi"
 )
 
 const defaultListenAddress = "127.0.0.1:9090"
@@ -53,5 +52,5 @@ func main() {
 }
 
 func newHandler(snapshots *hoststats.Cache) http.Handler {
-	return httpapi.New(snapshots, dashboard.Handler())
+	return api.New(snapshots, newDashboardHandler())
 }

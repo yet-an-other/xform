@@ -1,5 +1,5 @@
-// Package httpapi exposes xform's HTTP API and embedded dashboard.
-package httpapi
+// Package api exposes xform's HTTP API.
+package api
 
 import (
 	"context"

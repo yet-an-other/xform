@@ -14,7 +14,7 @@ export default defineConfig({
   },
   build: {
     // The built dashboard lives next to the Go embed adapter that serves it.
-    outDir: path.resolve(root, "../internal/dashboard/dist"),
+    outDir: path.resolve(root, "../internal/cmd/xform/dist"),
     emptyOutDir: true,
   },
   server: {

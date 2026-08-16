@@ -1,4 +1,4 @@
-package dashboard_test
+package main
 
 import (
 	"net/http"
@@ -6,12 +6,10 @@ import (
 	"regexp"
 	"strings"
 	"testing"
-
-	"github.com/yet-an-other/xform/internal/dashboard"
 )
 
 func TestHandlerServesBuiltDashboardAndAssets(t *testing.T) {
-	handler := dashboard.Handler()
+	handler := newDashboardHandler()
 	pageRequest := httptest.NewRequest(http.MethodGet, "/", nil)
 	pageResponse := httptest.NewRecorder()
 
