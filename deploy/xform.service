@@ -8,8 +8,34 @@ ExecStart=/usr/local/bin/xform
 Restart=on-failure
 RestartSec=5
 
-# Creates /var/lib/xform (default XFORM_DB location) with the service's owner.
+# Runs unprivileged: create the system user first (see README — useradd
+# --system xform). Property reads on the D-Bus system bus and exec'ing the
+# world-readable xray binary need no privileges; only root may touch
+# /run/systemd/private, so that socket is just a fallback for root-run hosts.
+User=xform
+
+# Creates /var/lib/xform (default XFORM_DB location) owned by the system user.
 StateDirectory=xform
+
+# Hardening. The panel needs exactly: read-only host /proc + /sys, the D-Bus
+# system bus, a loopback listener, outbound loopback to the xray gRPC API,
+# and its writable StateDirectory (ProtectSystem=strict leaves that writable).
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictNamespaces=true
+LockPersonality=true
+RestrictRealtime=true
+RestrictSUIDSGID=true
+MemoryDenyWriteExecute=true
+CapabilityBoundingSet=
+SystemCallFilter=@system-service
+# AF_UNIX: D-Bus system bus · AF_INET/AF_INET6: loopback listener + xray gRPC.
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
 
 # Same-origin through a reverse proxy or SSH tunnel only; never expose directly.
 Environment=XFORM_LISTEN=127.0.0.1:9090

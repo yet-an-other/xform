@@ -61,10 +61,21 @@ The panel runs on the same host as xray. Cross-compile on any machine (pure Go, 
 cd internal && GOOS=linux GOARCH=amd64 go build -o xform ./cmd/xform
 scp xform root@HOST:/usr/local/bin/xform
 scp ../deploy/xform.service root@HOST:/etc/systemd/system/xform.service
+ssh root@HOST 'useradd --system --home-dir /nonexistent --shell /usr/sbin/nologin xform'
 ssh root@HOST 'systemctl daemon-reload && systemctl enable --now xform'
 ```
 
-Override settings by editing the `Environment=` lines in [`deploy/xform.service`](deploy/xform.service) before copying, or with `systemctl edit xform` afterwards. The unit starts after `xray.service` and creates `/var/lib/xform` for the default database path.
+The service runs as the dedicated, unprivileged `xform` system user (if it already exists, `useradd` exits non-zero without side effects — safe to re-run). It reads xray's unit state over the D-Bus system bus and runs the world-readable xray binary for the version, so it needs no privileges; the unit file is hardened accordingly (`ProtectSystem=strict`, `NoNewPrivileges=`, … — see the comments in [`deploy/xform.service`](deploy/xform.service)). Upgrading from a root-run install? Re-own the state directory once: `chown -R xform:xform /var/lib/xform`.
+
+Override settings by editing the `Environment=` lines in [`deploy/xform.service`](deploy/xform.service) before copying, or with `systemctl edit xform` afterwards. The unit starts after `xray.service` and creates `/var/lib/xform` (owned by the `xform` system user) for the default database path.
+
+**xray config read access**: once the config-parse slice lands, the panel reads `XFORM_XRAY_CONFIG` (default `/usr/local/etc/xray/config.json`), which is often root-only. Grant the panel's system user read access — either via a group:
+
+```sh
+ssh root@HOST 'chgrp xform /usr/local/etc/xray/config.json && chmod 0640 /usr/local/etc/xray/config.json'
+```
+
+or via an ACL: `setfacl -m u:xform:r /usr/local/etc/xray/config.json`. Either way the file's directory (`/usr/local/etc/xray`, typically `0755`) must stay traversable by the `xform` system user.
 
 ### xray prerequisites
 
