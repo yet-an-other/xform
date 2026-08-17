@@ -194,6 +194,37 @@ func TestVersionFailureIsLoggedOnce(t *testing.T) {
 	}
 }
 
+func TestUnitInfoFromPropertiesHandlesRealGodbusShapes(t *testing.T) {
+	// Exactly what godbus v5 decodes from the wire: a(sasbttuii) becomes
+	// [][]any (decoder.go: MakeSlice(SliceOf(typeFor(...))), typeFor('(') = []any).
+	// The v0.4.x bug: execStartPath asserted []any, so ExecPath came back ""
+	// and the version was always null on a running xray.
+	unitProps := map[string]any{
+		"ActiveState":          "active",
+		"SubState":             "running",
+		"ActiveEnterTimestamp": uint64(1_780_000_000 * 1_000_000),
+	}
+	svcProps := map[string]any{
+		"ExecStart": [][]any{{
+			"/usr/local/bin/xray",
+			[]any{"/usr/local/bin/xray", "run", "-c", "/usr/local/etc/xray/config.json"},
+			false, uint64(0), uint64(0), uint32(0), int32(0), int32(0),
+		}},
+	}
+
+	info := xraystatus.UnitInfoFromProperties(unitProps, svcProps)
+
+	if info.ExecPath != "/usr/local/bin/xray" {
+		t.Errorf("ExecPath = %q, want /usr/local/bin/xray — the godbus struct-array shape must decode", info.ExecPath)
+	}
+	if info.ActiveState != "active" || info.SubState != "running" {
+		t.Errorf("state = %q/%q, want active/running", info.ActiveState, info.SubState)
+	}
+	if want := time.Unix(1_780_000_000, 0); !info.ActiveSince.Equal(want) {
+		t.Errorf("ActiveSince = %v, want %v (µs → s conversion)", info.ActiveSince, want)
+	}
+}
+
 func TestBinaryVersion(t *testing.T) {
 	cases := map[string]struct {
 		output  string

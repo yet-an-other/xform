@@ -37,32 +37,44 @@ func (SystemdUnit) QueryUnit(ctx context.Context, name string) (UnitInfo, error)
 		return UnitInfo{}, fmt.Errorf("query unit %s: %w", name, err)
 	}
 
+	// The Service properties only feed ExecPath; tolerate their absence.
+	svc, _ := conn.GetUnitTypePropertiesContext(ctx, name, "Service")
+	return UnitInfoFromProperties(props, svc), nil
+}
+
+// UnitInfoFromProperties maps raw systemd D-Bus property maps (Unit and
+// Service interfaces, as decoded by go-systemd/godbus) into a UnitInfo.
+func UnitInfoFromProperties(unitProps, svcProps map[string]any) UnitInfo {
 	info := UnitInfo{}
-	info.ActiveState, _ = props["ActiveState"].(string)
-	info.SubState, _ = props["SubState"].(string)
+	info.ActiveState, _ = unitProps["ActiveState"].(string)
+	info.SubState, _ = unitProps["SubState"].(string)
 	// ActiveEnterTimestamp is CLOCK_REALTIME in microseconds; 0 = never active.
-	if usec, ok := props["ActiveEnterTimestamp"].(uint64); ok && usec > 0 {
+	if usec, ok := unitProps["ActiveEnterTimestamp"].(uint64); ok && usec > 0 {
 		info.ActiveSince = time.Unix(int64(usec)/1_000_000, int64(usec%1_000_000)*1_000)
 	}
-
-	if svc, err := conn.GetUnitTypePropertiesContext(ctx, name, "Service"); err == nil {
-		info.ExecPath = execStartPath(svc["ExecStart"])
-	}
-	return info, nil
+	info.ExecPath = execStartPath(svcProps["ExecStart"])
+	return info
 }
 
 // execStartPath extracts the binary path from the unit's ExecStart property,
 // whose D-Bus shape is a(sasbttuii) — an array of per-command structs whose
-// first field is the binary path.
+// first field is the binary path. godbus decodes that to [][]any (struct
+// fields within), so accept exactly that; the []any branch tolerates a
+// pre-unwrapped shape.
 func execStartPath(value any) string {
-	commands, ok := value.([]any)
-	if !ok || len(commands) == 0 {
-		return ""
+	switch commands := value.(type) {
+	case [][]any:
+		if len(commands) > 0 && len(commands[0]) > 0 {
+			path, _ := commands[0][0].(string)
+			return path
+		}
+	case []any:
+		if len(commands) > 0 {
+			if fields, ok := commands[0].([]any); ok && len(fields) > 0 {
+				path, _ := fields[0].(string)
+				return path
+			}
+		}
 	}
-	fields, ok := commands[0].([]any)
-	if !ok || len(fields) == 0 {
-		return ""
-	}
-	path, _ := fields[0].(string)
-	return path
+	return ""
 }
