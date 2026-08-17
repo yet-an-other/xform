@@ -25,13 +25,23 @@ export class UnauthenticatedError extends Error {
   }
 }
 
-// XrayStatus is the panel's view of the xray service (host-level for now:
-// systemd unit state + binary version; gRPC-derived fields arrive later).
+// XrayStatus is the panel's view of the xray service (SPEC §5): systemd
+// unit state + binary version, plus runtime stats from the gRPC
+// StatsService. Process and online fields are null unless running (online
+// counts also null on servers predating the online RPCs).
 export interface XrayStatus {
   collected_at: number;
   status: "running" | "stopped" | "unreachable";
   version: string | null;
   uptime_seconds: number;
+  mem_bytes: number | null;
+  goroutines: number | null;
+  speed_up_bps: number;
+  speed_down_bps: number;
+  total_up_bytes: number;
+  total_down_bytes: number;
+  users_online: number | null;
+  unique_ips_online: number | null;
 }
 
 async function getJSON<T>(path: string, signal?: AbortSignal): Promise<T> {

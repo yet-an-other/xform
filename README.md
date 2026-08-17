@@ -26,7 +26,7 @@ XFORM_PASSWORD=change-me ./xform
 
 The panel listens on `127.0.0.1:9090` by default (override with `XFORM_LISTEN`). Open <http://127.0.0.1:9090> and log in with the `XFORM_PASSWORD` value. All `/api/*` endpoints except `login`/`healthz` require the `xform_session` cookie (SPEC.md §5).
 
-The xray service status (running/stopped/unreachable, version, uptime) is live from systemd and the xray binary — `XFORM_XRAY_UNIT` is honored. gRPC-based xray stats and user collection are intentionally not implemented yet; `XFORM_XRAY_API` and `XFORM_DB` are wired into the binary but consumed by later slices.
+The xray service status is live from three host-level sources: the systemd unit (running/stopped, uptime — `XFORM_XRAY_UNIT` is honored), the binary (version), and the loopback gRPC StatsService (process memory/goroutines, speeds, traffic totals, online counts — `XFORM_XRAY_API`). An active unit whose stats API doesn't answer reports `unreachable` (SPEC.md §3 degraded mode); totals are reconciled across xray restarts in memory until the durable-history slice lands. Per-user collection (`XFORM_DB`, `XFORM_XRAY_CONFIG`) is wired into the binary but consumed by later slices.
 
 ## Configuration
 
@@ -79,7 +79,7 @@ or via an ACL: `setfacl -m u:xform:r /usr/local/etc/xray/config.json`. Either wa
 
 ### xray prerequisites
 
-xray must expose per-user and system stats to its loopback gRPC API. Merge this into the xray config (SPEC.md §2):
+xray must expose per-user and system stats to its loopback gRPC API (without them the panel still runs, but reports xray as `unreachable`). Merge this into the xray config (SPEC.md §2):
 
 ```json
 {

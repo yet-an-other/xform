@@ -21,6 +21,14 @@ const xrayRunning = {
   status: "running",
   version: "26.4.13",
   uptime_seconds: 1_209_600, // 14 days
+  mem_bytes: 88_080_384,
+  goroutines: 183,
+  speed_up_bps: 2_400_000,
+  speed_down_bps: 18_500_000,
+  total_up_bytes: 39_100_000_000,
+  total_down_bytes: 511_400_000_000,
+  users_online: 3,
+  unique_ips_online: 4,
 };
 
 const xrayStopped = {
@@ -28,6 +36,14 @@ const xrayStopped = {
   status: "stopped",
   version: null,
   uptime_seconds: 0,
+  mem_bytes: null,
+  goroutines: null,
+  speed_up_bps: 0,
+  speed_down_bps: 0,
+  total_up_bytes: 0,
+  total_down_bytes: 0,
+  users_online: null,
+  unique_ips_online: null,
 };
 
 afterEach(() => {
@@ -175,5 +191,47 @@ describe("xray status", () => {
     render(<Dashboard onUnauthenticated={() => {}} />);
 
     expect(await screen.findByRole("alert")).toHaveTextContent(/xray is unreachable.*degraded/i);
+  });
+});
+
+describe("xray runtime stats", () => {
+  it("renders speed, totals, online counts, and process stats when running", async () => {
+    stubEndpoints({ server: () => json(stats), xray: () => json(xrayRunning) });
+
+    render(<Dashboard onUnauthenticated={() => {}} />);
+
+    const row = await screen.findByRole("region", { name: "xray row" });
+    expect(row).toHaveTextContent("↑ 2.29 MiB/s · ↓ 17.6 MiB/s");
+    expect(row).toHaveTextContent("↑ 36.4 GiB · ↓ 476 GiB");
+    expect(row).toHaveTextContent("3 users · 4 IPs");
+    expect(row).toHaveTextContent("84.0 MiB · 183 goroutines");
+  });
+
+  it("marks online counts unavailable on an old xray without the online RPCs", async () => {
+    stubEndpoints({
+      server: () => json(stats),
+      xray: () => json({ ...xrayRunning, users_online: null, unique_ips_online: null }),
+    });
+
+    render(<Dashboard onUnauthenticated={() => {}} />);
+
+    const row = await screen.findByRole("region", { name: "xray row" });
+    expect(row).toHaveTextContent(/users online.*unavailable/i);
+  });
+
+  it("serves stale xray data alongside the banner in degraded mode", async () => {
+    stubEndpoints({
+      server: () => json(stats),
+      xray: () => json({ ...xrayRunning, status: "unreachable", speed_up_bps: 0, speed_down_bps: 0, mem_bytes: null, goroutines: null, users_online: null, unique_ips_online: null }),
+    });
+
+    render(<Dashboard onUnauthenticated={() => {}} />);
+
+    expect(await screen.findByRole("alert")).toHaveTextContent(/xray is unreachable/i);
+    // The durable totals stay on the stale row; host stats stay live.
+    const row = screen.getByRole("region", { name: "xray row" });
+    expect(row).toHaveTextContent("↑ 36.4 GiB · ↓ 476 GiB");
+    expect(row).toHaveTextContent("↑ 0 B/s · ↓ 0 B/s");
+    expect(screen.getByText("23.4%")).toBeInTheDocument();
   });
 });

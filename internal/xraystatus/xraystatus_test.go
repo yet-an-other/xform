@@ -38,6 +38,7 @@ func TestStoppedUnitReportsStoppedWithoutVersion(t *testing.T) {
 	collector := xraystatus.NewCollector(
 		&fakeUnit{info: xraystatus.UnitInfo{ActiveState: "inactive", SubState: "dead"}},
 		fakeVersion{version: "26.4.13"},
+		fakeStats{},
 		"xray.service",
 	).WithClock(testClock)
 
@@ -63,6 +64,7 @@ func TestUnqueryableUnitReportsUnreachable(t *testing.T) {
 	collector := xraystatus.NewCollector(
 		&fakeUnit{err: errors.New("dbus down")},
 		fakeVersion{},
+		fakeStats{},
 		"xray.service",
 	).WithClock(testClock)
 
@@ -87,6 +89,7 @@ func TestActiveUnitReportsRunningWithUptimeAndVersion(t *testing.T) {
 			ExecPath:    "/usr/local/bin/xray",
 		}},
 		fakeVersion{version: "26.4.13"},
+		fakeStats{},
 		"xray.service",
 	).WithClock(testClock)
 
@@ -109,6 +112,7 @@ func TestUnreadableVersionToleratedWhileRunning(t *testing.T) {
 	collector := xraystatus.NewCollector(
 		&fakeUnit{info: xraystatus.UnitInfo{ActiveState: "active", ActiveSince: time.Unix(1_780_000_000, 0)}},
 		fakeVersion{err: errors.New("exec failed")},
+		fakeStats{},
 		"xray.service",
 	).WithClock(testClock)
 
@@ -131,7 +135,7 @@ func TestFailuresAreLoggedOnceNotEveryPoll(t *testing.T) {
 	t.Cleanup(func() { slog.SetDefault(previous) })
 
 	unit := &fakeUnit{err: errors.New("dbus down")}
-	collector := xraystatus.NewCollector(unit, fakeVersion{}, "xray.service").WithClock(testClock)
+	collector := xraystatus.NewCollector(unit, fakeVersion{}, fakeStats{}, "xray.service").WithClock(testClock)
 
 	// A persistent failure logs on the first poll only.
 	for range 3 {
@@ -177,6 +181,7 @@ func TestVersionFailureIsLoggedOnce(t *testing.T) {
 	collector := xraystatus.NewCollector(
 		&fakeUnit{info: xraystatus.UnitInfo{ActiveState: "active", ActiveSince: time.Unix(1_780_000_000, 0), ExecPath: "/usr/local/bin/xray"}},
 		fakeVersion{err: errors.New("exec: permission denied")},
+		fakeStats{},
 		"xray.service",
 	).WithClock(testClock)
 

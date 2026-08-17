@@ -238,11 +238,21 @@ func TestLogoutRevokesAndClears(t *testing.T) {
 
 func TestXrayEndpointReturnsStatusContract(t *testing.T) {
 	version := "26.4.13"
+	memBytes, goroutines := uint64(88_080_384), uint32(183)
+	usersOnline, uniqueIPs := 3, 4
 	want := xraystatus.Status{
-		CollectedAt:   1_723_800_000,
-		Status:        "running",
-		Version:       &version,
-		UptimeSeconds: 1_216_800,
+		CollectedAt:     1_723_800_000,
+		Status:          "running",
+		Version:         &version,
+		UptimeSeconds:   1_216_800,
+		MemBytes:        &memBytes,
+		Goroutines:      &goroutines,
+		SpeedUpBps:      2_400_000,
+		SpeedDownBps:    18_500_000,
+		TotalUpBytes:    39_100_000_000,
+		TotalDownBytes:  511_400_000_000,
+		UsersOnline:     &usersOnline,
+		UniqueIPsOnline: &uniqueIPs,
 	}
 	handler := api.New(fixedHostStats{}, fixedXrayStatus{status: want}, session.NewManager(testPassword, time.Now), http.NotFoundHandler())
 	request := httptest.NewRequest(http.MethodGet, "/api/v1/xray", nil)
@@ -261,6 +271,10 @@ func TestXrayEndpointReturnsStatusContract(t *testing.T) {
 	}
 	wantFields := map[string]struct{}{
 		"collected_at": {}, "status": {}, "version": {}, "uptime_seconds": {},
+		"mem_bytes": {}, "goroutines": {},
+		"speed_up_bps": {}, "speed_down_bps": {},
+		"total_up_bytes": {}, "total_down_bytes": {},
+		"users_online": {}, "unique_ips_online": {},
 	}
 	gotFields := make(map[string]struct{}, len(fields))
 	for field := range fields {

@@ -33,7 +33,12 @@ func main() {
 	hostStats := hoststats.NewCache(hoststats.NewCollector(), 5*time.Second)
 	hostStats.Start(shutdownSignal)
 	xrayStatus := xraystatus.NewCache(
-		xraystatus.NewCollector(xraystatus.SystemdUnit{}, xraystatus.BinaryVersion{}, cfg.XrayUnitName),
+		xraystatus.NewCollector(
+			xraystatus.SystemdUnit{},
+			xraystatus.BinaryVersion{},
+			xraystatus.GRPCStats{Address: cfg.XrayAPIAddress},
+			cfg.XrayUnitName,
+		),
 		5*time.Second,
 	)
 	xrayStatus.Start(shutdownSignal)

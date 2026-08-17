@@ -13,6 +13,10 @@ export function formatBytes(bytes: number): string {
   return `${value.toFixed(digits)} ${units[unit]}`;
 }
 
+export function formatSpeed(bytesPerSecond: number): string {
+  return `${formatBytes(bytesPerSecond)}/s`;
+}
+
 export function formatUptime(seconds: number): string {
   const days = Math.floor(seconds / 86_400);
   if (days > 0) {

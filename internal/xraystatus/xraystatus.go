@@ -1,6 +1,6 @@
 // Package xraystatus reports the panel's view of the xray service from
-// host-level sources only: the systemd unit state and the xray binary itself.
-// No gRPC — that slice comes later (SPEC.md §3).
+// host-level sources: the systemd unit state, the xray binary itself, and
+// the loopback gRPC StatsService (SPEC.md §3).
 package xraystatus
 
 import (
@@ -19,10 +19,18 @@ const (
 
 // Status is the JSON contract returned by GET /api/v1/xray.
 type Status struct {
-	CollectedAt   int64   `json:"collected_at"`
-	Status        string  `json:"status"`  // running | stopped | unreachable
-	Version       *string `json:"version"` // null unless running
-	UptimeSeconds uint64  `json:"uptime_seconds"`
+	CollectedAt     int64   `json:"collected_at"`
+	Status          string  `json:"status"`   // running | stopped | unreachable
+	Version         *string `json:"version"`  // null unless the unit is active
+	UptimeSeconds   uint64  `json:"uptime_seconds"`
+	MemBytes        *uint64 `json:"mem_bytes"` // null unless running (gRPC sysstats)
+	Goroutines      *uint32 `json:"goroutines"`
+	SpeedUpBps      uint64  `json:"speed_up_bps"`   // 0 when degraded
+	SpeedDownBps    uint64  `json:"speed_down_bps"`
+	TotalUpBytes    uint64  `json:"total_up_bytes"` // durable totals, survive xray restarts
+	TotalDownBytes  uint64  `json:"total_down_bytes"`
+	UsersOnline     *int    `json:"users_online"`      // null when the server predates the online RPCs
+	UniqueIPsOnline *int    `json:"unique_ips_online"`
 }
 
 // UnitInfo is what the panel needs from a systemd unit.
@@ -43,21 +51,41 @@ type VersionRunner interface {
 	Version(ctx context.Context, execPath string) (string, error)
 }
 
+// RuntimeStats is one poll of xray's gRPC StatsService: process stats plus
+// the raw cumulative traffic counters (which reset whenever xray restarts).
+type RuntimeStats struct {
+	MemBytes    uint64
+	Goroutines  uint32
+	UpBytes     uint64 // raw cumulative inbound uplink
+	DownBytes   uint64 // raw cumulative inbound downlink
+	OnlineUsers *int   // nil when the server predates the online-user RPCs
+	OnlineIPs   *int
+}
+
+// StatsQuerier reads xray runtime stats over gRPC — the seam for fakes.
+type StatsQuerier interface {
+	QueryStats(ctx context.Context) (RuntimeStats, error)
+}
+
 // Collector gathers the xray service status from the unit and the binary.
 type Collector struct {
 	unit     UnitQuerier
 	version  VersionRunner
+	stats    StatsQuerier
 	unitName string
 	now      func() time.Time
 
 	mu        sync.Mutex
 	queryErr  string // last logged unit-query failure; "" when healthy
 	binaryErr string // last logged version-read failure; "" when healthy
+	statsErr  string // last logged stats-API failure; "" when healthy
+	up, down  trafficTracker
+	lastPoll  time.Time // last successful stats poll (drives speed windows)
 }
 
 // NewCollector creates a Collector for the named systemd unit.
-func NewCollector(unit UnitQuerier, version VersionRunner, unitName string) *Collector {
-	return &Collector{unit: unit, version: version, unitName: unitName, now: time.Now}
+func NewCollector(unit UnitQuerier, version VersionRunner, stats StatsQuerier, unitName string) *Collector {
+	return &Collector{unit: unit, version: version, stats: stats, unitName: unitName, now: time.Now}
 }
 
 // WithClock overrides the time source (tests).
@@ -87,6 +115,8 @@ func (c *Collector) Collect(ctx context.Context) (Status, error) {
 		return status, nil
 	}
 
+	// The unit is active, so the panel knows the version (from the binary)
+	// and the uptime (from systemd) regardless of what happens next.
 	status.Status = StatusRunning
 	if !info.ActiveSince.IsZero() {
 		status.UptimeSeconds = uint64(c.now().Sub(info.ActiveSince).Seconds())
@@ -97,6 +127,37 @@ func (c *Collector) Collect(ctx context.Context) (Status, error) {
 	} else {
 		c.logFailure(&c.binaryErr, "cannot read xray version from the unit's binary", err)
 	}
+
+	// An active unit whose stats API does not answer is unreachable (SPEC.md
+	// §3 degraded mode) — the speeds zero out and the process/online fields
+	// drop to null, while version, uptime, and the durable totals stay live.
+	runtime, err := c.stats.QueryStats(ctx)
+	if err != nil {
+		c.logFailure(&c.statsErr, "cannot query xray stats API; reporting unreachable", err)
+		c.mu.Lock()
+		status.TotalUpBytes = c.up.total
+		status.TotalDownBytes = c.down.total
+		c.mu.Unlock()
+		status.Status = StatusUnreachable
+		return status, nil
+	}
+	c.logRecovery(&c.statsErr, "xray stats API query recovered")
+	status.MemBytes = &runtime.MemBytes
+	status.Goroutines = &runtime.Goroutines
+	status.UsersOnline = runtime.OnlineUsers
+	status.UniqueIPsOnline = runtime.OnlineIPs
+
+	now := c.now()
+	c.mu.Lock()
+	elapsed := now.Sub(c.lastPoll)
+	c.up.add(runtime.UpBytes, elapsed)
+	c.down.add(runtime.DownBytes, elapsed)
+	c.lastPoll = now
+	status.TotalUpBytes = c.up.total
+	status.TotalDownBytes = c.down.total
+	status.SpeedUpBps = c.up.speed()
+	status.SpeedDownBps = c.down.speed()
+	c.mu.Unlock()
 	return status, nil
 }
 
@@ -121,4 +182,56 @@ func (c *Collector) logRecovery(slot *string, msg string) {
 	}
 	*slot = ""
 	slog.Info(msg, "unit", c.unitName)
+}
+
+// deltaSample is one poll's reconciled counter delta with its elapsed window.
+type deltaSample struct {
+	bytes   uint64
+	elapsed time.Duration
+}
+
+// trafficTracker reconciles one raw xray traffic counter (cumulative since
+// xray start, reset on every restart) into a panel-side durable total and a
+// speed estimate — SPEC.md §3 counter reconciliation.
+type trafficTracker struct {
+	seen    bool
+	lastRaw uint64
+	total   uint64
+	window  [2]deltaSample // ring of the most recent deltas
+	samples int
+}
+
+func (t *trafficTracker) add(raw uint64, elapsed time.Duration) {
+	if !t.seen {
+		// Baseline: adopt xray's current counters as the totals without a
+		// speed sample — spreading lifetime traffic over one poll would
+		// spike the speed estimate.
+		t.seen, t.lastRaw, t.total = true, raw, raw
+		return
+	}
+	delta := raw // raw < lastRaw: xray restarted, the counter reset — raw itself is the delta
+	if raw >= t.lastRaw {
+		delta = raw - t.lastRaw
+	}
+	t.lastRaw = raw
+	t.total += delta
+	t.window[t.samples%2] = deltaSample{bytes: delta, elapsed: elapsed}
+	t.samples++
+}
+
+// speed is the mean of the last 2 deltas ÷ interval (SPEC.md §3).
+func (t *trafficTracker) speed() uint64 {
+	if t.samples == 0 {
+		return 0
+	}
+	var bytes uint64
+	var elapsed time.Duration
+	for i := max(t.samples-2, 0); i < t.samples; i++ {
+		bytes += t.window[i%2].bytes
+		elapsed += t.window[i%2].elapsed
+	}
+	if elapsed <= 0 {
+		return 0
+	}
+	return uint64(float64(bytes) / elapsed.Seconds())
 }

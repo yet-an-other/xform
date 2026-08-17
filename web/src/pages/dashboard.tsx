@@ -11,7 +11,7 @@ import {
   type HostStats,
   type XrayStatus,
 } from "@/lib/api";
-import { formatBytes, formatUptime, percentUsed } from "@/lib/format";
+import { formatBytes, formatSpeed, formatUptime, percentUsed } from "@/lib/format";
 
 const POLL_INTERVAL_MS = 5_000;
 
@@ -152,6 +152,38 @@ export function Dashboard({ onUnauthenticated }: { onUnauthenticated: () => void
         <p className="border-destructive/30 bg-destructive/10 text-destructive-foreground mb-4 rounded-lg border px-4 py-3 text-sm">
           Unable to refresh: {error}
         </p>
+      ) : null}
+
+      {xray ? (
+        <section
+          aria-label="xray row"
+          className="divide-border bg-surface/80 mt-4 grid divide-y rounded-xl border md:grid-cols-2 md:divide-y-0 lg:grid-cols-4 lg:divide-x"
+        >
+          <HostDetail
+            label="Speed now"
+            value={`↑ ${formatSpeed(xray.speed_up_bps)} · ↓ ${formatSpeed(xray.speed_down_bps)}`}
+          />
+          <HostDetail
+            label="Total traffic"
+            value={`↑ ${formatBytes(xray.total_up_bytes)} · ↓ ${formatBytes(xray.total_down_bytes)}`}
+          />
+          <HostDetail
+            label="Users online"
+            value={
+              xray.users_online !== null
+                ? `${xray.users_online} users · ${xray.unique_ips_online} IPs`
+                : "unavailable on this xray"
+            }
+          />
+          <HostDetail
+            label="xray process"
+            value={
+              xray.mem_bytes !== null
+                ? `${formatBytes(xray.mem_bytes)} · ${xray.goroutines} goroutines`
+                : "unavailable"
+            }
+          />
+        </section>
       ) : null}
 
       {stats ? (

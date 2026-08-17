@@ -127,12 +127,12 @@ GET /api/v1/server
 GET /api/v1/xray
 { "collected_at": 1723800000,
   "status": "running",                  // running | stopped | unreachable
-  "version": "26.4.13",                 // null when not running
+  "version": "26.4.13",                 // null when the unit is not active
   "uptime_seconds": 1216800,
-  "mem_bytes": 88080384, "goroutines": 183,
-  "speed_up_bps": 2400000, "speed_down_bps": 18500000,
-  "total_up_bytes": 39100000000, "total_down_bytes": 511400000000,
-  "users_online": 3, "unique_ips_online": 4 }
+  "mem_bytes": 88080384, "goroutines": 183,   // null unless running
+  "speed_up_bps": 2400000, "speed_down_bps": 18500000,  // 0 when degraded
+  "total_up_bytes": 39100000000, "total_down_bytes": 511400000000,  // durable; last-known when degraded
+  "users_online": 3, "unique_ips_online": 4 }  // null on xray predating the online RPCs
 
 GET /api/v1/users
 { "collected_at": 1723800000, "stale": false,

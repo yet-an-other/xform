@@ -41,7 +41,20 @@ function stubApi() {
       }
       if (url.endsWith("api/v1/xray")) {
         return new Response(
-          JSON.stringify({ collected_at: 1_723_800_000, status: "running", version: "26.4.13", uptime_seconds: 1_209_600 }),
+          JSON.stringify({
+            collected_at: 1_723_800_000,
+            status: "running",
+            version: "26.4.13",
+            uptime_seconds: 1_209_600,
+            mem_bytes: 88_080_384,
+            goroutines: 183,
+            speed_up_bps: 2_400_000,
+            speed_down_bps: 18_500_000,
+            total_up_bytes: 39_100_000_000,
+            total_down_bytes: 511_400_000_000,
+            users_online: 3,
+            unique_ips_online: 4,
+          }),
           { status: 200, headers: { "Content-Type": "application/json" } },
         );
       }
