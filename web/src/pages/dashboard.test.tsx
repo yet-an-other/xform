@@ -207,6 +207,18 @@ describe("xray runtime stats", () => {
     expect(row).toHaveTextContent("84.0 MiB · 183 goroutines");
   });
 
+  it("orders the rows: host info, then xray generic info", async () => {
+    stubEndpoints({ server: () => json(stats), xray: () => json(xrayRunning) });
+
+    render(<Dashboard onUnauthenticated={() => {}} />);
+
+    await screen.findByRole("region", { name: "xray row" });
+    const order = screen
+      .getAllByRole("region")
+      .map((region) => region.getAttribute("aria-label"));
+    expect(order).toEqual(["Server resources", "Host details", "xray row"]);
+  });
+
   it("marks online counts unavailable on an old xray without the online RPCs", async () => {
     stubEndpoints({
       server: () => json(stats),

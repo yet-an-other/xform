@@ -18,8 +18,8 @@ const POLL_INTERVAL_MS = 5_000;
 function HostDetail({ label, value }: { label: string; value: string }) {
   return (
     <div className="flex items-center justify-between gap-5 px-5 py-4 max-sm:flex-col max-sm:items-start max-sm:gap-2">
-      <span className="text-muted-foreground text-xs">{label}</span>
-      <strong className="truncate font-mono text-xs font-semibold">{value}</strong>
+      <span className="text-muted-foreground shrink-0 text-xs whitespace-nowrap">{label}</span>
+      <strong className="min-w-0 truncate font-mono text-xs font-semibold">{value}</strong>
     </div>
   );
 }
@@ -154,38 +154,6 @@ export function Dashboard({ onUnauthenticated }: { onUnauthenticated: () => void
         </p>
       ) : null}
 
-      {xray ? (
-        <section
-          aria-label="xray row"
-          className="divide-border bg-surface/80 mt-4 grid divide-y rounded-xl border md:grid-cols-2 md:divide-y-0 lg:grid-cols-4 lg:divide-x"
-        >
-          <HostDetail
-            label="Speed now"
-            value={`↑ ${formatSpeed(xray.speed_up_bps)} · ↓ ${formatSpeed(xray.speed_down_bps)}`}
-          />
-          <HostDetail
-            label="Total traffic"
-            value={`↑ ${formatBytes(xray.total_up_bytes)} · ↓ ${formatBytes(xray.total_down_bytes)}`}
-          />
-          <HostDetail
-            label="Users online"
-            value={
-              xray.users_online !== null
-                ? `${xray.users_online} users · ${xray.unique_ips_online} IPs`
-                : "unavailable on this xray"
-            }
-          />
-          <HostDetail
-            label="xray process"
-            value={
-              xray.mem_bytes !== null
-                ? `${formatBytes(xray.mem_bytes)} · ${xray.goroutines} goroutines`
-                : "unavailable"
-            }
-          />
-        </section>
-      ) : null}
-
       {stats ? (
         <>
           <section aria-label="Server resources" className="grid gap-4 md:grid-cols-3">
@@ -232,6 +200,38 @@ export function Dashboard({ onUnauthenticated }: { onUnauthenticated: () => void
           <Skeleton className="min-h-[190px] rounded-xl" />
         </div>
       )}
+
+      {xray ? (
+        <section
+          aria-label="xray row"
+          className="divide-border bg-surface/80 mt-4 grid divide-y rounded-xl border md:grid-cols-2 md:divide-y-0 lg:grid-cols-4 lg:divide-x"
+        >
+          <HostDetail
+            label="Speed now"
+            value={`↑ ${formatSpeed(xray.speed_up_bps)} · ↓ ${formatSpeed(xray.speed_down_bps)}`}
+          />
+          <HostDetail
+            label="Total traffic"
+            value={`↑ ${formatBytes(xray.total_up_bytes)} · ↓ ${formatBytes(xray.total_down_bytes)}`}
+          />
+          <HostDetail
+            label="Users online"
+            value={
+              xray.users_online !== null
+                ? `${xray.users_online} users · ${xray.unique_ips_online} IPs`
+                : "unavailable on this xray"
+            }
+          />
+          <HostDetail
+            label="xray process"
+            value={
+              xray.mem_bytes !== null
+                ? `${formatBytes(xray.mem_bytes)} · ${xray.goroutines} goroutines`
+                : "unavailable"
+            }
+          />
+        </section>
+      ) : null}
     </main>
   );
 }
