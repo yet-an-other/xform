@@ -1,4 +1,4 @@
-package xraystatus_test
+package xraygrpc_test
 
 import (
 	"context"
@@ -11,7 +11,7 @@ import (
 
 	statscmd "github.com/xtls/xray-core/app/stats/command"
 
-	"github.com/yet-an-other/xform/internal/xraystatus"
+	"github.com/yet-an-other/xform/internal/xraygrpc"
 )
 
 // fakeStatsService implements the generated statscmd.StatsServiceClient.
@@ -79,9 +79,9 @@ func TestGRPCStatsMapsSysstatsCountersAndOnlineUsers(t *testing.T) {
 			"user>>>bob@example.com>>>online":   {"203.0.113.11": 1_780_000_002, "198.51.100.7": 1_780_000_003},
 		},
 	}
-	stats := xraystatus.GRPCStats{Address: "127.0.0.1:8080", Dial: dialToClient(service)}
+	stats := xraygrpc.Client{Address: "127.0.0.1:8080", Dial: dialToClient(service)}
 
-	runtime, err := stats.QueryStats(context.Background())
+	runtime, err := stats.QueryRuntime(context.Background())
 	if err != nil {
 		t.Fatalf("query stats: %v", err)
 	}
@@ -105,9 +105,9 @@ func TestGRPCStatsToleratesOlderServersWithoutOnlineRPCs(t *testing.T) {
 		counters:  &statscmd.QueryStatsResponse{},
 		onlineErr: status.Error(codes.Unimplemented, "unknown method GetAllOnlineUsers"),
 	}
-	stats := xraystatus.GRPCStats{Address: "127.0.0.1:8080", Dial: dialToClient(service)}
+	stats := xraygrpc.Client{Address: "127.0.0.1:8080", Dial: dialToClient(service)}
 
-	runtime, err := stats.QueryStats(context.Background())
+	runtime, err := stats.QueryRuntime(context.Background())
 	if err != nil {
 		t.Fatalf("query stats: %v", err)
 	}
@@ -120,14 +120,44 @@ func TestGRPCStatsToleratesOlderServersWithoutOnlineRPCs(t *testing.T) {
 }
 
 func TestGRPCStatsPropagatesRealFailures(t *testing.T) {
-	stats := xraystatus.GRPCStats{
+	stats := xraygrpc.Client{
 		Address: "127.0.0.1:8080",
 		Dial: func(context.Context) (statscmd.StatsServiceClient, func(), error) {
 			return nil, nil, errors.New("connection refused")
 		},
 	}
 
-	if _, err := stats.QueryStats(context.Background()); err == nil {
+	if _, err := stats.QueryRuntime(context.Background()); err == nil {
 		t.Fatal("query stats succeeded with a failing dial")
+	}
+}
+
+func TestQueryUserTrafficMapsPerUserCounters(t *testing.T) {
+	service := &fakeStatsService{
+		counters: &statscmd.QueryStatsResponse{Stat: []*statscmd.Stat{
+			{Name: "user>>>alice@example.com>>>traffic>>>uplink", Value: 12_400},
+			{Name: "user>>>alice@example.com>>>traffic>>>downlink", Value: 148_200},
+			{Name: "user>>>bob@example.com>>>traffic>>>uplink", Value: 3_100},
+			{Name: "user>>>bob@example.com>>>traffic>>>downlink", Value: 41_700},
+			// Presence counters and inbound/outbound aggregates are not
+			// per-user traffic.
+			{Name: "user>>>alice@example.com>>>online", Value: 1},
+			{Name: "inbound>>>vless>>>traffic>>>uplink", Value: 999_000},
+		}},
+	}
+	client := xraygrpc.Client{Address: "127.0.0.1:8080", Dial: dialToClient(service)}
+
+	traffic, err := client.QueryUserTraffic(context.Background())
+	if err != nil {
+		t.Fatalf("query user traffic: %v", err)
+	}
+	if len(traffic) != 2 {
+		t.Fatalf("users = %d, want 2: %+v", len(traffic), traffic)
+	}
+	if traffic[0].Email != "alice@example.com" || traffic[0].UpBytes != 12_400 || traffic[0].DownBytes != 148_200 {
+		t.Errorf("alice = %+v, want 12400/148200", traffic[0])
+	}
+	if traffic[1].Email != "bob@example.com" || traffic[1].UpBytes != 3_100 || traffic[1].DownBytes != 41_700 {
+		t.Errorf("bob = %+v, want 3100/41700", traffic[1])
 	}
 }

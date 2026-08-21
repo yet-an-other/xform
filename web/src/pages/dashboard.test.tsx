@@ -1,4 +1,4 @@
-import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { Dashboard } from "./dashboard";
@@ -52,16 +52,20 @@ afterEach(() => {
   vi.useRealTimers();
 });
 
-// stubEndpoints routes fetches by URL, since each poll hits both endpoints.
+// stubEndpoints routes fetches by URL, since each poll hits all endpoints.
 function stubEndpoints(routes: {
   server?: () => Response;
   xray?: () => Response;
+  users?: () => Response;
   logout?: () => Response;
 }): ReturnType<typeof vi.fn> {
   const mock = vi.fn(async (input: RequestInfo | URL) => {
     const url = String(input);
     if (url.endsWith("api/v1/server") && routes.server) return routes.server();
     if (url.endsWith("api/v1/xray") && routes.xray) return routes.xray();
+    if (url.endsWith("api/v1/users")) {
+      return routes.users ? routes.users() : json({ collected_at: 1_723_800_000, stale: false, users: [] });
+    }
     if (url.endsWith("api/v1/logout") && routes.logout) return routes.logout();
     return new Response("not found", { status: 404 });
   });
@@ -207,16 +211,16 @@ describe("xray runtime stats", () => {
     expect(row).toHaveTextContent("84.0 MiB · 183 goroutines");
   });
 
-  it("orders the rows: host info, then xray generic info", async () => {
+  it("orders the rows: host info, xray generic info, then users", async () => {
     stubEndpoints({ server: () => json(stats), xray: () => json(xrayRunning) });
 
     render(<Dashboard onUnauthenticated={() => {}} />);
 
-    await screen.findByRole("region", { name: "xray row" });
+    await screen.findByRole("region", { name: "Users" });
     const order = screen
       .getAllByRole("region")
       .map((region) => region.getAttribute("aria-label"));
-    expect(order).toEqual(["Server resources", "Host details", "xray row"]);
+    expect(order).toEqual(["Server resources", "Host details", "xray row", "Users"]);
   });
 
   it("marks online counts unavailable on an old xray without the online RPCs", async () => {
@@ -245,5 +249,75 @@ describe("xray runtime stats", () => {
     expect(row).toHaveTextContent("↑ 36.4 GiB · ↓ 476 GiB");
     expect(row).toHaveTextContent("↑ 0 B/s · ↓ 0 B/s");
     expect(screen.getByText("23.4%")).toBeInTheDocument();
+  });
+});
+
+const usersSnapshot = {
+  collected_at: 1_723_800_000,
+  stale: false,
+  users: [
+    {
+      email: "alice@example.com",
+      protocol: null,
+      security: null,
+      up_bytes_total: 12_400_000_000,
+      down_bytes_total: 148_200_000_000,
+      online: false,
+      ips: null,
+      speed_up_bps: 512_000,
+      speed_down_bps: 3_800_000,
+      last_seen: null,
+      gone: false,
+    },
+    {
+      email: "bob@example.com",
+      protocol: null,
+      security: null,
+      up_bytes_total: 3_100_000_000,
+      down_bytes_total: 41_700_000_000,
+      online: false,
+      ips: null,
+      speed_up_bps: 0,
+      speed_down_bps: 0,
+      last_seen: null,
+      gone: false,
+    },
+  ],
+};
+
+describe("users table", () => {
+  it("renders durable traffic and current speed per user", async () => {
+    stubEndpoints({
+      server: () => json(stats),
+      xray: () => json(xrayRunning),
+      users: () => json(usersSnapshot),
+    });
+
+    render(<Dashboard onUnauthenticated={() => {}} />);
+
+    const table = await screen.findByRole("region", { name: "Users" });
+    expect(within(table).getByText("alice@example.com")).toBeInTheDocument();
+    const aliceRow = within(table).getByRole("row", { name: /alice@example\.com/ });
+    expect(aliceRow).toHaveTextContent("11.5 GiB"); // up
+    expect(aliceRow).toHaveTextContent("138 GiB"); // down
+    expect(aliceRow).toHaveTextContent("150 GiB"); // total
+    expect(aliceRow).toHaveTextContent("↑ 500 KiB/s ↓ 3.62 MiB/s"); // speed now
+    const bobRow = within(table).getByRole("row", { name: /bob@example\.com/ });
+    expect(bobRow).toHaveTextContent("idle"); // zero speeds read as idle
+  });
+
+  it("marks speeds stale when the snapshot is stale", async () => {
+    stubEndpoints({
+      server: () => json(stats),
+      xray: () => json(xrayRunning),
+      users: () => json({ ...usersSnapshot, stale: true }),
+    });
+
+    render(<Dashboard onUnauthenticated={() => {}} />);
+
+    const table = await screen.findByRole("region", { name: "Users" });
+    const aliceRow = within(table).getByRole("row", { name: /alice@example\.com/ });
+    expect(aliceRow).toHaveTextContent("stale");
+    expect(aliceRow).not.toHaveTextContent("500 KiB/s");
   });
 });

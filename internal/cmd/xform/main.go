@@ -14,6 +14,8 @@ import (
 	"github.com/yet-an-other/xform/internal/config"
 	"github.com/yet-an-other/xform/internal/hoststats"
 	"github.com/yet-an-other/xform/internal/session"
+	"github.com/yet-an-other/xform/internal/users"
+	"github.com/yet-an-other/xform/internal/xraygrpc"
 	"github.com/yet-an-other/xform/internal/xraystatus"
 )
 
@@ -32,21 +34,30 @@ func main() {
 
 	hostStats := hoststats.NewCache(hoststats.NewCollector(), 5*time.Second)
 	hostStats.Start(shutdownSignal)
+	statsAPI := xraygrpc.Client{Address: cfg.XrayAPIAddress}
 	xrayStatus := xraystatus.NewCache(
 		xraystatus.NewCollector(
 			xraystatus.SystemdUnit{},
 			xraystatus.BinaryVersion{},
-			xraystatus.GRPCStats{Address: cfg.XrayAPIAddress},
+			statsAPI,
 			cfg.XrayUnitName,
 		),
 		5*time.Second,
 	)
 	xrayStatus.Start(shutdownSignal)
+	store, err := users.Open(cfg.DBPath)
+	if err != nil {
+		slog.Error("open database", "error", err)
+		os.Exit(1)
+	}
+	defer func() { _ = store.Close() }()
+	usersCache := users.NewCache(users.NewCollector(statsAPI, store), 5*time.Second)
+	usersCache.Start(shutdownSignal)
 	sessions := session.NewManager(cfg.Password, time.Now)
 
 	server := &http.Server{
 		Addr:              cfg.ListenAddress,
-		Handler:           newHandler(hostStats, xrayStatus, sessions),
+		Handler:           newHandler(hostStats, xrayStatus, usersCache, sessions),
 		ReadHeaderTimeout: 5 * time.Second,
 		IdleTimeout:       60 * time.Second,
 	}
@@ -75,6 +86,6 @@ func main() {
 	}
 }
 
-func newHandler(snapshots *hoststats.Cache, statuses *xraystatus.Cache, sessions *session.Manager) http.Handler {
-	return api.New(snapshots, statuses, sessions, newDashboardHandler())
+func newHandler(snapshots *hoststats.Cache, statuses *xraystatus.Cache, usersCache *users.Cache, sessions *session.Manager) http.Handler {
+	return api.New(snapshots, statuses, usersCache, sessions, newDashboardHandler())
 }

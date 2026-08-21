@@ -67,6 +67,35 @@ export function fetchXrayStatus(signal?: AbortSignal): Promise<XrayStatus> {
   return getJSON<XrayStatus>("api/v1/xray", signal);
 }
 
+// User is one row of the users table (SPEC §5). Presence fields (online,
+// ips, last_seen) stay zero until the presence slice; config fields
+// (protocol, security, gone) until the config-parse slice.
+export interface User {
+  email: string;
+  protocol: string | null;
+  security: string | null;
+  up_bytes_total: number;
+  down_bytes_total: number;
+  online: boolean;
+  ips: string[] | null;
+  speed_up_bps: number;
+  speed_down_bps: number;
+  last_seen: number | null;
+  gone: boolean;
+}
+
+// UsersSnapshot is GET /api/v1/users: durable per-user traffic plus a stale
+// flag — true when xray is unreachable and the data is last-known.
+export interface UsersSnapshot {
+  collected_at: number;
+  stale: boolean;
+  users: User[];
+}
+
+export function fetchUsers(signal?: AbortSignal): Promise<UsersSnapshot> {
+  return getJSON<UsersSnapshot>("api/v1/users", signal);
+}
+
 // login posts the password; true on 204, false on a 401 mismatch.
 export async function login(password: string): Promise<boolean> {
   const response = await fetch("api/v1/login", {

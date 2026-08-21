@@ -17,6 +17,25 @@ export function formatSpeed(bytesPerSecond: number): string {
   return `${formatBytes(bytesPerSecond)}/s`;
 }
 
+// formatAgo renders a unix-seconds timestamp as relative time ("just now",
+// "5m ago", …) for the users table's last-seen column.
+export function formatAgo(unixSeconds: number, now: number = Date.now()): string {
+  const elapsed = Math.max(0, Math.floor((now - unixSeconds * 1000) / 1000));
+  if (elapsed < 10) {
+    return "just now";
+  }
+  if (elapsed < 60) {
+    return `${elapsed}s ago`;
+  }
+  if (elapsed < 3600) {
+    return `${Math.floor(elapsed / 60)}m ago`;
+  }
+  if (elapsed < 86_400) {
+    return `${Math.floor(elapsed / 3600)}h ago`;
+  }
+  return `${Math.floor(elapsed / 86_400)}d ago`;
+}
+
 export function formatUptime(seconds: number): string {
   const days = Math.floor(seconds / 86_400);
   if (days > 0) {

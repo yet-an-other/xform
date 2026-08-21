@@ -4,14 +4,24 @@ import { MetricCard } from "@/components/metric-card";
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
 import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from "@/components/ui/table";
+import {
   fetchServerStats,
+  fetchUsers,
   fetchXrayStatus,
   logout,
   UnauthenticatedError,
   type HostStats,
+  type UsersSnapshot,
   type XrayStatus,
 } from "@/lib/api";
-import { formatBytes, formatSpeed, formatUptime, percentUsed } from "@/lib/format";
+import { formatBytes, formatAgo, formatSpeed, formatUptime, percentUsed } from "@/lib/format";
 
 const POLL_INTERVAL_MS = 5_000;
 
@@ -21,6 +31,96 @@ function HostDetail({ label, value }: { label: string; value: string }) {
       <span className="text-muted-foreground shrink-0 text-xs whitespace-nowrap">{label}</span>
       <strong className="min-w-0 truncate font-mono text-xs font-semibold">{value}</strong>
     </div>
+  );
+}
+
+// UsersTable is the per-user traffic table (SPEC §6): durable totals and
+// current speed now; presence and protocol columns fill in with their
+// slices and render "—" until then. Speeds read "stale" on a stale
+// snapshot — xray is unreachable and the totals are last-known.
+function UsersTable({ snapshot }: { snapshot: UsersSnapshot }) {
+  return (
+    <section aria-label="Users" className="bg-surface/80 mt-4 overflow-hidden rounded-xl border">
+      <h2 className="text-muted-foreground px-5 pt-4 pb-2 text-xs font-bold tracking-[0.13em] uppercase">
+        Users
+      </h2>
+      <Table>
+        <TableHeader>
+          <TableRow className="text-muted-foreground text-[0.7rem] font-bold tracking-[0.08em] uppercase hover:bg-transparent">
+            <TableHead className="w-8 px-5" aria-label="Online" />
+            <TableHead>User</TableHead>
+            <TableHead>Protocol</TableHead>
+            <TableHead className="text-right">Up</TableHead>
+            <TableHead className="text-right">Down</TableHead>
+            <TableHead className="text-right">Total</TableHead>
+            <TableHead className="text-right">Speed now</TableHead>
+            <TableHead>Online IPs</TableHead>
+            <TableHead className="pr-5 text-right">Last seen</TableHead>
+          </TableRow>
+        </TableHeader>
+        <TableBody>
+          {snapshot.users.length === 0 ? (
+            <TableRow className="hover:bg-transparent">
+              <TableCell className="text-muted-foreground px-5 py-4 text-xs" colSpan={9}>
+                No users with traffic yet.
+              </TableCell>
+            </TableRow>
+          ) : (
+            snapshot.users.map((user) => (
+              <TableRow key={user.email}>
+                <TableCell className="px-5">
+                  <span
+                    aria-label={user.online ? "online" : "offline"}
+                    className={`inline-block size-2 rounded-full ${
+                      user.online ? "bg-primary shadow-primary/30 shadow-[0_0_6px]" : "bg-muted"
+                    }`}
+                  />
+                </TableCell>
+                <TableCell className="font-semibold">{user.email}</TableCell>
+                <TableCell>
+                  {user.protocol !== null ? (
+                    <>
+                      <span className="text-muted-foreground">{user.protocol} · </span>
+                      {user.security}
+                    </>
+                  ) : (
+                    <span className="text-muted-foreground">—</span>
+                  )}
+                </TableCell>
+                <TableCell className="text-right font-mono text-xs">{formatBytes(user.up_bytes_total)}</TableCell>
+                <TableCell className="text-right font-mono text-xs">{formatBytes(user.down_bytes_total)}</TableCell>
+                <TableCell className="text-right font-mono text-xs">
+                  {formatBytes(user.up_bytes_total + user.down_bytes_total)}
+                </TableCell>
+                <TableCell className="text-right font-mono text-xs">
+                  {snapshot.stale ? (
+                    <span className="text-muted-foreground">stale</span>
+                  ) : user.speed_up_bps > 0 || user.speed_down_bps > 0 ? (
+                    `↑ ${formatSpeed(user.speed_up_bps)} ↓ ${formatSpeed(user.speed_down_bps)}`
+                  ) : (
+                    <span className="text-muted-foreground">idle</span>
+                  )}
+                </TableCell>
+                <TableCell className="font-mono text-xs">
+                  {user.ips !== null && user.ips.length > 0 ? (
+                    user.ips.join(", ")
+                  ) : (
+                    <span className="text-muted-foreground">—</span>
+                  )}
+                </TableCell>
+                <TableCell className="pr-5 text-right font-mono text-xs">
+                  {user.last_seen !== null ? (
+                    formatAgo(user.last_seen)
+                  ) : (
+                    <span className="text-muted-foreground">—</span>
+                  )}
+                </TableCell>
+              </TableRow>
+            ))
+          )}
+        </TableBody>
+      </Table>
+    </section>
   );
 }
 
@@ -64,6 +164,7 @@ function XrayPills({ xray }: { xray: XrayStatus }) {
 export function Dashboard({ onUnauthenticated }: { onUnauthenticated: () => void }) {
   const [stats, setStats] = useState<HostStats | null>(null);
   const [xray, setXray] = useState<XrayStatus | null>(null);
+  const [users, setUsers] = useState<UsersSnapshot | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
@@ -71,12 +172,14 @@ export function Dashboard({ onUnauthenticated }: { onUnauthenticated: () => void
 
     async function poll() {
       try {
-        const [serverStats, xrayStats] = await Promise.all([
+        const [serverStats, xrayStats, usersSnapshot] = await Promise.all([
           fetchServerStats(controller.signal),
           fetchXrayStatus(controller.signal),
+          fetchUsers(controller.signal),
         ]);
         setStats(serverStats);
         setXray(xrayStats);
+        setUsers(usersSnapshot);
         setError(null);
       } catch (cause) {
         if (cause instanceof UnauthenticatedError) {
@@ -232,6 +335,8 @@ export function Dashboard({ onUnauthenticated }: { onUnauthenticated: () => void
           />
         </section>
       ) : null}
+
+      {users ? <UsersTable snapshot={users} /> : null}
     </main>
   );
 }

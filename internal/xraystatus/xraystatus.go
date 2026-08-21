@@ -8,6 +8,9 @@ import (
 	"log/slog"
 	"sync"
 	"time"
+
+	"github.com/yet-an-other/xform/internal/reconcile"
+	"github.com/yet-an-other/xform/internal/xraygrpc"
 )
 
 // Status values for the panel's view of the xray service (CONTEXT.md).
@@ -53,18 +56,13 @@ type VersionRunner interface {
 
 // RuntimeStats is one poll of xray's gRPC StatsService: process stats plus
 // the raw cumulative traffic counters (which reset whenever xray restarts).
-type RuntimeStats struct {
-	MemBytes    uint64
-	Goroutines  uint32
-	UpBytes     uint64 // raw cumulative inbound uplink
-	DownBytes   uint64 // raw cumulative inbound downlink
-	OnlineUsers *int   // nil when the server predates the online-user RPCs
-	OnlineIPs   *int
-}
+// The type lives with the client; aliased here so the panel's seams read in
+// panel vocabulary.
+type RuntimeStats = xraygrpc.RuntimeStats
 
 // StatsQuerier reads xray runtime stats over gRPC — the seam for fakes.
 type StatsQuerier interface {
-	QueryStats(ctx context.Context) (RuntimeStats, error)
+	QueryRuntime(ctx context.Context) (RuntimeStats, error)
 }
 
 // Collector gathers the xray service status from the unit and the binary.
@@ -79,13 +77,18 @@ type Collector struct {
 	queryErr  string // last logged unit-query failure; "" when healthy
 	binaryErr string // last logged version-read failure; "" when healthy
 	statsErr  string // last logged stats-API failure; "" when healthy
-	up, down  trafficTracker
+	up, down  *reconcile.Tracker
 	lastPoll  time.Time // last successful stats poll (drives speed windows)
 }
 
 // NewCollector creates a Collector for the named systemd unit.
 func NewCollector(unit UnitQuerier, version VersionRunner, stats StatsQuerier, unitName string) *Collector {
-	return &Collector{unit: unit, version: version, stats: stats, unitName: unitName, now: time.Now}
+	return &Collector{
+		unit: unit, version: version, stats: stats, unitName: unitName, now: time.Now,
+		// The xray-row totals are display figures, so they adopt xray's
+		// current counters as their baseline.
+		up: reconcile.NewTracker(true), down: reconcile.NewTracker(true),
+	}
 }
 
 // WithClock overrides the time source (tests).
@@ -131,12 +134,12 @@ func (c *Collector) Collect(ctx context.Context) (Status, error) {
 	// An active unit whose stats API does not answer is unreachable (SPEC.md
 	// §3 degraded mode) — the speeds zero out and the process/online fields
 	// drop to null, while version, uptime, and the durable totals stay live.
-	runtime, err := c.stats.QueryStats(ctx)
+	runtime, err := c.stats.QueryRuntime(ctx)
 	if err != nil {
 		c.logFailure(&c.statsErr, "cannot query xray stats API; reporting unreachable", err)
 		c.mu.Lock()
-		status.TotalUpBytes = c.up.total
-		status.TotalDownBytes = c.down.total
+		status.TotalUpBytes = c.up.Total()
+		status.TotalDownBytes = c.down.Total()
 		c.mu.Unlock()
 		status.Status = StatusUnreachable
 		return status, nil
@@ -150,13 +153,13 @@ func (c *Collector) Collect(ctx context.Context) (Status, error) {
 	now := c.now()
 	c.mu.Lock()
 	elapsed := now.Sub(c.lastPoll)
-	c.up.add(runtime.UpBytes, elapsed)
-	c.down.add(runtime.DownBytes, elapsed)
+	c.up.Add(runtime.UpBytes, elapsed)
+	c.down.Add(runtime.DownBytes, elapsed)
 	c.lastPoll = now
-	status.TotalUpBytes = c.up.total
-	status.TotalDownBytes = c.down.total
-	status.SpeedUpBps = c.up.speed()
-	status.SpeedDownBps = c.down.speed()
+	status.TotalUpBytes = c.up.Total()
+	status.TotalDownBytes = c.down.Total()
+	status.SpeedUpBps = c.up.Speed()
+	status.SpeedDownBps = c.down.Speed()
 	c.mu.Unlock()
 	return status, nil
 }
@@ -182,56 +185,4 @@ func (c *Collector) logRecovery(slot *string, msg string) {
 	}
 	*slot = ""
 	slog.Info(msg, "unit", c.unitName)
-}
-
-// deltaSample is one poll's reconciled counter delta with its elapsed window.
-type deltaSample struct {
-	bytes   uint64
-	elapsed time.Duration
-}
-
-// trafficTracker reconciles one raw xray traffic counter (cumulative since
-// xray start, reset on every restart) into a panel-side durable total and a
-// speed estimate — SPEC.md §3 counter reconciliation.
-type trafficTracker struct {
-	seen    bool
-	lastRaw uint64
-	total   uint64
-	window  [2]deltaSample // ring of the most recent deltas
-	samples int
-}
-
-func (t *trafficTracker) add(raw uint64, elapsed time.Duration) {
-	if !t.seen {
-		// Baseline: adopt xray's current counters as the totals without a
-		// speed sample — spreading lifetime traffic over one poll would
-		// spike the speed estimate.
-		t.seen, t.lastRaw, t.total = true, raw, raw
-		return
-	}
-	delta := raw // raw < lastRaw: xray restarted, the counter reset — raw itself is the delta
-	if raw >= t.lastRaw {
-		delta = raw - t.lastRaw
-	}
-	t.lastRaw = raw
-	t.total += delta
-	t.window[t.samples%2] = deltaSample{bytes: delta, elapsed: elapsed}
-	t.samples++
-}
-
-// speed is the mean of the last 2 deltas ÷ interval (SPEC.md §3).
-func (t *trafficTracker) speed() uint64 {
-	if t.samples == 0 {
-		return 0
-	}
-	var bytes uint64
-	var elapsed time.Duration
-	for i := max(t.samples-2, 0); i < t.samples; i++ {
-		bytes += t.window[i%2].bytes
-		elapsed += t.window[i%2].elapsed
-	}
-	if elapsed <= 0 {
-		return 0
-	}
-	return uint64(float64(bytes) / elapsed.Seconds())
 }

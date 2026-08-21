@@ -8,6 +8,10 @@ xform is a read-only monitoring panel for a single xray instance. The Go binary 
 internal/             the Go module (go.mod lives here — the repo root is language-neutral)
 internal/api/         JSON API handlers
 internal/hoststats/   host-stats collector + 5s snapshot cache
+internal/users/       users table: durable per-user traffic in SQLite + current speed
+internal/xraystatus/  xray service status collector (unit state, version, runtime stats)
+internal/xraygrpc/    xray gRPC StatsService client
+internal/reconcile/   raw-counter reconciliation (durable totals + speed estimates)
 internal/config/      XFORM_* environment configuration
 internal/cmd/xform/   the binary: wiring, embedded dashboard, committed dist/
 web/                  pure TypeScript: React 19 + Vite + Tailwind v4 + shadcn/ui
@@ -26,7 +30,7 @@ XFORM_PASSWORD=change-me ./xform
 
 The panel listens on `127.0.0.1:9090` by default (override with `XFORM_LISTEN`). Open <http://127.0.0.1:9090> and log in with the `XFORM_PASSWORD` value. All `/api/*` endpoints except `login`/`healthz` require the `xform_session` cookie (SPEC.md §5).
 
-The xray service status is live from three host-level sources: the systemd unit (running/stopped, uptime — `XFORM_XRAY_UNIT` is honored), the binary (version), and the loopback gRPC StatsService (process memory/goroutines, speeds, traffic totals, online counts — `XFORM_XRAY_API`). An active unit whose stats API doesn't answer reports `unreachable` (SPEC.md §3 degraded mode); totals are reconciled across xray restarts in memory until the durable-history slice lands. Per-user collection (`XFORM_DB`, `XFORM_XRAY_CONFIG`) is wired into the binary but consumed by later slices.
+The xray service status is live from three host-level sources: the systemd unit (running/stopped, uptime — `XFORM_XRAY_UNIT` is honored), the binary (version), and the loopback gRPC StatsService (process memory/goroutines, speeds, traffic totals, online counts — `XFORM_XRAY_API`). An active unit whose stats API doesn't answer reports `unreachable` (SPEC.md §3 degraded mode). The users table is live too: per-user durable traffic totals accumulate in SQLite (`XFORM_DB`) and survive xray restarts, with current speeds from counter deltas; when the stats API is unreachable the table serves the last-known snapshot with `stale: true`. Presence (online status, IPs, last seen) and protocol/security from the config parse (`XFORM_XRAY_CONFIG`) are later slices.
 
 ## Configuration
 

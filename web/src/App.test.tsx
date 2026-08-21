@@ -39,6 +39,12 @@ function stubApi() {
       if (!authed) {
         return new Response('{"error":"unauthenticated"}', { status: 401 });
       }
+      if (url.endsWith("api/v1/users")) {
+        return new Response(JSON.stringify({ collected_at: 1_723_800_000, stale: false, users: [] }), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        });
+      }
       if (url.endsWith("api/v1/xray")) {
         return new Response(
           JSON.stringify({

@@ -14,6 +14,7 @@ import (
 	"github.com/yet-an-other/xform/internal/api"
 	"github.com/yet-an-other/xform/internal/hoststats"
 	"github.com/yet-an-other/xform/internal/session"
+	"github.com/yet-an-other/xform/internal/users"
 	"github.com/yet-an-other/xform/internal/xraystatus"
 )
 
@@ -29,7 +30,7 @@ const testPassword = "test-panel-password"
 
 // newHandler wires the API with a real session manager against stub sources.
 func newHandler(snapshots hostStatsSnapshots) http.Handler {
-	return api.New(snapshots, fixedXrayStatus{}, session.NewManager(testPassword, time.Now), http.NotFoundHandler())
+	return api.New(snapshots, fixedXrayStatus{}, fixedUsers{}, session.NewManager(testPassword, time.Now), http.NotFoundHandler())
 }
 
 type hostStatsSnapshots interface {
@@ -47,6 +48,16 @@ func (f fixedXrayStatus) Latest(context.Context) (xraystatus.Status, error) {
 		return xraystatus.Status{}, f.err
 	}
 	return f.status, nil
+}
+
+// fixedUsers serves one canned users snapshot.
+type fixedUsers struct {
+	snapshot users.Snapshot
+	err      error
+}
+
+func (f fixedUsers) Latest(context.Context) (users.Snapshot, error) {
+	return f.snapshot, f.err
 }
 
 // login establishes a session through the real login endpoint and returns its cookie.
@@ -236,6 +247,105 @@ func TestLogoutRevokesAndClears(t *testing.T) {
 	}
 }
 
+func TestUsersEndpointReturnsContractPayload(t *testing.T) {
+	lastSeen := int64(1_723_799_995)
+	protocol, security := "VLESS", "XTLS-Reality"
+	handler := api.New(fixedHostStats{}, fixedXrayStatus{}, fixedUsers{snapshot: users.Snapshot{
+		CollectedAt: 1_723_800_000,
+		Users: []users.User{{
+			Email:          "alice@example.com",
+			Protocol:       &protocol,
+			Security:       &security,
+			UpBytesTotal:   12_400_000_000,
+			DownBytesTotal: 148_200_000_000,
+			Online:         true,
+			IPs:            []string{"203.0.113.10"},
+			SpeedUpBps:     512_000,
+			SpeedDownBps:   3_800_000,
+			LastSeen:       &lastSeen,
+		}},
+	}}, session.NewManager(testPassword, time.Now), http.NotFoundHandler())
+
+	request := httptest.NewRequest(http.MethodGet, "/api/v1/users", nil)
+	request.AddCookie(login(t, handler, testPassword))
+	response := httptest.NewRecorder()
+	handler.ServeHTTP(response, request)
+
+	if response.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d; body = %s", response.Code, http.StatusOK, response.Body.String())
+	}
+
+	var payload struct {
+		CollectedAt int64 `json:"collected_at"`
+		Stale       bool  `json:"stale"`
+		Users       []struct {
+			Email          string   `json:"email"`
+			Protocol       *string  `json:"protocol"`
+			Security       *string  `json:"security"`
+			UpBytesTotal   uint64   `json:"up_bytes_total"`
+			DownBytesTotal uint64   `json:"down_bytes_total"`
+			Online         bool     `json:"online"`
+			IPs            []string `json:"ips"`
+			SpeedUpBps     uint64   `json:"speed_up_bps"`
+			SpeedDownBps   uint64   `json:"speed_down_bps"`
+			LastSeen       *int64   `json:"last_seen"`
+			Gone           bool     `json:"gone"`
+		} `json:"users"`
+	}
+	if err := json.Unmarshal(response.Body.Bytes(), &payload); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if payload.CollectedAt != 1_723_800_000 || payload.Stale {
+		t.Errorf("collected_at = %d, stale = %v; want 1723800000, false", payload.CollectedAt, payload.Stale)
+	}
+	if len(payload.Users) != 1 {
+		t.Fatalf("users = %d, want 1", len(payload.Users))
+	}
+	alice := payload.Users[0]
+	if alice.Email != "alice@example.com" || alice.UpBytesTotal != 12_400_000_000 || alice.DownBytesTotal != 148_200_000_000 {
+		t.Errorf("alice = %+v", alice)
+	}
+	if alice.SpeedUpBps != 512_000 || alice.SpeedDownBps != 3_800_000 {
+		t.Errorf("alice speeds = %d/%d", alice.SpeedUpBps, alice.SpeedDownBps)
+	}
+	if alice.Protocol == nil || *alice.Protocol != "VLESS" || alice.Security == nil || *alice.Security != "XTLS-Reality" {
+		t.Errorf("alice protocol/security = %v/%v", alice.Protocol, alice.Security)
+	}
+	if !alice.Online || len(alice.IPs) != 1 || alice.LastSeen == nil || *alice.LastSeen != 1_723_799_995 || alice.Gone {
+		t.Errorf("alice presence = online %v, ips %v, last_seen %v, gone %v", alice.Online, alice.IPs, alice.LastSeen, alice.Gone)
+	}
+}
+
+// A stale snapshot (xray unreachable) is data, not a 5xx (SPEC.md §5).
+func TestUsersEndpointServesStaleSnapshot(t *testing.T) {
+	handler := api.New(fixedHostStats{}, fixedXrayStatus{}, fixedUsers{snapshot: users.Snapshot{
+		CollectedAt: 1_723_799_000,
+		Stale:       true,
+		Users:       []users.User{},
+	}}, session.NewManager(testPassword, time.Now), http.NotFoundHandler())
+
+	request := httptest.NewRequest(http.MethodGet, "/api/v1/users", nil)
+	request.AddCookie(login(t, handler, testPassword))
+	response := httptest.NewRecorder()
+	handler.ServeHTTP(response, request)
+
+	if response.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d", response.Code, http.StatusOK)
+	}
+	var payload struct {
+		Stale bool            `json:"stale"`
+		Users []users.User    `json:"users"`
+	}
+	if err := json.Unmarshal(response.Body.Bytes(), &payload); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if !payload.Stale {
+		t.Error("stale = false, want true")
+	}
+	if payload.Users == nil {
+		t.Error("users = null, want [] — the contract is an array")
+	}
+}
 func TestXrayEndpointReturnsStatusContract(t *testing.T) {
 	version := "26.4.13"
 	memBytes, goroutines := uint64(88_080_384), uint32(183)
@@ -254,7 +364,7 @@ func TestXrayEndpointReturnsStatusContract(t *testing.T) {
 		UsersOnline:     &usersOnline,
 		UniqueIPsOnline: &uniqueIPs,
 	}
-	handler := api.New(fixedHostStats{}, fixedXrayStatus{status: want}, session.NewManager(testPassword, time.Now), http.NotFoundHandler())
+	handler := api.New(fixedHostStats{}, fixedXrayStatus{status: want}, fixedUsers{}, session.NewManager(testPassword, time.Now), http.NotFoundHandler())
 	request := httptest.NewRequest(http.MethodGet, "/api/v1/xray", nil)
 	request.AddCookie(login(t, handler, testPassword))
 	response := httptest.NewRecorder()
@@ -295,7 +405,7 @@ func TestXrayEndpointReturnsStatusContract(t *testing.T) {
 	// A stopped xray reports a null version, not a 5xx (SPEC.md §5: 200 always).
 	stopped := api.New(fixedHostStats{}, fixedXrayStatus{status: xraystatus.Status{
 		CollectedAt: 1_723_800_000, Status: "stopped",
-	}}, session.NewManager(testPassword, time.Now), http.NotFoundHandler())
+	}}, fixedUsers{}, session.NewManager(testPassword, time.Now), http.NotFoundHandler())
 	request = httptest.NewRequest(http.MethodGet, "/api/v1/xray", nil)
 	request.AddCookie(login(t, stopped, testPassword))
 	response = httptest.NewRecorder()
@@ -319,7 +429,7 @@ func (failingSessions) Validate(string) bool { return false }
 func (failingSessions) Logout(string)        {}
 
 func TestLoginFailureInSessionManagerIs500Not401(t *testing.T) {
-	handler := api.New(fixedHostStats{}, fixedXrayStatus{}, failingSessions{}, http.NotFoundHandler())
+	handler := api.New(fixedHostStats{}, fixedXrayStatus{}, fixedUsers{}, failingSessions{}, http.NotFoundHandler())
 	request := httptest.NewRequest(http.MethodPost, "/api/v1/login",
 		strings.NewReader(`{"password": "anything"}`))
 	response := httptest.NewRecorder()

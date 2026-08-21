@@ -8,6 +8,7 @@ import (
 
 	"github.com/yet-an-other/xform/internal/hoststats"
 	"github.com/yet-an-other/xform/internal/session"
+	"github.com/yet-an-other/xform/internal/users"
 	"github.com/yet-an-other/xform/internal/xraystatus"
 )
 
@@ -25,12 +26,16 @@ type xrayStatuses interface {
 	Latest(context.Context) (xraystatus.Status, error)
 }
 
+type usersSnapshots interface {
+	Latest(context.Context) (users.Snapshot, error)
+}
+
 const sessionCookieName = "xform_session"
 
 // New returns the HTTP handler for the API and dashboard. Every /api/ route
 // except login and healthz requires a session (SPEC.md §5); the dashboard
 // itself loads openly and lets the SPA route to its login page on 401.
-func New(snapshots hostStatsSnapshots, xray xrayStatuses, sessions sessionManager, dashboard http.Handler) http.Handler {
+func New(snapshots hostStatsSnapshots, xray xrayStatuses, usersSource usersSnapshots, sessions sessionManager, dashboard http.Handler) http.Handler {
 	requireSession := func(next http.HandlerFunc) http.HandlerFunc {
 		return func(response http.ResponseWriter, request *http.Request) {
 			cookie, err := request.Cookie(sessionCookieName)
@@ -100,6 +105,18 @@ func New(snapshots hostStatsSnapshots, xray xrayStatuses, sessions sessionManage
 		}
 
 		writeJSON(response, http.StatusOK, status)
+	}))
+	mux.HandleFunc("GET /api/v1/users", requireSession(func(response http.ResponseWriter, request *http.Request) {
+		response.Header().Set("Cache-Control", "no-store")
+		snapshot, err := usersSource.Latest(request.Context())
+		if err != nil {
+			// Reachable only when the cache was never primed AND the source
+			// failed — a panel-internal failure, hence 500.
+			writeJSON(response, http.StatusInternalServerError, map[string]string{"error": "users unavailable"})
+			return
+		}
+
+		writeJSON(response, http.StatusOK, snapshot)
 	}))
 	mux.Handle("/api/", requireSession(func(response http.ResponseWriter, _ *http.Request) {
 		writeJSON(response, http.StatusNotFound, map[string]string{"error": "not found"})

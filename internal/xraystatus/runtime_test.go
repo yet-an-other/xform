@@ -18,7 +18,7 @@ type fakeStats struct {
 	err   error
 }
 
-func (f fakeStats) QueryStats(context.Context) (xraystatus.RuntimeStats, error) {
+func (f fakeStats) QueryRuntime(context.Context) (xraystatus.RuntimeStats, error) {
 	return f.stats, f.err
 }
 
@@ -111,7 +111,7 @@ type scriptedStats struct {
 	err   error
 }
 
-func (s *scriptedStats) QueryStats(context.Context) (xraystatus.RuntimeStats, error) {
+func (s *scriptedStats) QueryRuntime(context.Context) (xraystatus.RuntimeStats, error) {
 	raw := s.raws[min(s.calls, len(s.raws)-1)]
 	s.calls++
 	return xraystatus.RuntimeStats{UpBytes: raw[0], DownBytes: raw[1]}, s.err
