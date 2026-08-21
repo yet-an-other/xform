@@ -300,8 +300,9 @@ describe("users table", () => {
     const aliceRow = within(table).getByRole("row", { name: /alice@example\.com/ });
     expect(aliceRow).toHaveTextContent("11.5 GiB"); // up
     expect(aliceRow).toHaveTextContent("138 GiB"); // down
-    expect(aliceRow).toHaveTextContent("150 GiB"); // total
     expect(aliceRow).toHaveTextContent("↑ 500 KiB/s ↓ 3.62 MiB/s"); // speed now
+    // No total column: up + down already carry the information.
+    expect(within(table).queryByRole("columnheader", { name: "Total" })).not.toBeInTheDocument();
     const bobRow = within(table).getByRole("row", { name: /bob@example\.com/ });
     expect(bobRow).toHaveTextContent("idle"); // zero speeds read as idle
   });

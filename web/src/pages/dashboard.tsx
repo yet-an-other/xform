@@ -44,24 +44,23 @@ function UsersTable({ snapshot }: { snapshot: UsersSnapshot }) {
       <h2 className="text-muted-foreground px-5 pt-4 pb-2 text-xs font-bold tracking-[0.13em] uppercase">
         Users
       </h2>
-      <Table>
+      <Table className="table-fixed">
         <TableHeader>
           <TableRow className="text-muted-foreground text-[0.7rem] font-bold tracking-[0.08em] uppercase hover:bg-transparent">
-            <TableHead className="w-8 px-5" aria-label="Online" />
+            <TableHead className="w-10 px-5" aria-label="Online" />
             <TableHead>User</TableHead>
-            <TableHead>Protocol</TableHead>
-            <TableHead className="text-right">Up</TableHead>
-            <TableHead className="text-right">Down</TableHead>
-            <TableHead className="text-right">Total</TableHead>
-            <TableHead className="text-right">Speed now</TableHead>
-            <TableHead>Online IPs</TableHead>
-            <TableHead className="pr-5 text-right">Last seen</TableHead>
+            <TableHead className="w-36">Protocol</TableHead>
+            <TableHead className="w-24 text-right">Up</TableHead>
+            <TableHead className="w-24 text-right">Down</TableHead>
+            <TableHead className="w-44 text-right">Speed now</TableHead>
+            <TableHead className="w-40">Online IPs</TableHead>
+            <TableHead className="w-24 pr-5 text-right">Last seen</TableHead>
           </TableRow>
         </TableHeader>
         <TableBody>
           {snapshot.users.length === 0 ? (
             <TableRow className="hover:bg-transparent">
-              <TableCell className="text-muted-foreground px-5 py-4 text-xs" colSpan={9}>
+              <TableCell className="text-muted-foreground px-5 py-4 text-xs" colSpan={8}>
                 No users with traffic yet.
               </TableCell>
             </TableRow>
@@ -76,7 +75,7 @@ function UsersTable({ snapshot }: { snapshot: UsersSnapshot }) {
                     }`}
                   />
                 </TableCell>
-                <TableCell className="font-semibold">{user.email}</TableCell>
+                <TableCell className="truncate font-semibold">{user.email}</TableCell>
                 <TableCell>
                   {user.protocol !== null ? (
                     <>
@@ -90,9 +89,6 @@ function UsersTable({ snapshot }: { snapshot: UsersSnapshot }) {
                 <TableCell className="text-right font-mono text-xs">{formatBytes(user.up_bytes_total)}</TableCell>
                 <TableCell className="text-right font-mono text-xs">{formatBytes(user.down_bytes_total)}</TableCell>
                 <TableCell className="text-right font-mono text-xs">
-                  {formatBytes(user.up_bytes_total + user.down_bytes_total)}
-                </TableCell>
-                <TableCell className="text-right font-mono text-xs">
                   {snapshot.stale ? (
                     <span className="text-muted-foreground">stale</span>
                   ) : user.speed_up_bps > 0 || user.speed_down_bps > 0 ? (
@@ -101,7 +97,7 @@ function UsersTable({ snapshot }: { snapshot: UsersSnapshot }) {
                     <span className="text-muted-foreground">idle</span>
                   )}
                 </TableCell>
-                <TableCell className="font-mono text-xs">
+                <TableCell className="truncate font-mono text-xs">
                   {user.ips !== null && user.ips.length > 0 ? (
                     user.ips.join(", ")
                   ) : (
