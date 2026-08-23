@@ -72,11 +72,11 @@ func (f *flakyStore) ExistingEmails(ctx context.Context) (map[string]bool, error
 	return f.inner.ExistingEmails(ctx)
 }
 
-func (f *flakyStore) ApplyDeltas(ctx context.Context, deltas []users.Delta, presence []users.Presence, now time.Time) error {
+func (f *flakyStore) ApplyPoll(ctx context.Context, deltas []users.Delta, presence []users.Presence, roster map[string]users.RosterUser, now time.Time) error {
 	if f.fail {
 		return errors.New("store down")
 	}
-	return f.inner.ApplyDeltas(ctx, deltas, presence, now)
+	return f.inner.ApplyPoll(ctx, deltas, presence, roster, now)
 }
 
 func (f *flakyStore) Users(ctx context.Context) ([]users.User, error) {

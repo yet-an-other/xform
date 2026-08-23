@@ -19,15 +19,15 @@ func TestStoreAccumulatesDurableTotals(t *testing.T) {
 
 	// One transaction per poll (SPEC.md §4): the first poll inserts the
 	// roster, later polls accumulate onto it.
-	if err := store.ApplyDeltas(ctx, []users.Delta{
+	if err := store.ApplyPoll(ctx, []users.Delta{
 		{Email: "alice@example.com", Up: 100, Down: 1_000, SeenNow: true},
 		{Email: "bob@example.com", Up: 50, Down: 500, SeenNow: true},
-	}, nil, now); err != nil {
+	}, nil, nil, now); err != nil {
 		t.Fatalf("apply first poll: %v", err)
 	}
-	if err := store.ApplyDeltas(ctx, []users.Delta{
+	if err := store.ApplyPoll(ctx, []users.Delta{
 		{Email: "alice@example.com", Up: 25, Down: 250, SeenNow: true},
-	}, nil, now.Add(5*time.Second)); err != nil {
+	}, nil, nil, now.Add(5*time.Second)); err != nil {
 		t.Fatalf("apply second poll: %v", err)
 	}
 
@@ -79,9 +79,9 @@ func TestStorePersistsPresenceAndDurableLastSeen(t *testing.T) {
 
 	// bob is online from two IPs; xray reports the most recent per-IP
 	// last_seen. bob has never moved a byte — presence alone creates his row.
-	if err := store.ApplyDeltas(ctx, nil, []users.Presence{
+	if err := store.ApplyPoll(ctx, nil, []users.Presence{
 		{Email: "bob@example.com", IPs: []string{"203.0.113.10", "203.0.113.11"}, LastSeen: now.Unix() - 7},
-	}, now); err != nil {
+	}, nil, now); err != nil {
 		t.Fatalf("apply presence: %v", err)
 	}
 
@@ -106,11 +106,11 @@ func TestStorePersistsPresenceAndDurableLastSeen(t *testing.T) {
 	// Next poll: bob is still online but his report is older than what the
 	// store holds — last_seen never regresses; last_ips tracks the latest
 	// observation. A zero-delta poll for alice does not count as seen.
-	if err := store.ApplyDeltas(ctx, []users.Delta{
+	if err := store.ApplyPoll(ctx, []users.Delta{
 		{Email: "alice@example.com", Up: 0, Down: 0},
 	}, []users.Presence{
 		{Email: "bob@example.com", IPs: []string{"198.51.100.7"}, LastSeen: now.Unix() - 100},
-	}, now.Add(5*time.Second)); err != nil {
+	}, nil, now.Add(5*time.Second)); err != nil {
 		t.Fatalf("apply second poll: %v", err)
 	}
 
@@ -131,7 +131,7 @@ func TestStorePersistsPresenceAndDurableLastSeen(t *testing.T) {
 
 	// bob disconnects: no presence row, no delta. Last seen and last-known
 	// IPs persist untouched.
-	if err := store.ApplyDeltas(ctx, nil, nil, now.Add(10*time.Second)); err != nil {
+	if err := store.ApplyPoll(ctx, nil, nil, nil, now.Add(10*time.Second)); err != nil {
 		t.Fatalf("apply third poll: %v", err)
 	}
 	list, err = store.Users(ctx)

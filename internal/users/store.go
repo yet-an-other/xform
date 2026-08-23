@@ -74,13 +74,18 @@ func (s *Store) Close() error { return s.db.Close() }
 const lastSeenGrow = `CASE WHEN excluded.last_seen IS NULL THEN last_seen
                         ELSE MAX(COALESCE(last_seen, 0), excluded.last_seen) END`
 
-// ApplyDeltas adds each user's reconciled delta to their durable totals and
-// folds in the poll's presence observations, inserting rows for first-seen
-// emails — a single transaction per poll (SPEC.md §4). Totals only ever
+// ApplyPoll flushes one poll's state — reconciled traffic deltas, presence
+// observations, and, when the xray config changed, the parsed roster — in a
+// single transaction (SPEC.md §4). Totals only ever
 // grow and last_seen never regresses: movement inside the poll's window
 // marks the user seen now (the traffic-delta heuristic, SPEC.md §3), and an
 // online user's row records their connection set as the last-known IPs.
-func (s *Store) ApplyDeltas(ctx context.Context, deltas []Delta, presence []Presence, now time.Time) error {
+//
+// A non-nil roster syncs the config-defined labels: roster emails gain rows
+// (totals at zero until their first traffic) and protocol · security, while
+// every user edited out of the config becomes gone — retained with their
+// history, never deleted (SPEC.md §4). A nil roster leaves the roster alone.
+func (s *Store) ApplyPoll(ctx context.Context, deltas []Delta, presence []Presence, roster map[string]RosterUser, now time.Time) error {
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return fmt.Errorf("begin poll transaction: %w", err)
@@ -134,8 +139,43 @@ func (s *Store) ApplyDeltas(ctx context.Context, deltas []Delta, presence []Pres
 			return fmt.Errorf("apply presence for %s: %w", user.Email, err)
 		}
 	}
+
+	if roster != nil {
+		if err := syncRoster(ctx, tx, roster, now); err != nil {
+			return err
+		}
+	}
 	if err := tx.Commit(); err != nil {
 		return fmt.Errorf("commit poll transaction: %w", err)
+	}
+	return nil
+}
+
+// syncRoster applies a fresh config parse inside the poll transaction:
+// everyone not in the config becomes gone (a no-op for rows already gone),
+// then roster emails are upserted — new users appear with zero totals,
+// returning users lose the gone flag, and labels follow the config.
+func syncRoster(ctx context.Context, tx *sql.Tx, roster map[string]RosterUser, now time.Time) error {
+	if _, err := tx.ExecContext(ctx, `UPDATE users SET gone = 1 WHERE gone = 0`); err != nil {
+		return fmt.Errorf("mark gone users: %w", err)
+	}
+
+	stmt, err := tx.PrepareContext(ctx, `
+		INSERT INTO users (email, protocol, security, gone, first_seen)
+		VALUES (?, ?, ?, 0, ?)
+		ON CONFLICT(email) DO UPDATE SET
+			protocol = excluded.protocol,
+			security = excluded.security,
+			gone     = 0`)
+	if err != nil {
+		return fmt.Errorf("prepare roster upsert: %w", err)
+	}
+	defer func() { _ = stmt.Close() }()
+
+	for email, user := range roster {
+		if _, err := stmt.ExecContext(ctx, email, user.Protocol, user.Security, now.Unix()); err != nil {
+			return fmt.Errorf("sync roster for %s: %w", email, err)
+		}
 	}
 	return nil
 }

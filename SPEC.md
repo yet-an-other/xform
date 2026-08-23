@@ -138,7 +138,7 @@ GET /api/v1/xray
 GET /api/v1/users
 { "collected_at": 1723800000, "stale": false,
   "users": [ { "email": "alice@example.com",
-               "protocol": "VLESS", "security": "XTLS-Reality",  // null until the config-parse slice
+               "protocol": "VLESS", "security": "XTLS-Reality",  // from the config parse; null until the config first parses
                "up_bytes_total": 12400000000, "down_bytes_total": 148200000000,
                "online": true, "ips": ["203.0.113.10"],          // false/null on xray predating the online RPCs
                "speed_up_bps": 512000, "speed_down_bps": 3800000,

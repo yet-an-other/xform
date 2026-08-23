@@ -6,14 +6,15 @@ package users
 import (
 	"context"
 
+	"github.com/yet-an-other/xform/internal/xrayconfig"
 	"github.com/yet-an-other/xform/internal/xraygrpc"
 )
 
 // User is one row of the users table — the JSON contract of
 // GET /api/v1/users (SPEC.md §5). Presence fields (online, ips, last_seen)
 // are live from the online RPCs, degraded on old servers (SPEC.md §3);
-// config fields (protocol, security, gone) stay zero until the config-parse
-// slice.
+// config fields (protocol, security, gone) come from the config roster sync
+// and stay zero until the xray config parses.
 type User struct {
 	Email          string   `json:"email"`
 	Protocol       *string  `json:"protocol"`
@@ -59,6 +60,19 @@ type Presence = xraygrpc.UserPresence
 // omitted, never an error (SPEC.md §3).
 type PresenceQuerier interface {
 	QueryPresence(ctx context.Context) (presence []Presence, supported bool, err error)
+}
+
+// RosterUser is one config-defined user's table labels (protocol ·
+// security). The type lives with the config parser; aliased here so the
+// collector and store read in panel vocabulary.
+type RosterUser = xrayconfig.User
+
+// RosterSource supplies the user roster parsed from the xray config — the
+// seam for fakes. The version bumps whenever the roster changes; 0 means no
+// config was ever parsed, so a missing or broken config never syncs (it
+// must not mark everyone gone).
+type RosterSource interface {
+	Roster() (users map[string]RosterUser, version uint64)
 }
 
 // Delta is one poll's reconciled per-user traffic to apply to the store.

@@ -286,6 +286,52 @@ const usersSnapshot = {
 };
 
 describe("users table", () => {
+  it("hides gone users by default and reveals them with the toggle", async () => {
+    stubEndpoints({
+      server: () => json(stats),
+      xray: () => json(xrayRunning),
+      users: () =>
+        json({
+          ...usersSnapshot,
+          users: [
+            { ...usersSnapshot.users[0], protocol: "VLESS", security: "XTLS-Reality" },
+            { ...usersSnapshot.users[1], gone: true }, // bob was edited out of the config
+          ],
+        }),
+    });
+
+    render(<Dashboard onUnauthenticated={() => {}} />);
+
+    const table = await screen.findByRole("region", { name: "Users" });
+    // alice is visible with her protocol · security labels; bob is hidden.
+    const aliceRow = within(table).getByRole("row", { name: /alice@example\.com/ });
+    expect(aliceRow).toHaveTextContent("VLESS · XTLS-Reality");
+    expect(within(table).queryByRole("row", { name: /bob@example\.com/ })).not.toBeInTheDocument();
+
+    // The toggle reveals gone users, marked as gone.
+    fireEvent.click(within(table).getByRole("button", { name: /show gone/i }));
+    const bobRow = within(table).getByRole("row", { name: /bob@example\.com/ });
+    expect(bobRow).toHaveTextContent("gone");
+    expect(bobRow).toHaveTextContent("2.89 GiB"); // his history is retained
+
+    // And hides them again.
+    fireEvent.click(within(table).getByRole("button", { name: /hide gone/i }));
+    expect(within(table).queryByRole("row", { name: /bob@example\.com/ })).not.toBeInTheDocument();
+  });
+
+  it("renders no toggle when nobody is gone", async () => {
+    stubEndpoints({
+      server: () => json(stats),
+      xray: () => json(xrayRunning),
+      users: () => json(usersSnapshot),
+    });
+
+    render(<Dashboard onUnauthenticated={() => {}} />);
+
+    const table = await screen.findByRole("region", { name: "Users" });
+    expect(within(table).queryByRole("button", { name: /gone/i })).not.toBeInTheDocument();
+  });
+
   it("renders durable traffic and current speed per user", async () => {
     stubEndpoints({
       server: () => json(stats),

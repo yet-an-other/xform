@@ -34,6 +34,10 @@ _Avoid_: client, account, customer, subscriber
 A user who no longer exists in xray's configuration but whose history the panel retains. Gone users are hidden by default, never erased.
 _Avoid_: deleted user, removed user, inactive user
 
+**Roster**:
+The set of users the xray config currently defines, parsed from the config file and re-read when it changes. The roster supplies the protocol · security labels and decides who is — or becomes — a gone user.
+_Avoid_: config users, client list
+
 **Release**:
 A published, versioned build of the panel, cut from a git tag. The updater consumes releases, never arbitrary commits.
 _Avoid_: build, version (alone)

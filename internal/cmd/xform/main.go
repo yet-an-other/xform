@@ -15,6 +15,7 @@ import (
 	"github.com/yet-an-other/xform/internal/hoststats"
 	"github.com/yet-an-other/xform/internal/session"
 	"github.com/yet-an-other/xform/internal/users"
+	"github.com/yet-an-other/xform/internal/xrayconfig"
 	"github.com/yet-an-other/xform/internal/xraygrpc"
 	"github.com/yet-an-other/xform/internal/xraystatus"
 )
@@ -52,7 +53,12 @@ func main() {
 		5*time.Second,
 	)
 	xrayStatus.Start(shutdownSignal)
-	usersCache := users.NewCache(users.NewCollector(statsAPI, statsAPI, store), 5*time.Second)
+	configWatcher := xrayconfig.NewWatcher(cfg.XrayConfigPath)
+	configWatcher.Start(shutdownSignal)
+	usersCache := users.NewCache(
+		users.NewCollector(statsAPI, statsAPI, store).WithRoster(configWatcher),
+		5*time.Second,
+	)
 	usersCache.Start(shutdownSignal)
 	sessions := session.NewManager(cfg.Password, time.Now)
 

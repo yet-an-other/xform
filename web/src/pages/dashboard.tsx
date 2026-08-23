@@ -35,15 +35,32 @@ function HostDetail({ label, value }: { label: string; value: string }) {
 }
 
 // UsersTable is the per-user traffic table (SPEC §6): durable totals,
-// current speed, and presence (online dot, IPs, last seen); the protocol
-// column renders "—" until the config-parse slice. Speeds read "stale" on a
-// stale snapshot — xray is unreachable and the totals are last-known.
+// current speed, presence (online dot, IPs, last seen), and the config
+// labels (protocol · security). Gone users — edited out of the xray config,
+// history retained — are hidden by default behind a toggle. Speeds read
+// "stale" on a stale snapshot — xray is unreachable and the totals are
+// last-known.
 function UsersTable({ snapshot }: { snapshot: UsersSnapshot }) {
+  const [showGone, setShowGone] = useState(false);
+  const goneCount = snapshot.users.filter((user) => user.gone).length;
+  const visible = showGone ? snapshot.users : snapshot.users.filter((user) => !user.gone);
+
   return (
     <section aria-label="Users" className="bg-surface/80 mt-4 overflow-hidden rounded-xl border">
-      <h2 className="text-muted-foreground px-5 pt-4 pb-2 text-xs font-bold tracking-[0.13em] uppercase">
-        Users
-      </h2>
+      <div className="flex items-center justify-between gap-4 px-5 pt-4 pb-2">
+        <h2 className="text-muted-foreground text-xs font-bold tracking-[0.13em] uppercase">
+          Users
+        </h2>
+        {goneCount > 0 ? (
+          <button
+            type="button"
+            onClick={() => setShowGone((shown) => !shown)}
+            className="border-border text-muted-foreground hover:text-foreground rounded-lg border px-2.5 py-1 text-[0.7rem] font-bold tracking-[0.08em] uppercase"
+          >
+            {showGone ? "Hide gone" : `Show gone (${goneCount})`}
+          </button>
+        ) : null}
+      </div>
       <Table className="table-fixed">
         <TableHeader>
           <TableRow className="text-muted-foreground text-[0.7rem] font-bold tracking-[0.08em] uppercase hover:bg-transparent">
@@ -58,15 +75,17 @@ function UsersTable({ snapshot }: { snapshot: UsersSnapshot }) {
           </TableRow>
         </TableHeader>
         <TableBody>
-          {snapshot.users.length === 0 ? (
+          {visible.length === 0 ? (
             <TableRow className="hover:bg-transparent">
               <TableCell className="text-muted-foreground px-5 py-4 text-xs" colSpan={8}>
-                No users with traffic yet.
+                {goneCount > 0
+                  ? `Every known user is gone — ${goneCount} hidden behind the toggle.`
+                  : "No users with traffic yet."}
               </TableCell>
             </TableRow>
           ) : (
-            snapshot.users.map((user) => (
-              <TableRow key={user.email}>
+            visible.map((user) => (
+              <TableRow key={user.email} className={user.gone ? "opacity-50" : undefined}>
                 <TableCell className="px-5">
                   <span
                     aria-label={user.online ? "online" : "offline"}
@@ -75,7 +94,17 @@ function UsersTable({ snapshot }: { snapshot: UsersSnapshot }) {
                     }`}
                   />
                 </TableCell>
-                <TableCell className="truncate font-semibold">{user.email}</TableCell>
+                <TableCell className="truncate font-semibold">
+                  {user.email}
+                  {user.gone ? (
+                    <Badge
+                      className="text-muted-foreground ml-2 px-1.5 py-0.5 align-middle text-[0.65rem] tracking-[0.08em] uppercase"
+                      variant="outline"
+                    >
+                      gone
+                    </Badge>
+                  ) : null}
+                </TableCell>
                 <TableCell>
                   {user.protocol !== null ? (
                     <>

@@ -4,6 +4,7 @@ go 1.26.0
 
 require (
 	github.com/coreos/go-systemd/v22 v22.7.0
+	github.com/fsnotify/fsnotify v1.10.1
 	github.com/shirou/gopsutil/v4 v4.26.7
 	github.com/xtls/xray-core v1.260327.0
 	google.golang.org/grpc v1.83.0

@@ -14,7 +14,7 @@ import (
 // wrappers in tests.
 type persistence interface {
 	ExistingEmails(ctx context.Context) (map[string]bool, error)
-	ApplyDeltas(ctx context.Context, deltas []Delta, presence []Presence, now time.Time) error
+	ApplyPoll(ctx context.Context, deltas []Delta, presence []Presence, roster map[string]RosterUser, now time.Time) error
 	Users(ctx context.Context) ([]User, error)
 }
 
@@ -34,24 +34,34 @@ type pendingDelta struct {
 // for that one poll — neither touches the stale flag, because the traffic
 // data is still fresh. Store failures do fail the poll — and the poll's
 // deltas stay pending, so durable totals never silently drop bytes.
+//
+// The config roster (WithRoster) syncs in the same transaction when it
+// changes: protocol · security labels, new users, gone flags. A roster that
+// cannot be persisted stays pending like the deltas, and flushes on its own
+// while xray is unreachable, so config edits never wait on a recovery.
 type Collector struct {
 	traffic  TrafficQuerier
 	presence PresenceQuerier
 	store    persistence
+	roster   RosterSource
 	now      func() time.Time
 
-	mu               sync.Mutex
-	up               map[string]*reconcile.Tracker
-	down             map[string]*reconcile.Tracker
-	seeded           map[string]bool          // emails whose baseline this process established
-	pending          map[string]*pendingDelta // unapplied traffic, by email
-	lastPoll         time.Time                // last sampled poll (drives speed windows)
-	collectedAt      int64                    // last persisted poll
-	stale            bool
-	pollErr          string // last logged traffic-poll failure; "" when healthy
-	storeErr         string // last logged store-write failure; "" when healthy
-	presenceErr      string // last logged presence-poll failure; "" when healthy
-	notedUnsupported bool   // logged the old-xray presence degrade already
+	mu                   sync.Mutex
+	up                   map[string]*reconcile.Tracker
+	down                 map[string]*reconcile.Tracker
+	seeded               map[string]bool          // emails whose baseline this process established
+	pending              map[string]*pendingDelta // unapplied traffic, by email
+	pendingRoster        map[string]RosterUser    // unapplied roster (nil once persisted)
+	pendingRosterVersion uint64                   // version pendingRoster holds
+	rosterVersion        uint64                   // last persisted roster version
+	lastPoll             time.Time                // last sampled poll (drives speed windows)
+	collectedAt          int64                    // last persisted poll
+	stale                bool
+	pollErr              string // last logged traffic-poll failure; "" when healthy
+	storeErr             string // last logged store-write failure; "" when healthy
+	presenceErr          string // last logged presence-poll failure; "" when healthy
+	rosterErr            string // last logged roster-flush failure; "" when healthy
+	notedUnsupported     bool   // logged the old-xray presence degrade already
 }
 
 // NewCollector creates a Collector polling traffic and presence into the
@@ -75,14 +85,23 @@ func (c *Collector) WithClock(now func() time.Time) *Collector {
 	return c
 }
 
+// WithRoster syncs the user roster from the xray config (SPEC.md §3 step 4)
+// into the poll transaction whenever the source's version moves.
+func (c *Collector) WithRoster(roster RosterSource) *Collector {
+	c.roster = roster
+	return c
+}
+
 // Collect runs one poll and returns the current snapshot.
 func (c *Collector) Collect(ctx context.Context) (Snapshot, error) {
+	c.sampleRoster()
 	raws, err := c.traffic.QueryUserTraffic(ctx)
 	if err != nil {
 		c.logFailure(&c.pollErr, "cannot query per-user traffic; serving the last-known snapshot", err)
 		c.mu.Lock()
 		c.stale = true
 		c.mu.Unlock()
+		c.flushRoster(ctx) // config edits land without waiting for xray
 		return c.snapshot(ctx, nil, nil)
 	}
 	c.logRecovery(&c.pollErr, "per-user traffic poll recovered")
@@ -163,10 +182,15 @@ func (c *Collector) Collect(ctx context.Context) (Snapshot, error) {
 	}
 	c.mu.Unlock()
 
+	c.mu.Lock()
+	roster := c.pendingRoster
+	c.mu.Unlock()
+
 	// One transaction per poll (SPEC.md §4). On failure the deltas stay
 	// pending and merge into the next poll's transaction; presence is
-	// volatile and simply re-queried next poll.
-	if err := c.store.ApplyDeltas(ctx, deltas, presenceRows, now); err != nil {
+	// volatile and simply re-queried next poll. The roster, too, stays
+	// pending until it persists.
+	if err := c.store.ApplyPoll(ctx, deltas, presenceRows, roster, now); err != nil {
 		c.logFailure(&c.storeErr, "cannot persist per-user traffic; deltas carry into the next poll", err)
 		return Snapshot{}, fmt.Errorf("persist poll: %w", err)
 	}
@@ -174,11 +198,53 @@ func (c *Collector) Collect(ctx context.Context) (Snapshot, error) {
 
 	c.mu.Lock()
 	clear(c.pending)
+	if roster != nil {
+		c.rosterVersion = c.pendingRosterVersion
+		c.pendingRoster = nil
+	}
 	c.stale = false
 	c.collectedAt = now.Unix()
 	speeds := c.speedsLocked()
 	c.mu.Unlock()
 	return c.snapshot(ctx, speeds, onlineSet)
+}
+
+// sampleRoster picks up the config roster when its version moved. Version 0
+// means the config never parsed — no sync, so a missing or broken config
+// marks nobody gone.
+func (c *Collector) sampleRoster() {
+	if c.roster == nil {
+		return
+	}
+	latest, version := c.roster.Roster()
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if version > 0 && version != c.rosterVersion && version != c.pendingRosterVersion {
+		c.pendingRoster = latest
+		c.pendingRosterVersion = version
+	}
+}
+
+// flushRoster persists a pending roster on its own — the degraded path,
+// where there is no poll transaction to carry it. Applying a roster is
+// idempotent (upsert + gone flags), so a retry or a racing flush can only
+// write the same state twice.
+func (c *Collector) flushRoster(ctx context.Context) {
+	c.mu.Lock()
+	roster := c.pendingRoster
+	c.mu.Unlock()
+	if roster == nil {
+		return
+	}
+	if err := c.store.ApplyPoll(ctx, nil, nil, roster, c.now()); err != nil {
+		c.logFailure(&c.rosterErr, "cannot persist the config roster; it carries into the next poll", err)
+		return
+	}
+	c.logRecovery(&c.rosterErr, "config roster persistence recovered")
+	c.mu.Lock()
+	c.rosterVersion = c.pendingRosterVersion
+	c.pendingRoster = nil
+	c.mu.Unlock()
 }
 
 // snapshot reads the last-known users from the store and overlays the
