@@ -55,3 +55,9 @@ export function percentUsed(used: number, total: number): number {
   }
   return Math.min(100, Math.max(0, (used / total) * 100));
 }
+
+// formatTime24 renders the refresh note's last-updated time on a 24h clock.
+export function formatTime24(date: Date): string {
+  const pad = (value: number) => String(value).padStart(2, "0");
+  return `${pad(date.getHours())}:${pad(date.getMinutes())}:${pad(date.getSeconds())}`;
+}

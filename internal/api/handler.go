@@ -32,10 +32,26 @@ type usersSnapshots interface {
 
 const sessionCookieName = "xform_session"
 
+// PanelInfo is the panel's own identity, exposed through the API: the
+// release version (ldflags-stamped at build time) and the configured xray
+// gRPC endpoint, which the dashboard names in its degraded banner.
+type PanelInfo struct {
+	Version         string
+	XrayAPIEndpoint string
+}
+
+// xrayResponse is GET /api/v1/xray: the observed Status plus the
+// configured gRPC endpoint (config, not observation, so it can't live on
+// the Status itself).
+type xrayResponse struct {
+	xraystatus.Status
+	APIEndpoint string `json:"api_endpoint"`
+}
+
 // New returns the HTTP handler for the API and dashboard. Every /api/ route
 // except login and healthz requires a session (SPEC.md §5); the dashboard
 // itself loads openly and lets the SPA route to its login page on 401.
-func New(snapshots hostStatsSnapshots, xray xrayStatuses, usersSource usersSnapshots, sessions sessionManager, dashboard http.Handler) http.Handler {
+func New(snapshots hostStatsSnapshots, xray xrayStatuses, usersSource usersSnapshots, sessions sessionManager, dashboard http.Handler, panel PanelInfo) http.Handler {
 	requireSession := func(next http.HandlerFunc) http.HandlerFunc {
 		return func(response http.ResponseWriter, request *http.Request) {
 			cookie, err := request.Cookie(sessionCookieName)
@@ -83,6 +99,9 @@ func New(snapshots hostStatsSnapshots, xray xrayStatuses, usersSource usersSnaps
 	mux.HandleFunc("GET /api/v1/healthz", func(response http.ResponseWriter, _ *http.Request) {
 		writeJSON(response, http.StatusOK, map[string]string{"status": "ok"})
 	})
+	mux.HandleFunc("GET /api/v1/panel", requireSession(func(response http.ResponseWriter, _ *http.Request) {
+		writeJSON(response, http.StatusOK, map[string]string{"version": panel.Version})
+	}))
 	mux.HandleFunc("GET /api/v1/server", requireSession(func(response http.ResponseWriter, request *http.Request) {
 		response.Header().Set("Cache-Control", "no-store")
 		stats, err := snapshots.Latest(request.Context())
@@ -104,7 +123,7 @@ func New(snapshots hostStatsSnapshots, xray xrayStatuses, usersSource usersSnaps
 			return
 		}
 
-		writeJSON(response, http.StatusOK, status)
+		writeJSON(response, http.StatusOK, xrayResponse{Status: status, APIEndpoint: panel.XrayAPIEndpoint})
 	}))
 	mux.HandleFunc("GET /api/v1/users", requireSession(func(response http.ResponseWriter, request *http.Request) {
 		response.Header().Set("Cache-Control", "no-store")

@@ -109,6 +109,7 @@ Base prefix `/api/v1`. JSON only, snake_case keys, raw integers (bytes, bytes/se
 | GET | `/api/v1/healthz` | — | `{"status":"ok"}` |
 | GET | `/api/v1/server` | session | host stats — always live |
 | GET | `/api/v1/xray` | session | xray status/version/uptime/process/speeds/totals/online counts |
+| GET | `/api/v1/panel` | session | panel identity — the ldflags-stamped release version |
 | GET | `/api/v1/users` | session | `{"stale": bool, "collected_at": ts, "users": [...]}` |
 
 **Auth**: password from env (`XFORM_PASSWORD`, constant-time compare); `xform_session` cookie — HttpOnly, SameSite=Lax, **`Secure` always** (browsers exempt `localhost`, so SSH-tunnel access still works; every other access path is TLS-terminated), 24h sliding expiry. All endpoints except `login`/`healthz` require it.
@@ -128,6 +129,7 @@ GET /api/v1/server
 GET /api/v1/xray
 { "collected_at": 1723800000,
   "status": "running",                  // running | stopped | unreachable
+  "api_endpoint": "127.0.0.1:8080",     // configured XFORM_XRAY_API — named in the degraded banner
   "version": "26.4.13",                 // null when the unit is not active
   "uptime_seconds": 1216800,
   "mem_bytes": 88080384, "goroutines": 183,   // null unless running
@@ -144,18 +146,21 @@ GET /api/v1/users
                "speed_up_bps": 512000, "speed_down_bps": 3800000,
                "last_seen": 1723799995,            // durable; null until first observed activity
                "gone": false } ] }
+
+GET /api/v1/panel
+{ "version": "v0.4.2" }   // the binary's release tag; "dev" outside releases
 ```
 
 ## 6. Frontend
 
 React + TS (Vite), single page per the approved wireframe (`docs/prototypes/dashboard-wireframe.html`):
 
-- **Header**: xray status pill, xray version pill, service uptime; degraded banner when `status != "running"`.
-- **Server row**: CPU / RAM / storage cards with bars, host uptime, load average.
-- **Xray row**: speed now (↑/↓), total traffic, users online + unique IPs, xray process memory/goroutines.
-- **Users table**: online dot, email, protocol · security, up/down/total, speed now, online IPs, last seen (relative). `gone` users hidden behind a toggle.
+- **Header**: compact — `xform` wordmark, xray status pill, xray version pill, service uptime pill, and a refresh note with the last-successful-poll time (24h clock). Log-out button. Degraded banner when `status != "running"` — full copy naming what went stale and that host stats stay live.
+- **Server row**: four cards — CPU / RAM / storage with bars, plus a host-uptime card with load average as its sub-line.
+- **Xray row**: four cards — speed now (↑ green / ↓ blue, stacked big lines), total traffic (up + down), users online (`n / total` + unique IPs), xray process memory/goroutines.
+- **Users table**: online dot, email, protocol · security, up/down (no total column — derivable), speed now, online IPs (one per line), last seen (relative; literal `now` while online). Compact row density. `gone` users hidden behind a toggle.
 
-Polls all three endpoints every 5s; renders each card's `collected_at` freshness; shows "stale" speeds when `stale: true`. Login page posting to `/api/v1/login`.
+Polls all three endpoints every 5s; freshness is the header refresh note, not per-card; shows "stale" speeds when `stale: true`. Login page posting to `/api/v1/login`.
 
 ## 7. Deployment
 

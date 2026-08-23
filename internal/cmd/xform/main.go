@@ -64,7 +64,7 @@ func main() {
 
 	server := &http.Server{
 		Addr:              cfg.ListenAddress,
-		Handler:           newHandler(hostStats, xrayStatus, usersCache, sessions),
+		Handler:           newHandler(hostStats, xrayStatus, usersCache, sessions, cfg),
 		ReadHeaderTimeout: 5 * time.Second,
 		IdleTimeout:       60 * time.Second,
 	}
@@ -93,6 +93,7 @@ func main() {
 	}
 }
 
-func newHandler(snapshots *hoststats.Cache, statuses *xraystatus.Cache, usersCache *users.Cache, sessions *session.Manager) http.Handler {
-	return api.New(snapshots, statuses, usersCache, sessions, newDashboardHandler())
+func newHandler(snapshots *hoststats.Cache, statuses *xraystatus.Cache, usersCache *users.Cache, sessions *session.Manager, cfg config.Config) http.Handler {
+	panel := api.PanelInfo{Version: version, XrayAPIEndpoint: cfg.XrayAPIAddress}
+	return api.New(snapshots, statuses, usersCache, sessions, newDashboardHandler(), panel)
 }

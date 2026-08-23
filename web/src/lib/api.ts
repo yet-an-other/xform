@@ -32,6 +32,7 @@ export class UnauthenticatedError extends Error {
 export interface XrayStatus {
   collected_at: number;
   status: "running" | "stopped" | "unreachable";
+  api_endpoint: string; // the configured gRPC address, named in the degraded banner
   version: string | null;
   uptime_seconds: number;
   mem_bytes: number | null;
@@ -95,6 +96,16 @@ export interface UsersSnapshot {
 
 export function fetchUsers(signal?: AbortSignal): Promise<UsersSnapshot> {
   return getJSON<UsersSnapshot>("api/v1/users", signal);
+}
+
+// PanelInfo is the panel's own identity (SPEC §5) — the release version
+// stamped into the binary at build time. Fetched once, not polled.
+export interface PanelInfo {
+  version: string;
+}
+
+export function fetchPanelInfo(signal?: AbortSignal): Promise<PanelInfo> {
+  return getJSON<PanelInfo>("api/v1/panel", signal);
 }
 
 // login posts the password; true on 204, false on a 401 mismatch.

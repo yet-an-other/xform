@@ -1,7 +1,8 @@
-import { useEffect, useState } from "react";
+import { useEffect, useState, type ReactNode } from "react";
 
 import { MetricCard } from "@/components/metric-card";
 import { Badge } from "@/components/ui/badge";
+import { Card } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
 import {
   Table,
@@ -12,25 +13,40 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import {
+  fetchPanelInfo,
   fetchServerStats,
   fetchUsers,
   fetchXrayStatus,
   logout,
   UnauthenticatedError,
   type HostStats,
+  type PanelInfo,
   type UsersSnapshot,
   type XrayStatus,
 } from "@/lib/api";
-import { formatBytes, formatAgo, formatSpeed, formatUptime, percentUsed } from "@/lib/format";
+import {
+  formatBytes,
+  formatAgo,
+  formatSpeed,
+  formatTime24,
+  formatUptime,
+  percentUsed,
+} from "@/lib/format";
 
 const POLL_INTERVAL_MS = 5_000;
 
-function HostDetail({ label, value }: { label: string; value: string }) {
+// XrayCard is one tile of the xray row (SPEC §6): a labeled big readout
+// with a sub-line, the same visual language as the server MetricCards but
+// without a progress bar.
+function XrayCard({ title, sub, children }: { title: string; sub: string; children: ReactNode }) {
   return (
-    <div className="flex items-center justify-between gap-5 px-5 py-4 max-sm:flex-col max-sm:items-start max-sm:gap-2">
-      <span className="text-muted-foreground shrink-0 text-xs whitespace-nowrap">{label}</span>
-      <strong className="min-w-0 truncate font-mono text-xs font-semibold">{value}</strong>
-    </div>
+    <Card className="min-h-[120px] gap-0 p-5">
+      <h2 className="text-muted-foreground text-xs font-bold tracking-[0.13em] uppercase">
+        {title}
+      </h2>
+      <div className="mt-3 font-mono text-lg font-semibold tracking-tight">{children}</div>
+      <p className="text-muted-foreground mt-auto pt-3 text-xs">{sub}</p>
+    </Card>
   );
 }
 
@@ -86,7 +102,7 @@ function UsersTable({ snapshot }: { snapshot: UsersSnapshot }) {
           ) : (
             visible.map((user) => (
               <TableRow key={user.email} className={user.gone ? "opacity-50" : undefined}>
-                <TableCell className="px-5">
+                <TableCell className="px-5 py-1.5">
                   <span
                     aria-label={user.online ? "online" : "offline"}
                     className={`inline-block size-2 rounded-full ${
@@ -94,7 +110,7 @@ function UsersTable({ snapshot }: { snapshot: UsersSnapshot }) {
                     }`}
                   />
                 </TableCell>
-                <TableCell className="truncate font-semibold">
+                <TableCell className="truncate py-1.5 font-semibold">
                   {user.email}
                   {user.gone ? (
                     <Badge
@@ -105,7 +121,7 @@ function UsersTable({ snapshot }: { snapshot: UsersSnapshot }) {
                     </Badge>
                   ) : null}
                 </TableCell>
-                <TableCell>
+                <TableCell className="py-1.5">
                   {user.protocol !== null ? (
                     <>
                       <span className="text-muted-foreground">{user.protocol} · </span>
@@ -115,9 +131,9 @@ function UsersTable({ snapshot }: { snapshot: UsersSnapshot }) {
                     <span className="text-muted-foreground">—</span>
                   )}
                 </TableCell>
-                <TableCell className="text-right font-mono text-xs">{formatBytes(user.up_bytes_total)}</TableCell>
-                <TableCell className="text-right font-mono text-xs">{formatBytes(user.down_bytes_total)}</TableCell>
-                <TableCell className="text-right font-mono text-xs">
+                <TableCell className="py-1.5 text-right font-mono text-xs">{formatBytes(user.up_bytes_total)}</TableCell>
+                <TableCell className="py-1.5 text-right font-mono text-xs">{formatBytes(user.down_bytes_total)}</TableCell>
+                <TableCell className="py-1.5 text-right font-mono text-xs">
                   {snapshot.stale ? (
                     <span className="text-muted-foreground">stale</span>
                   ) : user.speed_up_bps > 0 || user.speed_down_bps > 0 ? (
@@ -132,15 +148,19 @@ function UsersTable({ snapshot }: { snapshot: UsersSnapshot }) {
                     <span className="text-muted-foreground">idle</span>
                   )}
                 </TableCell>
-                <TableCell className="truncate font-mono text-xs">
+                <TableCell className="truncate py-1.5 align-top font-mono text-xs">
                   {user.ips !== null && user.ips.length > 0 ? (
-                    user.ips.join(", ")
+                    // One IP per line (SPEC §6) — a stacked list stays
+                    // scannable when a user holds several connections.
+                    user.ips.map((ip) => <div key={ip}>{ip}</div>)
                   ) : (
                     <span className="text-muted-foreground">—</span>
                   )}
                 </TableCell>
-                <TableCell className="pr-5 text-right font-mono text-xs">
-                  {user.last_seen !== null ? (
+                <TableCell className="py-1.5 pr-5 text-right font-mono text-xs">
+                  {user.online ? (
+                    "now"
+                  ) : user.last_seen !== null ? (
                     formatAgo(user.last_seen)
                   ) : (
                     <span className="text-muted-foreground">—</span>
@@ -192,11 +212,82 @@ function XrayPills({ xray }: { xray: XrayStatus }) {
   );
 }
 
+// XrayRow is the four xray tiles (SPEC §6). Degraded mode keeps last-known
+// durable totals on display but flags them stale — CONTEXT.md: stale data
+// is shown, never hidden.
+function XrayRow({ xray, rosterSize }: { xray: XrayStatus; rosterSize: number | null }) {
+  const degraded = xray.status !== "running";
+  const staleSub = "stale — last known";
+
+  return (
+    <section aria-label="xray row" className="mt-4 grid gap-4 md:grid-cols-2 lg:grid-cols-4">
+      <XrayCard sub={degraded ? staleSub : "all users, sampled 5s"} title="Speed now">
+        {degraded ? (
+          <span className="text-muted-foreground">stale</span>
+        ) : (
+          <>
+            <div className="text-primary">↑ {formatSpeed(xray.speed_up_bps)}</div>
+            <div className="text-info">↓ {formatSpeed(xray.speed_down_bps)}</div>
+          </>
+        )}
+      </XrayCard>
+      <XrayCard sub={degraded ? staleSub : "durable totals"} title="Total traffic">
+        <div>↑ {formatBytes(xray.total_up_bytes)}</div>
+        <div>↓ {formatBytes(xray.total_down_bytes)}</div>
+      </XrayCard>
+      <XrayCard
+        sub={
+          degraded
+            ? staleSub
+            : xray.users_online !== null
+              ? `${xray.unique_ips_online ?? 0} unique IPs`
+              : "unavailable on this xray"
+        }
+        title="Users online"
+      >
+        {xray.users_online !== null && !degraded ? (
+          <>
+            {xray.users_online}
+            {rosterSize !== null ? (
+              <span className="text-muted-foreground"> / {rosterSize}</span>
+            ) : null}
+          </>
+        ) : (
+          <span className="text-muted-foreground">—</span>
+        )}
+      </XrayCard>
+      <XrayCard
+        sub={degraded ? staleSub : xray.goroutines !== null ? `${xray.goroutines} goroutines` : ""}
+        title="xray process"
+      >
+        {xray.mem_bytes !== null && !degraded ? (
+          formatBytes(xray.mem_bytes)
+        ) : (
+          <span className="text-muted-foreground">—</span>
+        )}
+      </XrayCard>
+    </section>
+  );
+}
+
 export function Dashboard({ onUnauthenticated }: { onUnauthenticated: () => void }) {
   const [stats, setStats] = useState<HostStats | null>(null);
   const [xray, setXray] = useState<XrayStatus | null>(null);
   const [users, setUsers] = useState<UsersSnapshot | null>(null);
+  const [panel, setPanel] = useState<PanelInfo | null>(null);
+  const [updatedAt, setUpdatedAt] = useState<Date | null>(null);
   const [error, setError] = useState<string | null>(null);
+
+  // The panel's own version never changes at runtime — fetch it once.
+  useEffect(() => {
+    const controller = new AbortController();
+    fetchPanelInfo(controller.signal)
+      .then(setPanel)
+      .catch(() => {
+        // Cosmetic only — the header simply omits the version.
+      });
+    return () => controller.abort();
+  }, []);
 
   useEffect(() => {
     const controller = new AbortController();
@@ -211,6 +302,7 @@ export function Dashboard({ onUnauthenticated }: { onUnauthenticated: () => void
         setStats(serverStats);
         setXray(xrayStats);
         setUsers(usersSnapshot);
+        setUpdatedAt(new Date());
         setError(null);
       } catch (cause) {
         if (cause instanceof UnauthenticatedError) {
@@ -240,45 +332,37 @@ export function Dashboard({ onUnauthenticated }: { onUnauthenticated: () => void
     }
   }
 
+  const degraded = xray !== null && xray.status !== "running";
+
   return (
-    <main className="mx-auto w-[min(1180px,calc(100%-40px))] pt-16 pb-12 max-sm:w-[calc(100%-28px)] max-sm:pt-10">
-      <header className="mb-8 flex items-end justify-between gap-6 max-sm:items-start">
-        <div>
-          <p className="text-primary mb-2 font-mono text-xs font-bold tracking-[0.16em] uppercase">
-            xform panel
-          </p>
-          <h1 className="text-[clamp(2.25rem,6vw,4rem)] leading-none font-semibold tracking-[-0.055em]">
-            Server
-          </h1>
-        </div>
-        <div className="flex items-center gap-3 max-sm:flex-wrap">
-          {xray ? <XrayPills xray={xray} /> : null}
-          <Badge
-            className="border-primary/30 bg-accent text-accent-foreground gap-2 px-3 py-1.5 text-[0.78rem] font-bold tracking-[0.08em] uppercase"
-            variant="outline"
-          >
-            <span
-              aria-hidden="true"
-              className="bg-primary shadow-primary/10 size-[7px] rounded-full shadow-[0_0_0_4px]"
-            />
-            Live
-          </Badge>
-          <button
-            type="button"
-            onClick={() => void signOut()}
-            className="border-border text-muted-foreground hover:text-foreground rounded-lg border px-3 py-1.5 text-[0.78rem] font-bold tracking-[0.08em] uppercase"
-          >
-            Log out
-          </button>
-        </div>
+    <main className="mx-auto w-[min(1180px,calc(100%-40px))] pt-8 pb-12 max-sm:w-[calc(100%-28px)]">
+      <header className="mb-6 flex flex-wrap items-center gap-x-3 gap-y-2">
+        <h1 className="text-lg font-semibold tracking-tight">xform</h1>
+        {panel ? (
+          <span className="text-muted-foreground font-mono text-xs">{panel.version}</span>
+        ) : null}
+        {xray ? <XrayPills xray={xray} /> : null}
+        <span className="flex-1" />
+        <span className="text-muted-foreground font-mono text-xs">
+          refreshing every 5s{updatedAt ? ` · updated ${formatTime24(updatedAt)}` : ""}
+        </span>
+        <button
+          type="button"
+          onClick={() => void signOut()}
+          className="border-border text-muted-foreground hover:text-foreground rounded-lg border px-3 py-1.5 text-[0.78rem] font-bold tracking-[0.08em] uppercase"
+        >
+          Log out
+        </button>
       </header>
 
-      {xray && xray.status !== "running" ? (
+      {degraded ? (
         <p
           role="alert"
-          className="mb-4 rounded-lg border border-warning/30 bg-warning/10 px-4 py-3 text-sm text-warning-foreground"
+          className="border-destructive/30 bg-destructive/10 text-destructive-foreground mb-4 rounded-lg border px-4 py-3 text-sm"
         >
-          xray is {xray.status} — the panel is degraded; host stats stay live.
+          {xray.status === "unreachable"
+            ? `xray-core is unreachable — the gRPC API on ${xray.api_endpoint || "the configured address"} is not responding. Showing last known data: user speeds and online status are stale. Host stats stay live.`
+            : "xray-core is stopped. Showing last known data: user speeds and online status are stale. Host stats stay live."}
         </p>
       ) : null}
 
@@ -289,46 +373,35 @@ export function Dashboard({ onUnauthenticated }: { onUnauthenticated: () => void
       ) : null}
 
       {stats ? (
-        <>
-          <section aria-label="Server resources" className="grid gap-4 md:grid-cols-3">
-            <MetricCard
-              detail={`${stats.cpu_cores} ${stats.cpu_cores === 1 ? "core" : "cores"}`}
-              percent={stats.cpu_percent}
-              title="CPU"
-              value={`${stats.cpu_percent.toFixed(1)}%`}
-            />
-            <MetricCard
-              detail={`${formatBytes(stats.mem_used_bytes)} of ${formatBytes(stats.mem_total_bytes)}`}
-              percent={percentUsed(stats.mem_used_bytes, stats.mem_total_bytes)}
-              title="RAM"
-              value={`${percentUsed(stats.mem_used_bytes, stats.mem_total_bytes).toFixed(1)}%`}
-            />
-            <MetricCard
-              detail={`${formatBytes(stats.disk_used_bytes)} of ${formatBytes(stats.disk_total_bytes)} on ${stats.disk_path}`}
-              percent={percentUsed(stats.disk_used_bytes, stats.disk_total_bytes)}
-              title="Storage"
-              value={`${percentUsed(stats.disk_used_bytes, stats.disk_total_bytes).toFixed(1)}%`}
-            />
-          </section>
-
-          <section
-            aria-label="Host details"
-            className="divide-border bg-surface/80 mt-4 grid divide-y rounded-xl border md:grid-cols-3 md:divide-x md:divide-y-0"
-          >
-            <HostDetail label="Host uptime" value={formatUptime(stats.uptime_seconds)} />
-            <HostDetail
-              label="Load average"
-              value={stats.load_avg.map((value) => value.toFixed(2)).join(" / ")}
-            />
-            <HostDetail
-              label="Last collected"
-              value={new Date(stats.collected_at * 1000).toLocaleTimeString()}
-            />
-          </section>
-        </>
+        <section aria-label="Server resources" className="grid gap-4 md:grid-cols-2 lg:grid-cols-4">
+          <MetricCard
+            detail={`${stats.cpu_cores} ${stats.cpu_cores === 1 ? "core" : "cores"}`}
+            percent={stats.cpu_percent}
+            title="CPU"
+            value={`${stats.cpu_percent.toFixed(1)}%`}
+          />
+          <MetricCard
+            detail={`${formatBytes(stats.mem_used_bytes)} of ${formatBytes(stats.mem_total_bytes)}`}
+            percent={percentUsed(stats.mem_used_bytes, stats.mem_total_bytes)}
+            title="RAM"
+            value={`${percentUsed(stats.mem_used_bytes, stats.mem_total_bytes).toFixed(1)}%`}
+          />
+          <MetricCard
+            detail={`${formatBytes(stats.disk_used_bytes)} of ${formatBytes(stats.disk_total_bytes)} on ${stats.disk_path}`}
+            percent={percentUsed(stats.disk_used_bytes, stats.disk_total_bytes)}
+            title="Storage"
+            value={`${percentUsed(stats.disk_used_bytes, stats.disk_total_bytes).toFixed(1)}%`}
+          />
+          <MetricCard
+            detail={`load ${stats.load_avg.map((value) => value.toFixed(2)).join(" ")}`}
+            title="Host uptime"
+            value={formatUptime(stats.uptime_seconds)}
+          />
+        </section>
       ) : (
-        <div className="grid gap-4 md:grid-cols-3" role="status">
+        <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-4" role="status">
           <span className="sr-only">Collecting live host stats…</span>
+          <Skeleton className="min-h-[190px] rounded-xl" />
           <Skeleton className="min-h-[190px] rounded-xl" />
           <Skeleton className="min-h-[190px] rounded-xl" />
           <Skeleton className="min-h-[190px] rounded-xl" />
@@ -336,35 +409,10 @@ export function Dashboard({ onUnauthenticated }: { onUnauthenticated: () => void
       )}
 
       {xray ? (
-        <section
-          aria-label="xray row"
-          className="divide-border bg-surface/80 mt-4 grid divide-y rounded-xl border md:grid-cols-2 md:divide-y-0 lg:grid-cols-4 lg:divide-x"
-        >
-          <HostDetail
-            label="Speed now"
-            value={`↑ ${formatSpeed(xray.speed_up_bps)} · ↓ ${formatSpeed(xray.speed_down_bps)}`}
-          />
-          <HostDetail
-            label="Total traffic"
-            value={`↑ ${formatBytes(xray.total_up_bytes)} · ↓ ${formatBytes(xray.total_down_bytes)}`}
-          />
-          <HostDetail
-            label="Users online"
-            value={
-              xray.users_online !== null
-                ? `${xray.users_online} users · ${xray.unique_ips_online} IPs`
-                : "unavailable on this xray"
-            }
-          />
-          <HostDetail
-            label="xray process"
-            value={
-              xray.mem_bytes !== null
-                ? `${formatBytes(xray.mem_bytes)} · ${xray.goroutines} goroutines`
-                : "unavailable"
-            }
-          />
-        </section>
+        <XrayRow
+          rosterSize={users ? users.users.filter((user) => !user.gone).length : null}
+          xray={xray}
+        />
       ) : null}
 
       {users ? <UsersTable snapshot={users} /> : null}

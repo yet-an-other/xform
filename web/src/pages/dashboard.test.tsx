@@ -19,6 +19,7 @@ const stats = {
 const xrayRunning = {
   collected_at: 1_723_800_000,
   status: "running",
+  api_endpoint: "127.0.0.1:8080",
   version: "26.4.13",
   uptime_seconds: 1_209_600, // 14 days
   mem_bytes: 88_080_384,
@@ -27,13 +28,14 @@ const xrayRunning = {
   speed_down_bps: 18_500_000,
   total_up_bytes: 39_100_000_000,
   total_down_bytes: 511_400_000_000,
-  users_online: 3,
-  unique_ips_online: 4,
+  users_online: 1,
+  unique_ips_online: 1,
 };
 
 const xrayStopped = {
   collected_at: 1_723_800_000,
   status: "stopped",
+  api_endpoint: "127.0.0.1:8080",
   version: null,
   uptime_seconds: 0,
   mem_bytes: null,
@@ -57,6 +59,7 @@ function stubEndpoints(routes: {
   server?: () => Response;
   xray?: () => Response;
   users?: () => Response;
+  panel?: () => Response;
   logout?: () => Response;
 }): ReturnType<typeof vi.fn> {
   const mock = vi.fn(async (input: RequestInfo | URL) => {
@@ -65,6 +68,9 @@ function stubEndpoints(routes: {
     if (url.endsWith("api/v1/xray") && routes.xray) return routes.xray();
     if (url.endsWith("api/v1/users")) {
       return routes.users ? routes.users() : json({ collected_at: 1_723_800_000, stale: false, users: [] });
+    }
+    if (url.endsWith("api/v1/panel")) {
+      return routes.panel ? routes.panel() : json({ version: "v0.0.0-test" });
     }
     if (url.endsWith("api/v1/logout") && routes.logout) return routes.logout();
     return new Response("not found", { status: 404 });
@@ -92,7 +98,7 @@ describe("host stats", () => {
     expect(screen.getByRole("heading", { name: "Storage" })).toBeInTheDocument();
     expect(screen.getByText("4 cores")).toBeInTheDocument();
     expect(screen.getByText("23 days")).toBeInTheDocument();
-    expect(screen.getByText("0.42 / 0.38 / 0.31")).toBeInTheDocument();
+    expect(screen.getByText("load 0.42 0.38 0.31")).toBeInTheDocument();
   });
 
   it("refreshes the server cards every five seconds", async () => {
@@ -164,6 +170,19 @@ describe("host stats", () => {
   });
 });
 
+describe("header", () => {
+  it("shows the panel version and a 24h refresh note", async () => {
+    stubEndpoints({ server: () => json(stats), xray: () => json(xrayRunning) });
+
+    render(<Dashboard onUnauthenticated={() => {}} />);
+
+    expect(await screen.findByText("v0.0.0-test")).toBeInTheDocument();
+    expect(
+      screen.getByText(/refreshing every 5s · updated \d{2}:\d{2}:\d{2}/),
+    ).toBeInTheDocument();
+  });
+});
+
 describe("xray status", () => {
   it("shows the status, version, and uptime pills when xray is running", async () => {
     stubEndpoints({ server: () => json(stats), xray: () => json(xrayRunning) });
@@ -181,7 +200,9 @@ describe("xray status", () => {
 
     render(<Dashboard onUnauthenticated={() => {}} />);
 
-    expect(await screen.findByRole("alert")).toHaveTextContent(/xray is stopped.*degraded/i);
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      /xray-core is stopped.*stale.*host stats stay live/i,
+    );
     // Host stats stay live in degraded mode.
     expect(screen.getByText("23.4%")).toBeInTheDocument();
   });
@@ -194,21 +215,32 @@ describe("xray status", () => {
 
     render(<Dashboard onUnauthenticated={() => {}} />);
 
-    expect(await screen.findByRole("alert")).toHaveTextContent(/xray is unreachable.*degraded/i);
+    const banner = await screen.findByRole("alert");
+    expect(banner).toHaveTextContent(/xray-core is unreachable/i);
+    // The banner names the configured gRPC endpoint.
+    expect(banner).toHaveTextContent(/127\.0\.0\.1:8080/);
   });
 });
 
 describe("xray runtime stats", () => {
   it("renders speed, totals, online counts, and process stats when running", async () => {
-    stubEndpoints({ server: () => json(stats), xray: () => json(xrayRunning) });
+    stubEndpoints({
+      server: () => json(stats),
+      xray: () => json(xrayRunning),
+      users: () => json(usersSnapshot),
+    });
 
     render(<Dashboard onUnauthenticated={() => {}} />);
 
     const row = await screen.findByRole("region", { name: "xray row" });
-    expect(row).toHaveTextContent("↑ 2.29 MiB/s · ↓ 17.6 MiB/s");
-    expect(row).toHaveTextContent("↑ 36.4 GiB · ↓ 476 GiB");
-    expect(row).toHaveTextContent("3 users · 4 IPs");
-    expect(row).toHaveTextContent("84.0 MiB · 183 goroutines");
+    expect(row).toHaveTextContent("↑ 2.29 MiB/s");
+    expect(row).toHaveTextContent("↓ 17.6 MiB/s");
+    expect(row).toHaveTextContent("↑ 36.4 GiB");
+    expect(row).toHaveTextContent("↓ 476 GiB");
+    expect(row).toHaveTextContent("1 / 2"); // online of roster (gone users excluded)
+    expect(row).toHaveTextContent("1 unique IPs");
+    expect(row).toHaveTextContent("84.0 MiB");
+    expect(row).toHaveTextContent("183 goroutines");
   });
 
   it("orders the rows: host info, xray generic info, then users", async () => {
@@ -220,7 +252,7 @@ describe("xray runtime stats", () => {
     const order = screen
       .getAllByRole("region")
       .map((region) => region.getAttribute("aria-label"));
-    expect(order).toEqual(["Server resources", "Host details", "xray row", "Users"]);
+    expect(order).toEqual(["Server resources", "xray row", "Users"]);
   });
 
   it("marks online counts unavailable on an old xray without the online RPCs", async () => {
@@ -232,7 +264,8 @@ describe("xray runtime stats", () => {
     render(<Dashboard onUnauthenticated={() => {}} />);
 
     const row = await screen.findByRole("region", { name: "xray row" });
-    expect(row).toHaveTextContent(/users online.*unavailable/i);
+    expect(row).toHaveTextContent(/users online/i);
+    expect(row).toHaveTextContent(/unavailable on this xray/i);
   });
 
   it("serves stale xray data alongside the banner in degraded mode", async () => {
@@ -243,11 +276,14 @@ describe("xray runtime stats", () => {
 
     render(<Dashboard onUnauthenticated={() => {}} />);
 
-    expect(await screen.findByRole("alert")).toHaveTextContent(/xray is unreachable/i);
-    // The durable totals stay on the stale row; host stats stay live.
+    expect(await screen.findByRole("alert")).toHaveTextContent(/xray-core is unreachable/i);
+    // The durable totals stay on the stale row, flagged; speeds read stale;
+    // host stats stay live.
     const row = screen.getByRole("region", { name: "xray row" });
-    expect(row).toHaveTextContent("↑ 36.4 GiB · ↓ 476 GiB");
-    expect(row).toHaveTextContent("↑ 0 B/s · ↓ 0 B/s");
+    expect(row).toHaveTextContent("↑ 36.4 GiB");
+    expect(row).toHaveTextContent("↓ 476 GiB");
+    expect(row).toHaveTextContent("stale");
+    expect(row).not.toHaveTextContent("0 B/s");
     expect(screen.getByText("23.4%")).toBeInTheDocument();
   });
 });
@@ -366,7 +402,8 @@ describe("users table", () => {
     const aliceRow = within(table).getByRole("row", { name: /alice@example\.com/ });
     expect(within(aliceRow).getByLabelText("online")).toBeInTheDocument();
     expect(aliceRow).toHaveTextContent("203.0.113.10");
-    expect(aliceRow).toHaveTextContent("2m ago"); // last_seen relative to now
+    // Online users read "now" in last seen, not a timestamp.
+    expect(within(aliceRow).getByText("now")).toBeInTheDocument();
 
     const bobRow = within(table).getByRole("row", { name: /bob@example\.com/ });
     expect(within(bobRow).getByLabelText("offline")).toBeInTheDocument();
@@ -388,8 +425,7 @@ describe("users table", () => {
     expect(aliceRow).not.toHaveTextContent("500 KiB/s");
   });
 
-  it("keeps the last-known IPs and last seen visible under the stale flag", async () => {
-    stubEndpoints({
+  it("keeps the last-known IPs and last seen visible under the stale flag", async () => {    stubEndpoints({
       server: () => json(stats),
       xray: () => json(xrayRunning),
       // The panel serves the last-known store snapshot: nobody verifiably
