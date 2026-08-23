@@ -52,7 +52,7 @@ function UsersTable({ snapshot }: { snapshot: UsersSnapshot }) {
             <TableHead className="w-36">Protocol</TableHead>
             <TableHead className="w-24 text-right">Up</TableHead>
             <TableHead className="w-24 text-right">Down</TableHead>
-            <TableHead className="w-44 text-right">Speed now</TableHead>
+            <TableHead className="w-52 text-right">Speed now</TableHead>
             <TableHead className="w-40">Online IPs</TableHead>
             <TableHead className="w-24 pr-5 text-right">Last seen</TableHead>
           </TableRow>
@@ -92,7 +92,13 @@ function UsersTable({ snapshot }: { snapshot: UsersSnapshot }) {
                   {snapshot.stale ? (
                     <span className="text-muted-foreground">stale</span>
                   ) : user.speed_up_bps > 0 || user.speed_down_bps > 0 ? (
-                    `↑ ${formatSpeed(user.speed_up_bps)} ↓ ${formatSpeed(user.speed_down_bps)}`
+                    // One nowrap span per direction inside a flex-wrap
+                    // container: the pair can wrap between directions but
+                    // never overflow into the next column.
+                    <div className="flex flex-wrap justify-end gap-x-1.5">
+                      <span className="whitespace-nowrap">↑ {formatSpeed(user.speed_up_bps)}</span>{" "}
+                      <span className="whitespace-nowrap">↓ {formatSpeed(user.speed_down_bps)}</span>
+                    </div>
                   ) : (
                     <span className="text-muted-foreground">idle</span>
                   )}
