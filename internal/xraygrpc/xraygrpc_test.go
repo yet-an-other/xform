@@ -77,7 +77,12 @@ func TestGRPCStatsMapsSysstatsCountersAndOnlineUsers(t *testing.T) {
 			{Name: "outbound>>>direct>>>traffic>>>uplink", Value: 777_000},
 			{Name: "user>>>alice@example.com>>>traffic>>>uplink", Value: 5_000},
 		}},
-		online: &statscmd.GetAllOnlineUsersResponse{Users: []string{"alice@example.com", "bob@example.com"}},
+		online: &statscmd.GetAllOnlineUsersResponse{Users: []string{
+			// xray returns the online-map keys — full stat names, not bare
+			// emails (pinned by TestPresenceAgainstRealXrayCore).
+			"user>>>alice@example.com>>>online",
+			"user>>>bob@example.com>>>online",
+		}},
 		ipLists: map[string]map[string]int64{
 			"user>>>alice@example.com>>>online": {"203.0.113.10": 1_780_000_000, "203.0.113.11": 1_780_000_001},
 			"user>>>bob@example.com>>>online":   {"203.0.113.11": 1_780_000_002, "198.51.100.7": 1_780_000_003},

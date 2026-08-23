@@ -183,8 +183,9 @@ func (c Client) QueryPresence(ctx context.Context) (presence []UserPresence, sup
 	}
 
 	presence = make([]UserPresence, 0, len(online.Users))
-	for _, email := range online.Users {
-		list, err := client.GetStatsOnlineIpList(ctx, &statscmd.GetStatsRequest{Name: "user>>>" + email + ">>>online"})
+	for _, entry := range online.Users {
+		email, name := onlineStatName(entry)
+		list, err := client.GetStatsOnlineIpList(ctx, &statscmd.GetStatsRequest{Name: name})
 		if status.Code(err) == codes.Unimplemented {
 			// Online, but the server cannot say from where.
 			presence = append(presence, UserPresence{Email: email})
@@ -213,6 +214,21 @@ func (c Client) QueryPresence(ctx context.Context) (presence []UserPresence, sup
 	return presence, true, nil
 }
 
+// onlineStatName resolves a GetAllOnlineUsers entry into the bare email
+// identity and the stat name to query. xray keys its online maps by the
+// full stat name — the dispatcher registers "user>>>"+email+">>>online"
+// (app/dispatcher/default.go) and GetAllOnlineUsers returns those keys
+// verbatim — so a well-formed entry IS the name. Entries that arrive as
+// bare emails (no known xray shape does) get the name constructed.
+func onlineStatName(entry string) (email, name string) {
+	if rest, ok := strings.CutPrefix(entry, "user>>>"); ok {
+		if e, ok := strings.CutSuffix(rest, ">>>online"); ok {
+			return e, entry
+		}
+	}
+	return entry, "user>>>" + entry + ">>>online"
+}
+
 // onlineCounts fills the online user/IP counts, tolerating servers that
 // predate the online-user RPCs (research §3): Unimplemented degrades to null
 // counts, any other error fails the poll like the rest of the stats API.
@@ -228,8 +244,9 @@ func (c Client) onlineCounts(ctx context.Context, client statscmd.StatsServiceCl
 	users := len(online.Users)
 	stats.OnlineUsers = &users
 	ips := map[string]struct{}{}
-	for _, email := range online.Users {
-		list, err := client.GetStatsOnlineIpList(ctx, &statscmd.GetStatsRequest{Name: "user>>>" + email + ">>>online"})
+	for _, entry := range online.Users {
+		_, name := onlineStatName(entry)
+		list, err := client.GetStatsOnlineIpList(ctx, &statscmd.GetStatsRequest{Name: name})
 		if status.Code(err) == codes.Unimplemented {
 			stats.OnlineIPs = nil
 			return nil
