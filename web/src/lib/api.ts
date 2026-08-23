@@ -68,8 +68,9 @@ export function fetchXrayStatus(signal?: AbortSignal): Promise<XrayStatus> {
 }
 
 // User is one row of the users table (SPEC §5). Presence fields (online,
-// ips, last_seen) stay zero until the presence slice; config fields
-// (protocol, security, gone) until the config-parse slice.
+// ips, last_seen) are live from the online RPCs — omitted on servers
+// predating them; config fields (protocol, security, gone) stay zero until
+// the config-parse slice.
 export interface User {
   email: string;
   protocol: string | null;

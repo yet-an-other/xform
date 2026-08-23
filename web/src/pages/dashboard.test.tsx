@@ -262,11 +262,11 @@ const usersSnapshot = {
       security: null,
       up_bytes_total: 12_400_000_000,
       down_bytes_total: 148_200_000_000,
-      online: false,
-      ips: null,
+      online: true,
+      ips: ["203.0.113.10"],
       speed_up_bps: 512_000,
       speed_down_bps: 3_800_000,
-      last_seen: null,
+      last_seen: Math.floor(Date.now() / 1000) - 120,
       gone: false,
     },
     {
@@ -307,6 +307,26 @@ describe("users table", () => {
     expect(bobRow).toHaveTextContent("idle"); // zero speeds read as idle
   });
 
+  it("renders presence: the online dot, online IPs, and relative last seen", async () => {
+    stubEndpoints({
+      server: () => json(stats),
+      xray: () => json(xrayRunning),
+      users: () => json(usersSnapshot),
+    });
+
+    render(<Dashboard onUnauthenticated={() => {}} />);
+
+    const table = await screen.findByRole("region", { name: "Users" });
+    const aliceRow = within(table).getByRole("row", { name: /alice@example\.com/ });
+    expect(within(aliceRow).getByLabelText("online")).toBeInTheDocument();
+    expect(aliceRow).toHaveTextContent("203.0.113.10");
+    expect(aliceRow).toHaveTextContent("2m ago"); // last_seen relative to now
+
+    const bobRow = within(table).getByRole("row", { name: /bob@example\.com/ });
+    expect(within(bobRow).getByLabelText("offline")).toBeInTheDocument();
+    expect(bobRow).not.toHaveTextContent("203.0.113.10");
+  });
+
   it("marks speeds stale when the snapshot is stale", async () => {
     stubEndpoints({
       server: () => json(stats),
@@ -320,5 +340,29 @@ describe("users table", () => {
     const aliceRow = within(table).getByRole("row", { name: /alice@example\.com/ });
     expect(aliceRow).toHaveTextContent("stale");
     expect(aliceRow).not.toHaveTextContent("500 KiB/s");
+  });
+
+  it("keeps the last-known IPs and last seen visible under the stale flag", async () => {
+    stubEndpoints({
+      server: () => json(stats),
+      xray: () => json(xrayRunning),
+      // The panel serves the last-known store snapshot: nobody verifiably
+      // online, but last-known IPs and last_seen stay.
+      users: () =>
+        json({
+          ...usersSnapshot,
+          stale: true,
+          users: usersSnapshot.users.map((user) => ({ ...user, online: false })),
+        }),
+    });
+
+    render(<Dashboard onUnauthenticated={() => {}} />);
+
+    const table = await screen.findByRole("region", { name: "Users" });
+    const aliceRow = within(table).getByRole("row", { name: /alice@example\.com/ });
+    expect(within(aliceRow).getByLabelText("offline")).toBeInTheDocument();
+    expect(aliceRow).toHaveTextContent("203.0.113.10");
+    expect(aliceRow).toHaveTextContent("2m ago");
+    expect(aliceRow).toHaveTextContent("stale");
   });
 });

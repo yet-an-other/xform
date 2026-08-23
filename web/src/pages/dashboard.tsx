@@ -34,10 +34,10 @@ function HostDetail({ label, value }: { label: string; value: string }) {
   );
 }
 
-// UsersTable is the per-user traffic table (SPEC §6): durable totals and
-// current speed now; presence and protocol columns fill in with their
-// slices and render "—" until then. Speeds read "stale" on a stale
-// snapshot — xray is unreachable and the totals are last-known.
+// UsersTable is the per-user traffic table (SPEC §6): durable totals,
+// current speed, and presence (online dot, IPs, last seen); the protocol
+// column renders "—" until the config-parse slice. Speeds read "stale" on a
+// stale snapshot — xray is unreachable and the totals are last-known.
 function UsersTable({ snapshot }: { snapshot: UsersSnapshot }) {
   return (
     <section aria-label="Users" className="bg-surface/80 mt-4 overflow-hidden rounded-xl border">

@@ -14,42 +14,58 @@ import (
 // wrappers in tests.
 type persistence interface {
 	ExistingEmails(ctx context.Context) (map[string]bool, error)
-	ApplyDeltas(ctx context.Context, deltas []Delta, now time.Time) error
+	ApplyDeltas(ctx context.Context, deltas []Delta, presence []Presence, now time.Time) error
 	Users(ctx context.Context) ([]User, error)
 }
 
-// Collector polls per-user traffic counters into the durable store and
-// produces users snapshots. A failed traffic poll is data, not an error: the
-// snapshot serves the store's last-known state with stale set (SPEC.md §3).
-// Store failures do fail the poll — and the poll's deltas stay pending, so
-// durable totals never silently drop bytes.
-type Collector struct {
-	traffic TrafficQuerier
-	store   persistence
-	now     func() time.Time
-
-	mu          sync.Mutex
-	up          map[string]*reconcile.Tracker
-	down        map[string]*reconcile.Tracker
-	seeded      map[string]bool       // emails whose baseline this process established
-	pending     map[string]*[2]uint64 // unapplied {up, down} deltas, by email
-	lastPoll    time.Time             // last sampled poll (drives speed windows)
-	collectedAt int64                 // last persisted poll
-	stale       bool
-	pollErr     string // last logged traffic-poll failure; "" when healthy
-	storeErr    string // last logged store-write failure; "" when healthy
+// pendingDelta is a poll's unapplied traffic, kept when a store write fails
+// so the next transaction carries the bytes. seenNow marks that movement
+// happened inside a merged window — the seed baseline is not activity.
+type pendingDelta struct {
+	up, down uint64
+	seenNow  bool
 }
 
-// NewCollector creates a Collector polling traffic into the store.
-func NewCollector(traffic TrafficQuerier, store persistence) *Collector {
+// Collector polls per-user traffic counters and the live online set into
+// the durable store and produces users snapshots. A failed traffic poll is
+// data, not an error: the snapshot serves the store's last-known state with
+// stale set (SPEC.md §3). Presence has its own degrade ladder: an old xray
+// omits it silently (supported=false), and a failed presence poll omits it
+// for that one poll — neither touches the stale flag, because the traffic
+// data is still fresh. Store failures do fail the poll — and the poll's
+// deltas stay pending, so durable totals never silently drop bytes.
+type Collector struct {
+	traffic  TrafficQuerier
+	presence PresenceQuerier
+	store    persistence
+	now      func() time.Time
+
+	mu               sync.Mutex
+	up               map[string]*reconcile.Tracker
+	down             map[string]*reconcile.Tracker
+	seeded           map[string]bool          // emails whose baseline this process established
+	pending          map[string]*pendingDelta // unapplied traffic, by email
+	lastPoll         time.Time                // last sampled poll (drives speed windows)
+	collectedAt      int64                    // last persisted poll
+	stale            bool
+	pollErr          string // last logged traffic-poll failure; "" when healthy
+	storeErr         string // last logged store-write failure; "" when healthy
+	presenceErr      string // last logged presence-poll failure; "" when healthy
+	notedUnsupported bool   // logged the old-xray presence degrade already
+}
+
+// NewCollector creates a Collector polling traffic and presence into the
+// store.
+func NewCollector(traffic TrafficQuerier, presence PresenceQuerier, store persistence) *Collector {
 	return &Collector{
-		traffic: traffic,
-		store:   store,
-		now:     time.Now,
-		up:      map[string]*reconcile.Tracker{},
-		down:    map[string]*reconcile.Tracker{},
-		seeded:  map[string]bool{},
-		pending: map[string]*[2]uint64{},
+		traffic:  traffic,
+		presence: presence,
+		store:    store,
+		now:      time.Now,
+		up:       map[string]*reconcile.Tracker{},
+		down:     map[string]*reconcile.Tracker{},
+		seeded:   map[string]bool{},
+		pending:  map[string]*pendingDelta{},
 	}
 }
 
@@ -67,9 +83,27 @@ func (c *Collector) Collect(ctx context.Context) (Snapshot, error) {
 		c.mu.Lock()
 		c.stale = true
 		c.mu.Unlock()
-		return c.snapshot(ctx, nil)
+		return c.snapshot(ctx, nil, nil)
 	}
 	c.logRecovery(&c.pollErr, "per-user traffic poll recovered")
+
+	online, supported, presenceErr := c.presence.QueryPresence(ctx)
+	switch {
+	case presenceErr != nil:
+		c.logFailure(&c.presenceErr, "cannot query online presence; presence omitted this poll", presenceErr)
+	case !supported:
+		// Old xray without the online RPCs (SPEC.md §3): presence omitted,
+		// last_seen falls back to the traffic-delta heuristic. Log once —
+		// the degrade is a property of the server, not a flapping failure.
+		c.mu.Lock()
+		if !c.notedUnsupported {
+			c.notedUnsupported = true
+			slog.Info("xray predates the online RPCs; presence omitted, last_seen falls back to traffic deltas")
+		}
+		c.mu.Unlock()
+	default:
+		c.logRecovery(&c.presenceErr, "presence poll recovered")
+	}
 
 	existing, err := c.store.ExistingEmails(ctx)
 	if err != nil {
@@ -77,6 +111,23 @@ func (c *Collector) Collect(ctx context.Context) (Snapshot, error) {
 	}
 
 	now := c.now()
+
+	// The live online set: overlaid on the snapshot and persisted as
+	// last_seen/last_ips in the same transaction as the deltas.
+	var onlineSet map[string]Presence
+	var presenceRows []Presence
+	if presenceErr == nil && supported {
+		onlineSet = make(map[string]Presence, len(online))
+		for _, user := range online {
+			if user.LastSeen == 0 {
+				// Online without per-IP timestamps: being online is being seen.
+				user.LastSeen = now.Unix()
+			}
+			onlineSet[user.Email] = user
+			presenceRows = append(presenceRows, user)
+		}
+	}
+
 	c.mu.Lock()
 	elapsed := now.Sub(c.lastPoll)
 	c.lastPoll = now
@@ -85,6 +136,7 @@ func (c *Collector) Collect(ctx context.Context) (Snapshot, error) {
 		up.Add(raw.UpBytes, elapsed)
 		down.Add(raw.DownBytes, elapsed)
 		upDelta, downDelta := up.LastDelta(), down.LastDelta()
+		seenNow := upDelta+downDelta > 0
 		if !c.seeded[raw.Email] {
 			c.seeded[raw.Email] = true
 			if !existing[raw.Email] {
@@ -93,25 +145,28 @@ func (c *Collector) Collect(ctx context.Context) (Snapshot, error) {
 				// did not exist). Existing rows resume instead: their
 				// durable totals already hold earlier epochs.
 				upDelta, downDelta = raw.UpBytes, raw.DownBytes
+				seenNow = false // a baseline seed is not observed activity (SPEC.md §5)
 			}
 		}
 		pending := c.pending[raw.Email]
 		if pending == nil {
-			pending = &[2]uint64{}
+			pending = &pendingDelta{}
 			c.pending[raw.Email] = pending
 		}
-		pending[0] += upDelta
-		pending[1] += downDelta
+		pending.up += upDelta
+		pending.down += downDelta
+		pending.seenNow = pending.seenNow || seenNow
 	}
 	deltas := make([]Delta, 0, len(c.pending))
 	for email, pending := range c.pending {
-		deltas = append(deltas, Delta{Email: email, Up: pending[0], Down: pending[1]})
+		deltas = append(deltas, Delta{Email: email, Up: pending.up, Down: pending.down, SeenNow: pending.seenNow})
 	}
 	c.mu.Unlock()
 
 	// One transaction per poll (SPEC.md §4). On failure the deltas stay
-	// pending and merge into the next poll's transaction.
-	if err := c.store.ApplyDeltas(ctx, deltas, now); err != nil {
+	// pending and merge into the next poll's transaction; presence is
+	// volatile and simply re-queried next poll.
+	if err := c.store.ApplyDeltas(ctx, deltas, presenceRows, now); err != nil {
 		c.logFailure(&c.storeErr, "cannot persist per-user traffic; deltas carry into the next poll", err)
 		return Snapshot{}, fmt.Errorf("persist poll: %w", err)
 	}
@@ -123,12 +178,16 @@ func (c *Collector) Collect(ctx context.Context) (Snapshot, error) {
 	c.collectedAt = now.Unix()
 	speeds := c.speedsLocked()
 	c.mu.Unlock()
-	return c.snapshot(ctx, speeds)
+	return c.snapshot(ctx, speeds, onlineSet)
 }
 
 // snapshot reads the last-known users from the store and overlays the
-// in-memory speeds (nil when stale — speeds zero out per SPEC.md §3).
-func (c *Collector) snapshot(ctx context.Context, speeds map[string][2]uint64) (Snapshot, error) {
+// in-memory speeds (nil when stale — speeds zero out per SPEC.md §3) and
+// the live online set. A stale snapshot serves the store rows untouched, so
+// last-known IPs and last_seen stay visible. On a live poll without usable
+// presence (old xray or a failed presence poll) presence is omitted; with a
+// live online set, users absent from it are offline with no online IPs.
+func (c *Collector) snapshot(ctx context.Context, speeds map[string][2]uint64, online map[string]Presence) (Snapshot, error) {
 	list, err := c.store.Users(ctx)
 	if err != nil {
 		return Snapshot{}, err
@@ -137,12 +196,22 @@ func (c *Collector) snapshot(ctx context.Context, speeds map[string][2]uint64) (
 		list = []User{} // the contract is users: [], never null
 	}
 	c.mu.Lock()
-	snapshot := Snapshot{CollectedAt: c.collectedAt, Stale: c.stale, Users: list}
+	stale := c.stale
+	snapshot := Snapshot{CollectedAt: c.collectedAt, Stale: stale, Users: list}
 	c.mu.Unlock()
 	for i := range list {
 		if speed, ok := speeds[list[i].Email]; ok {
 			list[i].SpeedUpBps = speed[0]
 			list[i].SpeedDownBps = speed[1]
+		}
+		if stale {
+			continue
+		}
+		user, isOnline := online[list[i].Email]
+		list[i].Online = isOnline
+		list[i].IPs = nil // offline or presence omitted: no online IPs
+		if isOnline {
+			list[i].IPs = user.IPs
 		}
 	}
 	return snapshot, nil

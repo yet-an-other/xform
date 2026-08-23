@@ -52,7 +52,7 @@ func main() {
 		5*time.Second,
 	)
 	xrayStatus.Start(shutdownSignal)
-	usersCache := users.NewCache(users.NewCollector(statsAPI, store), 5*time.Second)
+	usersCache := users.NewCache(users.NewCollector(statsAPI, statsAPI, store), 5*time.Second)
 	usersCache.Start(shutdownSignal)
 	sessions := session.NewManager(cfg.Password, time.Now)
 

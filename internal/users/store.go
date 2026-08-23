@@ -68,30 +68,70 @@ func Open(path string) (*Store, error) {
 // Close releases the database.
 func (s *Store) Close() error { return s.db.Close() }
 
-// ApplyDeltas adds each user's reconciled delta to their durable totals,
-// inserting rows for first-seen emails — a single transaction per poll
-// (SPEC.md §4). Totals only ever grow.
-func (s *Store) ApplyDeltas(ctx context.Context, deltas []Delta, now time.Time) error {
+// lastSeenGrow is the shared upsert clause: last_seen takes the newer of
+// the stored and incoming values — never regressing, and never turning
+// NULL into a timestamp when the incoming report carries none.
+const lastSeenGrow = `CASE WHEN excluded.last_seen IS NULL THEN last_seen
+                        ELSE MAX(COALESCE(last_seen, 0), excluded.last_seen) END`
+
+// ApplyDeltas adds each user's reconciled delta to their durable totals and
+// folds in the poll's presence observations, inserting rows for first-seen
+// emails — a single transaction per poll (SPEC.md §4). Totals only ever
+// grow and last_seen never regresses: movement inside the poll's window
+// marks the user seen now (the traffic-delta heuristic, SPEC.md §3), and an
+// online user's row records their connection set as the last-known IPs.
+func (s *Store) ApplyDeltas(ctx context.Context, deltas []Delta, presence []Presence, now time.Time) error {
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return fmt.Errorf("begin poll transaction: %w", err)
 	}
 	defer func() { _ = tx.Rollback() }()
 
-	stmt, err := tx.PrepareContext(ctx, `
-		INSERT INTO users (email, up_bytes_total, down_bytes_total, first_seen)
-		VALUES (?, ?, ?, ?)
+	deltaStmt, err := tx.PrepareContext(ctx, `
+		INSERT INTO users (email, up_bytes_total, down_bytes_total, last_seen, first_seen)
+		VALUES (?, ?, ?, ?, ?)
 		ON CONFLICT(email) DO UPDATE SET
 			up_bytes_total   = up_bytes_total   + excluded.up_bytes_total,
-			down_bytes_total = down_bytes_total + excluded.down_bytes_total`)
+			down_bytes_total = down_bytes_total + excluded.down_bytes_total,
+			last_seen        = `+lastSeenGrow)
 	if err != nil {
 		return fmt.Errorf("prepare delta upsert: %w", err)
 	}
-	defer func() { _ = stmt.Close() }()
+	defer func() { _ = deltaStmt.Close() }()
 
 	for _, delta := range deltas {
-		if _, err := stmt.ExecContext(ctx, delta.Email, delta.Up, delta.Down, now.Unix()); err != nil {
+		seenNow := sql.NullInt64{Int64: now.Unix(), Valid: delta.SeenNow}
+		if _, err := deltaStmt.ExecContext(ctx, delta.Email, delta.Up, delta.Down, seenNow, now.Unix()); err != nil {
 			return fmt.Errorf("apply delta for %s: %w", delta.Email, err)
+		}
+	}
+
+	// An online user may have no traffic counters yet, so presence upserts
+	// too. last_ips tracks the latest observation; a report without IPs
+	// keeps the last-known set.
+	presenceStmt, err := tx.PrepareContext(ctx, `
+		INSERT INTO users (email, last_seen, last_ips, first_seen)
+		VALUES (?, ?, ?, ?)
+		ON CONFLICT(email) DO UPDATE SET
+			last_seen = `+lastSeenGrow+`,
+			last_ips  = COALESCE(excluded.last_ips, last_ips)`)
+	if err != nil {
+		return fmt.Errorf("prepare presence upsert: %w", err)
+	}
+	defer func() { _ = presenceStmt.Close() }()
+
+	for _, user := range presence {
+		lastSeen := sql.NullInt64{Int64: user.LastSeen, Valid: user.LastSeen > 0}
+		var lastIPs sql.NullString
+		if len(user.IPs) > 0 {
+			ips, err := json.Marshal(user.IPs)
+			if err != nil {
+				return fmt.Errorf("encode IPs for %s: %w", user.Email, err)
+			}
+			lastIPs = sql.NullString{String: string(ips), Valid: true}
+		}
+		if _, err := presenceStmt.ExecContext(ctx, user.Email, lastSeen, lastIPs, now.Unix()); err != nil {
+			return fmt.Errorf("apply presence for %s: %w", user.Email, err)
 		}
 	}
 	if err := tx.Commit(); err != nil {

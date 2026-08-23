@@ -80,6 +80,10 @@ _Avoid_: last login, last connection, last active
 A user with at least one live connection to xray right now, along with the set of IP addresses they are connected from.
 _Avoid_: active, connected, logged in
 
+**Presence**:
+The users' online status, current online IPs, and last seen as one concern — live from xray's online RPCs, durable through the store.
+_Avoid_: activity tracking, connection state (alone), online stats
+
 ### States
 
 **xray status**:

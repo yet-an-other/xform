@@ -30,7 +30,7 @@ XFORM_PASSWORD=change-me ./xform
 
 The panel listens on `127.0.0.1:9090` by default (override with `XFORM_LISTEN`). Open <http://127.0.0.1:9090> and log in with the `XFORM_PASSWORD` value. All `/api/*` endpoints except `login`/`healthz` require the `xform_session` cookie (SPEC.md §5).
 
-The xray service status is live from three host-level sources: the systemd unit (running/stopped, uptime — `XFORM_XRAY_UNIT` is honored), the binary (version), and the loopback gRPC StatsService (process memory/goroutines, speeds, traffic totals, online counts — `XFORM_XRAY_API`). An active unit whose stats API doesn't answer reports `unreachable` (SPEC.md §3 degraded mode). The users table is live too: per-user durable traffic totals accumulate in SQLite (`XFORM_DB`) and survive xray restarts, with current speeds from counter deltas; when the stats API is unreachable the table serves the last-known snapshot with `stale: true`. Presence (online status, IPs, last seen) and protocol/security from the config parse (`XFORM_XRAY_CONFIG`) are later slices.
+The xray service status is live from three host-level sources: the systemd unit (running/stopped, uptime — `XFORM_XRAY_UNIT` is honored), the binary (version), and the loopback gRPC StatsService (process memory/goroutines, speeds, traffic totals, online counts — `XFORM_XRAY_API`). An active unit whose stats API doesn't answer reports `unreachable` (SPEC.md §3 degraded mode). The users table is live too: per-user durable traffic totals accumulate in SQLite (`XFORM_DB`) and survive xray restarts, with current speeds from counter deltas; when the stats API is unreachable the table serves the last-known snapshot with `stale: true`. Presence is live as well — online status, online IPs, and durable last seen from the online RPCs, persisted so they survive disconnects and xray restarts; on xray versions predating `GetAllOnlineUsers` presence is omitted (last seen falls back to the traffic-delta heuristic). Protocol/security from the config parse (`XFORM_XRAY_CONFIG`) is a later slice.
 
 ## Configuration
 
@@ -99,7 +99,7 @@ xray must expose per-user and system stats to its loopback gRPC API (without the
 }
 ```
 
-Every user must have an `email` in the xray config — per-user stats don't exist without it. Keep xray's gRPC API on loopback: it has no auth/TLS, so loopback binding plus StatsService-only is the entire security model. xray-core ≥ v26.4.13 is recommended (minimum ≥ v24.11.11 for online-user RPCs).
+Every user must have an `email` in the xray config — per-user stats don't exist without it. Keep xray's gRPC API on loopback: it has no auth/TLS, so loopback binding plus StatsService-only is the entire security model. xray-core ≥ v26.4.13 is recommended; presence (online status, IPs) needs ≥ v26.1.13 (`GetAllOnlineUsers`) — on older servers it is omitted gracefully.
 
 Access the panel through the reverse proxy shape above or an SSH tunnel (`ssh -L 9090:127.0.0.1:9090 HOST`) — it serves plain HTTP on loopback; TLS terminates at the proxy.
 

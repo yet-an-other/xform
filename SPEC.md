@@ -49,7 +49,7 @@ Enable stats, policy, and the API in the xray config:
 
 - Every client **must have an `email`** — per-user stats don't exist without it.
 - The gRPC API has **no auth/TLS**; loopback binding + StatsService-only is the entire security model.
-- xray-core ≥ **v26.4.13** recommended (`GetUsersStats`); minimum ≥ **v24.11.11** for online-user RPCs — the collector must tolerate `Unimplemented` on older servers (degrade: no online IPs).
+- xray-core ≥ **v26.4.13** recommended (`GetUsersStats`). Presence and the online counts are gated on `GetAllOnlineUsers` (**≥ v26.1.13**) — on older servers the collector tolerates `Unimplemented` and omits presence (degrade: no online status or IPs; `last_seen` falls back to the traffic-delta heuristic).
 - xray runs as a systemd unit; the panel reads unit state via D-Bus (needs to run on the same host, permission to query the system bus is sufficient for unit properties).
 
 ## 3. Collector
@@ -69,13 +69,13 @@ xray counters reset on restart; panel totals are durable. Per user, per directio
 delta = raw >= last_raw ? raw - last_raw : raw
 ```
 
-(`raw < last_raw` ⇒ counter restarted from 0, so `raw` itself is the delta.) Traffic between the last poll and a restart is unknowable — accepted. Speed = mean of the last 2 deltas ÷ interval.
+(`raw < last_raw` ⇒ counter restarted from 0, so `raw` itself is the delta.) Traffic between the last poll and a restart is unknowable — accepted. Speed = mean of the last 2 deltas ÷ interval. Any positive delta marks the user seen now — on xray without the online RPCs that heuristic is `last_seen`'s only source; a panel's first-seen baseline seed is not observed activity.
 
 ### Degraded behavior
 
 - xray gRPC unreachable ⇒ `xray.status = "unreachable"`, speeds 0, users served from last-known SQLite snapshot with `stale: true`. Host stats stay live.
 - xray unit inactive ⇒ `status: "stopped"`.
-- Older xray without online RPCs ⇒ `online`/`ips` omitted, `last_seen` from traffic-delta heuristic (any positive delta = seen now).
+- Older xray without online RPCs ⇒ `online`/`ips` omitted, `last_seen` from the traffic-delta heuristic (any positive delta = seen now).
 
 ## 4. Data model
 
@@ -139,9 +139,9 @@ GET /api/v1/users
   "users": [ { "email": "alice@example.com",
                "protocol": "VLESS", "security": "XTLS-Reality",  // null until the config-parse slice
                "up_bytes_total": 12400000000, "down_bytes_total": 148200000000,
-               "online": true, "ips": ["203.0.113.10"],          // false/null until the presence slice
+               "online": true, "ips": ["203.0.113.10"],          // false/null on xray predating the online RPCs
                "speed_up_bps": 512000, "speed_down_bps": 3800000,
-               "last_seen": 1723799995,            // null until the presence slice
+               "last_seen": 1723799995,            // durable; null until first observed activity
                "gone": false } ] }
 ```
 

@@ -8,6 +8,7 @@ package xraygrpc
 import (
 	"context"
 	"fmt"
+	"slices"
 	"strings"
 	"time"
 
@@ -39,6 +40,15 @@ type UserTraffic struct {
 	Email     string
 	UpBytes   uint64
 	DownBytes uint64
+}
+
+// UserPresence is one online user's live connection set: the IPs they are
+// connected from and the most recent per-IP last_seen (unix seconds, 0 when
+// the server reports none — xray tracks per-IP activity since v25.2.18).
+type UserPresence struct {
+	Email    string
+	IPs      []string
+	LastSeen int64
 }
 
 // Client is the StatsService client. It opens a fresh connection per poll —
@@ -148,6 +158,59 @@ func (c Client) QueryUserTraffic(ctx context.Context) ([]UserTraffic, error) {
 		traffic = append(traffic, *byEmail[email])
 	}
 	return traffic, nil
+}
+
+// QueryPresence reads the live online set: who is connected, from which
+// IPs, and when each IP was last seen (research §3). Servers predating
+// the online-user RPCs answer Unimplemented → supported=false and no error:
+// presence is omitted, never a failure (SPEC.md §3 degrade).
+func (c Client) QueryPresence(ctx context.Context) (presence []UserPresence, supported bool, err error) {
+	ctx, cancel := context.WithTimeout(ctx, pollTimeout)
+	defer cancel()
+
+	client, closeConn, err := c.connect(ctx)
+	if err != nil {
+		return nil, false, err
+	}
+	defer closeConn()
+
+	online, err := client.GetAllOnlineUsers(ctx, &statscmd.GetAllOnlineUsersRequest{})
+	if status.Code(err) == codes.Unimplemented {
+		return nil, false, nil
+	}
+	if err != nil {
+		return nil, false, fmt.Errorf("get online users: %w", err)
+	}
+
+	presence = make([]UserPresence, 0, len(online.Users))
+	for _, email := range online.Users {
+		list, err := client.GetStatsOnlineIpList(ctx, &statscmd.GetStatsRequest{Name: "user>>>" + email + ">>>online"})
+		if status.Code(err) == codes.Unimplemented {
+			// Online, but the server cannot say from where.
+			presence = append(presence, UserPresence{Email: email})
+			continue
+		}
+		if status.Code(err) == codes.NotFound {
+			// xray answers NotFound for a vanished online map — the user
+			// dropped offline between the two calls, a stale-read race
+			// rather than an outage.
+			continue
+		}
+		if err != nil {
+			// Only NotFound is a raced-offline skip; anything else is a
+			// presence outage — fail the poll rather than report users
+			// offline on a guess.
+			return nil, true, fmt.Errorf("get online IP list for %s: %w", email, err)
+		}
+		user := UserPresence{Email: email, IPs: make([]string, 0, len(list.Ips))}
+		for ip, lastSeen := range list.Ips {
+			user.IPs = append(user.IPs, ip)
+			user.LastSeen = max(user.LastSeen, lastSeen)
+		}
+		slices.Sort(user.IPs)
+		presence = append(presence, user)
+	}
+	return presence, true, nil
 }
 
 // onlineCounts fills the online user/IP counts, tolerating servers that
