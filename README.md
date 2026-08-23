@@ -101,6 +101,8 @@ xray must expose per-user and system stats to its loopback gRPC API (without the
 
 Every user must have an `email` in the xray config — per-user stats don't exist without it. Keep xray's gRPC API on loopback: it has no auth/TLS, so loopback binding plus StatsService-only is the entire security model. xray-core ≥ v26.4.13 is recommended; presence (online status, IPs) needs ≥ v26.1.13 (`GetAllOnlineUsers`) — on older servers it is omitted gracefully.
 
+Presence also needs **real client IPs reaching xray**: xray's online tracking deliberately ignores loopback sources (`127.0.0.1`/`::1`). If a userspace forwarder terminates the public port and passes connections to xray over loopback (e.g. an nginx stream block proxying to `127.0.0.1:20001`), every client looks like localhost and the online list stays empty. The fix is PROXY protocol end-to-end: `proxy_protocol on;` on the forwarder and `"sockopt": {"acceptProxyProtocol": true}` in the xray inbound's `streamSettings`.
+
 Access the panel through the reverse proxy shape above or an SSH tunnel (`ssh -L 9090:127.0.0.1:9090 HOST`) — it serves plain HTTP on loopback; TLS terminates at the proxy.
 
 ### Automatic updates

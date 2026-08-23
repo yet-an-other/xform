@@ -50,6 +50,7 @@ Enable stats, policy, and the API in the xray config:
 - Every client **must have an `email`** — per-user stats don't exist without it.
 - The gRPC API has **no auth/TLS**; loopback binding + StatsService-only is the entire security model.
 - xray-core ≥ **v26.4.13** recommended (`GetUsersStats`). Presence and the online counts are gated on `GetAllOnlineUsers` (**≥ v26.1.13**) — on older servers the collector tolerates `Unimplemented` and omits presence (degrade: no online status or IPs; `last_seen` falls back to the traffic-delta heuristic).
+- Online tracking only counts **real client IPs** — xray ignores loopback sources in its online maps. If a userspace forwarder fronts xray, it must speak PROXY protocol (`acceptProxyProtocol` on the xray inbound) or presence stays empty.
 - xray runs as a systemd unit; the panel reads unit state via D-Bus (needs to run on the same host, permission to query the system bus is sufficient for unit properties).
 
 ## 3. Collector
