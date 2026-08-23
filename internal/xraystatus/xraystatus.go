@@ -23,16 +23,16 @@ const (
 // Status is the JSON contract returned by GET /api/v1/xray.
 type Status struct {
 	CollectedAt     int64   `json:"collected_at"`
-	Status          string  `json:"status"`   // running | stopped | unreachable
-	Version         *string `json:"version"`  // null unless the unit is active
+	Status          string  `json:"status"`  // running | stopped | unreachable
+	Version         *string `json:"version"` // null unless the unit is active
 	UptimeSeconds   uint64  `json:"uptime_seconds"`
 	MemBytes        *uint64 `json:"mem_bytes"` // null unless running (gRPC sysstats)
 	Goroutines      *uint32 `json:"goroutines"`
-	SpeedUpBps      uint64  `json:"speed_up_bps"`   // 0 when degraded
+	SpeedUpBps      uint64  `json:"speed_up_bps"` // 0 when degraded
 	SpeedDownBps    uint64  `json:"speed_down_bps"`
 	TotalUpBytes    uint64  `json:"total_up_bytes"` // durable totals, survive xray restarts
 	TotalDownBytes  uint64  `json:"total_down_bytes"`
-	UsersOnline     *int    `json:"users_online"`      // null when the server predates the online RPCs
+	UsersOnline     *int    `json:"users_online"` // null when the server predates the online RPCs
 	UniqueIPsOnline *int    `json:"unique_ips_online"`
 }
 
@@ -65,6 +65,15 @@ type StatsQuerier interface {
 	QueryRuntime(ctx context.Context) (RuntimeStats, error)
 }
 
+// TotalsStore persists the durable aggregate traffic totals across panel
+// restarts — the seam for fakes.
+type TotalsStore interface {
+	// LoadTrafficTotals returns the stored totals; found is false when no
+	// row exists yet (first boot with persistence).
+	LoadTrafficTotals(ctx context.Context) (up, down uint64, found bool, err error)
+	SaveTrafficTotals(ctx context.Context, up, down uint64) error
+}
+
 // Collector gathers the xray service status from the unit and the binary.
 type Collector struct {
 	unit     UnitQuerier
@@ -77,8 +86,13 @@ type Collector struct {
 	queryErr  string // last logged unit-query failure; "" when healthy
 	binaryErr string // last logged version-read failure; "" when healthy
 	statsErr  string // last logged stats-API failure; "" when healthy
+	totalsErr string // last logged totals-store failure; "" when healthy
 	up, down  *reconcile.Tracker
 	lastPoll  time.Time // last successful stats poll (drives speed windows)
+
+	totalsStore            TotalsStore // nil: in-memory display totals only
+	totalsLoaded           bool
+	durableUp, durableDown uint64 // durable totals, persisted per poll
 }
 
 // NewCollector creates a Collector for the named systemd unit.
@@ -94,6 +108,16 @@ func NewCollector(unit UnitQuerier, version VersionRunner, stats StatsQuerier, u
 // WithClock overrides the time source (tests).
 func (c *Collector) WithClock(now func() time.Time) *Collector {
 	c.now = now
+	return c
+}
+
+// WithTotalsStore makes the xray-row totals durable across panel restarts
+// (SPEC.md §3: panel totals are durable). Call before the first Collect.
+// The trackers stop crediting the baseline — the store owns the totals.
+func (c *Collector) WithTotalsStore(store TotalsStore) *Collector {
+	c.totalsStore = store
+	c.up = reconcile.NewTracker(false)
+	c.down = reconcile.NewTracker(false)
 	return c
 }
 
@@ -140,6 +164,10 @@ func (c *Collector) Collect(ctx context.Context) (Status, error) {
 		c.mu.Lock()
 		status.TotalUpBytes = c.up.Total()
 		status.TotalDownBytes = c.down.Total()
+		if c.totalsLoaded {
+			status.TotalUpBytes = c.durableUp
+			status.TotalDownBytes = c.durableDown
+		}
 		c.mu.Unlock()
 		status.Status = StatusUnreachable
 		return status, nil
@@ -156,12 +184,58 @@ func (c *Collector) Collect(ctx context.Context) (Status, error) {
 	c.up.Add(runtime.UpBytes, elapsed)
 	c.down.Add(runtime.DownBytes, elapsed)
 	c.lastPoll = now
-	status.TotalUpBytes = c.up.Total()
-	status.TotalDownBytes = c.down.Total()
 	status.SpeedUpBps = c.up.Speed()
 	status.SpeedDownBps = c.down.Speed()
+	upDelta, downDelta := c.up.LastDelta(), c.down.LastDelta()
+	loadTotals := c.totalsStore != nil && !c.totalsLoaded
 	c.mu.Unlock()
+
+	if loadTotals {
+		c.loadTotals(ctx, runtime)
+	}
+
+	c.mu.Lock()
+	if c.totalsLoaded {
+		c.durableUp += upDelta
+		c.durableDown += downDelta
+		status.TotalUpBytes = c.durableUp
+		status.TotalDownBytes = c.durableDown
+	} else {
+		status.TotalUpBytes = c.up.Total()
+		status.TotalDownBytes = c.down.Total()
+	}
+	saveTotals := c.totalsLoaded
+	c.mu.Unlock()
+
+	// Persist the durable totals every poll; on failure the in-memory totals
+	// keep accumulating and the next successful save persists the superset.
+	if saveTotals {
+		if err := c.totalsStore.SaveTrafficTotals(ctx, status.TotalUpBytes, status.TotalDownBytes); err != nil {
+			c.logFailure(&c.totalsErr, "cannot persist traffic totals; will retry next poll", err)
+		} else {
+			c.logRecovery(&c.totalsErr, "traffic totals persistence recovered")
+		}
+	}
 	return status, nil
+}
+
+// loadTotals loads the durable totals once, seeding them from xray's current
+// counters on the first boot with persistence (mirrors the first-contact
+// seeding of user rows in the users package). A load failure degrades to
+// in-memory display totals and retries on the next poll.
+func (c *Collector) loadTotals(ctx context.Context, runtime RuntimeStats) {
+	up, down, found, err := c.totalsStore.LoadTrafficTotals(ctx)
+	if err != nil {
+		c.logFailure(&c.totalsErr, "cannot load durable traffic totals; serving in-memory totals", err)
+		return
+	}
+	if !found {
+		up, down = runtime.UpBytes, runtime.DownBytes
+	}
+	c.mu.Lock()
+	c.durableUp, c.durableDown = up, down
+	c.totalsLoaded = true
+	c.mu.Unlock()
 }
 
 // logFailure logs a persistent failure once — when it starts or its message

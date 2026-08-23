@@ -333,8 +333,8 @@ func TestUsersEndpointServesStaleSnapshot(t *testing.T) {
 		t.Fatalf("status = %d, want %d", response.Code, http.StatusOK)
 	}
 	var payload struct {
-		Stale bool            `json:"stale"`
-		Users []users.User    `json:"users"`
+		Stale bool         `json:"stale"`
+		Users []users.User `json:"users"`
 	}
 	if err := json.Unmarshal(response.Body.Bytes(), &payload); err != nil {
 		t.Fatalf("decode response: %v", err)

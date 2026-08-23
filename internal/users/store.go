@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -49,6 +50,17 @@ func Open(path string) (*Store, error) {
 		)`); err != nil {
 		_ = db.Close()
 		return nil, fmt.Errorf("create schema: %w", err)
+	}
+	// The xray row's durable aggregate totals — panel-level state hosted here
+	// because the Store owns the database file. Exactly one row (id = 1).
+	if _, err := db.Exec(`
+		CREATE TABLE IF NOT EXISTS xray_totals (
+			id               INTEGER PRIMARY KEY CHECK (id = 1),
+			up_bytes_total   INTEGER NOT NULL,
+			down_bytes_total INTEGER NOT NULL
+		)`); err != nil {
+		_ = db.Close()
+		return nil, fmt.Errorf("create totals schema: %w", err)
 	}
 	return &Store{db: db}, nil
 }
@@ -127,6 +139,33 @@ func (s *Store) Users(ctx context.Context) ([]User, error) {
 		return nil, fmt.Errorf("read users: %w", err)
 	}
 	return list, nil
+}
+
+// LoadTrafficTotals returns the durable aggregate xray traffic totals;
+// found is false on the first boot with persistence (no row yet).
+func (s *Store) LoadTrafficTotals(ctx context.Context) (up, down uint64, found bool, err error) {
+	err = s.db.QueryRowContext(ctx,
+		`SELECT up_bytes_total, down_bytes_total FROM xray_totals WHERE id = 1`).Scan(&up, &down)
+	if errors.Is(err, sql.ErrNoRows) {
+		return 0, 0, false, nil
+	}
+	if err != nil {
+		return 0, 0, false, fmt.Errorf("load traffic totals: %w", err)
+	}
+	return up, down, true, nil
+}
+
+// SaveTrafficTotals persists the durable aggregate xray traffic totals
+// (upserts the single row).
+func (s *Store) SaveTrafficTotals(ctx context.Context, up, down uint64) error {
+	if _, err := s.db.ExecContext(ctx, `
+		INSERT INTO xray_totals (id, up_bytes_total, down_bytes_total) VALUES (1, ?, ?)
+		ON CONFLICT(id) DO UPDATE SET
+			up_bytes_total   = excluded.up_bytes_total,
+			down_bytes_total = excluded.down_bytes_total`, up, down); err != nil {
+		return fmt.Errorf("save traffic totals: %w", err)
+	}
+	return nil
 }
 
 // ExistingEmails reports which emails already have a row — the collector uses

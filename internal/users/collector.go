@@ -31,10 +31,10 @@ type Collector struct {
 	mu          sync.Mutex
 	up          map[string]*reconcile.Tracker
 	down        map[string]*reconcile.Tracker
-	seeded      map[string]bool              // emails whose baseline this process established
-	pending     map[string]*[2]uint64        // unapplied {up, down} deltas, by email
-	lastPoll    time.Time                    // last sampled poll (drives speed windows)
-	collectedAt int64                         // last persisted poll
+	seeded      map[string]bool       // emails whose baseline this process established
+	pending     map[string]*[2]uint64 // unapplied {up, down} deltas, by email
+	lastPoll    time.Time             // last sampled poll (drives speed windows)
+	collectedAt int64                 // last persisted poll
 	stale       bool
 	pollErr     string // last logged traffic-poll failure; "" when healthy
 	storeErr    string // last logged store-write failure; "" when healthy

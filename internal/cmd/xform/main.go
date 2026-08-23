@@ -32,6 +32,13 @@ func main() {
 	shutdownSignal, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
+	store, err := users.Open(cfg.DBPath)
+	if err != nil {
+		slog.Error("open database", "error", err)
+		os.Exit(1)
+	}
+	defer func() { _ = store.Close() }()
+
 	hostStats := hoststats.NewCache(hoststats.NewCollector(), 5*time.Second)
 	hostStats.Start(shutdownSignal)
 	statsAPI := xraygrpc.Client{Address: cfg.XrayAPIAddress}
@@ -41,16 +48,10 @@ func main() {
 			xraystatus.BinaryVersion{},
 			statsAPI,
 			cfg.XrayUnitName,
-		),
+		).WithTotalsStore(store),
 		5*time.Second,
 	)
 	xrayStatus.Start(shutdownSignal)
-	store, err := users.Open(cfg.DBPath)
-	if err != nil {
-		slog.Error("open database", "error", err)
-		os.Exit(1)
-	}
-	defer func() { _ = store.Close() }()
 	usersCache := users.NewCache(users.NewCollector(statsAPI, store), 5*time.Second)
 	usersCache.Start(shutdownSignal)
 	sessions := session.NewManager(cfg.Password, time.Now)
