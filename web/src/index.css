@@ -35,6 +35,15 @@
     color-scheme: dark;
   }
 
+  /* Default every border to the theme line color. Tailwind v4 defaults
+     border-color to currentColor, which made uncolored borders render at
+     full text brightness. Explicit border-* utilities still win. */
+  *,
+  ::before,
+  ::after {
+    border-color: var(--color-border);
+  }
+
   body {
     min-height: 100vh;
     background:

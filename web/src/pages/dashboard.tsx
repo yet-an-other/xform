@@ -62,7 +62,7 @@ function UsersTable({ snapshot }: { snapshot: UsersSnapshot }) {
   const visible = showGone ? snapshot.users : snapshot.users.filter((user) => !user.gone);
 
   return (
-    <section aria-label="Users" className="bg-surface/80 border-border/60 mt-4 overflow-hidden rounded-xl border">
+    <section aria-label="Users" className="bg-surface/80 mt-4 overflow-hidden rounded-xl border">
       <div className="flex items-center justify-between gap-4 px-5 pt-4 pb-2">
         <h2 className="text-muted-foreground text-xs font-bold tracking-[0.13em] uppercase">
           Users
