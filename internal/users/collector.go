@@ -44,6 +44,7 @@ type Collector struct {
 	presence PresenceQuerier
 	store    persistence
 	roster   RosterSource
+	geo      GeoResolver
 	now      func() time.Time
 
 	mu                   sync.Mutex
@@ -89,6 +90,14 @@ func (c *Collector) WithClock(now func() time.Time) *Collector {
 // into the poll transaction whenever the source's version moves.
 func (c *Collector) WithRoster(roster RosterSource) *Collector {
 	c.roster = roster
+	return c
+}
+
+// WithGeo resolves each online IP's country at snapshot time — live
+// presence and stale last-known IPs alike, since a country is a property
+// of the IP, not of the connection.
+func (c *Collector) WithGeo(geo GeoResolver) *Collector {
+	c.geo = geo
 	return c
 }
 
@@ -278,6 +287,18 @@ func (c *Collector) snapshot(ctx context.Context, speeds map[string][2]uint64, o
 		list[i].IPs = nil // offline or presence omitted: no online IPs
 		if isOnline {
 			list[i].IPs = user.IPs
+		}
+	}
+	if c.geo != nil {
+		for i := range list {
+			for _, ip := range list[i].IPs {
+				if country := c.geo.Country(ip); country != "" {
+					if list[i].IPCountries == nil {
+						list[i].IPCountries = map[string]string{}
+					}
+					list[i].IPCountries[ip] = country
+				}
+			}
 		}
 	}
 	return snapshot, nil

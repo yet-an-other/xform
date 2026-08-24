@@ -23,10 +23,14 @@ type User struct {
 	DownBytesTotal uint64   `json:"down_bytes_total"`
 	Online         bool     `json:"online"`
 	IPs            []string `json:"ips"`
-	SpeedUpBps     uint64   `json:"speed_up_bps"`
-	SpeedDownBps   uint64   `json:"speed_down_bps"`
-	LastSeen       *int64   `json:"last_seen"`
-	Gone           bool     `json:"gone"`
+	// IPCountries maps each online IP to its ISO country code (ADR-0005).
+	// Omitted entirely when geoip.dat is unavailable; absent keys mean
+	// private, reserved, or unknown.
+	IPCountries  map[string]string `json:"ip_countries,omitempty"`
+	SpeedUpBps   uint64            `json:"speed_up_bps"`
+	SpeedDownBps uint64            `json:"speed_down_bps"`
+	LastSeen     *int64            `json:"last_seen"`
+	Gone         bool              `json:"gone"`
 
 	FirstSeen int64 `json:"-"` // panel-internal
 }
@@ -73,6 +77,12 @@ type RosterUser = xrayconfig.User
 // must not mark everyone gone).
 type RosterSource interface {
 	Roster() (users map[string]RosterUser, version uint64)
+}
+
+// GeoResolver maps an IP to its ISO country code ("" when private or
+// unknown) — the seam for fakes. A nil resolver keeps flags off.
+type GeoResolver interface {
+	Country(ip string) string
 }
 
 // Delta is one poll's reconciled per-user traffic to apply to the store.

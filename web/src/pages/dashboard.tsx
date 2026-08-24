@@ -30,6 +30,7 @@ import {
   formatSpeed,
   formatTime24,
   formatUptime,
+  flagEmoji,
   percentUsed,
 } from "@/lib/format";
 
@@ -152,7 +153,19 @@ function UsersTable({ snapshot }: { snapshot: UsersSnapshot }) {
                   {user.ips !== null && user.ips.length > 0 ? (
                     // One IP per line (SPEC §6) — a stacked list stays
                     // scannable when a user holds several connections.
-                    user.ips.map((ip) => <div key={ip}>{ip}</div>)
+                    user.ips.map((ip) => {
+                      const country = user.ip_countries?.[ip];
+                      return (
+                        <div key={ip}>
+                          {country ? (
+                            <span className="mr-1.5" title={country}>
+                              {flagEmoji(country)}
+                            </span>
+                          ) : null}
+                          {ip}
+                        </div>
+                      );
+                    })
                   ) : (
                     <span className="text-muted-foreground">—</span>
                   )}

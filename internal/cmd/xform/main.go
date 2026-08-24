@@ -7,11 +7,13 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"syscall"
 	"time"
 
 	"github.com/yet-an-other/xform/internal/api"
 	"github.com/yet-an-other/xform/internal/config"
+	"github.com/yet-an-other/xform/internal/geoip"
 	"github.com/yet-an-other/xform/internal/hoststats"
 	"github.com/yet-an-other/xform/internal/session"
 	"github.com/yet-an-other/xform/internal/users"
@@ -55,8 +57,12 @@ func main() {
 	xrayStatus.Start(shutdownSignal)
 	configWatcher := xrayconfig.NewWatcher(cfg.XrayConfigPath)
 	configWatcher.Start(shutdownSignal)
+	usersCollector := users.NewCollector(statsAPI, statsAPI, store).WithRoster(configWatcher)
+	if geo := loadGeoIP(cfg); geo != nil {
+		usersCollector.WithGeo(geo)
+	}
 	usersCache := users.NewCache(
-		users.NewCollector(statsAPI, statsAPI, store).WithRoster(configWatcher),
+		usersCollector,
 		5*time.Second,
 	)
 	usersCache.Start(shutdownSignal)
@@ -96,4 +102,35 @@ func main() {
 func newHandler(snapshots *hoststats.Cache, statuses *xraystatus.Cache, usersCache *users.Cache, sessions *session.Manager, cfg config.Config) http.Handler {
 	panel := api.PanelInfo{Version: version, XrayAPIEndpoint: cfg.XrayAPIAddress}
 	return api.New(snapshots, statuses, usersCache, sessions, newDashboardHandler(), panel)
+}
+
+// loadGeoIP opens the geoip.dat behind the users table's country flags
+// (ADR-0005): XFORM_GEOIP when set, else the well-known xray asset paths.
+// The feature is optional — a missing or unreadable file disables flags,
+// never the panel.
+func loadGeoIP(cfg config.Config) *geoip.Resolver {
+	path := cfg.GeoIPPath
+	if path == "" {
+		candidates := []string{
+			"/usr/local/share/xray/geoip.dat",
+			filepath.Join(filepath.Dir(cfg.XrayConfigPath), "geoip.dat"),
+		}
+		for _, candidate := range candidates {
+			if _, err := os.Stat(candidate); err == nil {
+				path = candidate
+				break
+			}
+		}
+	}
+	if path == "" {
+		slog.Info("geoip.dat not found; country flags disabled")
+		return nil
+	}
+	resolver, err := geoip.Load(path)
+	if err != nil {
+		slog.Warn("cannot load geoip.dat; country flags disabled", "path", path, "error", err)
+		return nil
+	}
+	slog.Info("geoip loaded; country flags enabled", "path", path)
+	return resolver
 }

@@ -88,6 +88,10 @@ _Avoid_: active, connected, logged in
 The users' online status, current online IPs, and last seen as one concern — live from xray's online RPCs, durable through the store.
 _Avoid_: activity tracking, connection state (alone), online stats
 
+**Flag**:
+The country flag shown beside an online IP in the users table. Derived live from xray's geoip.dat (ADR-0005), never persisted; private and unknown IPs have none.
+_Avoid_: country icon, geo label
+
 ### States
 
 **xray status**:

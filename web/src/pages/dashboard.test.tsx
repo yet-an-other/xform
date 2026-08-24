@@ -300,6 +300,7 @@ const usersSnapshot = {
       down_bytes_total: 148_200_000_000,
       online: true,
       ips: ["203.0.113.10"],
+      ip_countries: { "203.0.113.10": "NL" },
       speed_up_bps: 512_000,
       speed_down_bps: 3_800_000,
       last_seen: Math.floor(Date.now() / 1000) - 120,
@@ -402,6 +403,8 @@ describe("users table", () => {
     const aliceRow = within(table).getByRole("row", { name: /alice@example\.com/ });
     expect(within(aliceRow).getByLabelText("online")).toBeInTheDocument();
     expect(aliceRow).toHaveTextContent("203.0.113.10");
+    // The country flag renders beside the IP, tooltip = ISO code.
+    expect(within(aliceRow).getByTitle("NL")).toHaveTextContent("🇳🇱");
     // Online users read "now" in last seen, not a timestamp.
     expect(within(aliceRow).getByText("now")).toBeInTheDocument();
 

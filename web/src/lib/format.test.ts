@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { formatBytes, formatUptime, percentUsed } from "./format";
+import { flagEmoji, formatBytes, formatUptime, percentUsed } from "./format";
 
 describe("formatBytes", () => {
   it("renders whole bytes without decimals", () => {
@@ -30,6 +30,13 @@ describe("formatUptime", () => {
     expect(formatUptime(7_200)).toBe("2 hours");
     expect(formatUptime(86_400)).toBe("1 day");
     expect(formatUptime(1_987_200)).toBe("23 days");
+  });
+});
+
+describe("flagEmoji", () => {
+  it("renders an ISO alpha-2 code as regional-indicator letters", () => {
+    expect(flagEmoji("NL")).toBe("🇳🇱");
+    expect(flagEmoji("DE")).toBe("🇩🇪");
   });
 });
 

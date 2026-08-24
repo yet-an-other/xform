@@ -61,3 +61,12 @@ export function formatTime24(date: Date): string {
   const pad = (value: number) => String(value).padStart(2, "0");
   return `${pad(date.getHours())}:${pad(date.getMinutes())}:${pad(date.getSeconds())}`;
 }
+
+// flagEmoji renders an ISO 3166-1 alpha-2 code as a regional-indicator
+// flag emoji (ADR-0005). Windows browsers don't ship flag glyphs — they
+// show the two letters, which still carry the country.
+export function flagEmoji(countryCode: string): string {
+  return String.fromCodePoint(
+    ...[...countryCode].map((letter) => 0x1f1e6 + letter.charCodeAt(0) - 65),
+  );
+}

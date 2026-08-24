@@ -143,6 +143,7 @@ GET /api/v1/users
                "protocol": "VLESS", "security": "XTLS-Reality",  // from the config parse; null until the config first parses
                "up_bytes_total": 12400000000, "down_bytes_total": 148200000000,
                "online": true, "ips": ["203.0.113.10"],          // false/null on xray predating the online RPCs
+               "ip_countries": {"203.0.113.10": "NL"},          // ADR-0005; omitted when geoip.dat is unavailable, absent keys = private/unknown
                "speed_up_bps": 512000, "speed_down_bps": 3800000,
                "last_seen": 1723799995,            // durable; null until first observed activity
                "gone": false } ] }
@@ -158,7 +159,7 @@ React + TS (Vite), single page per the approved wireframe (`docs/prototypes/dash
 - **Header**: compact — `xform` wordmark, xray status pill, xray version pill, service uptime pill, and a refresh note with the last-successful-poll time (24h clock). Log-out button. Degraded banner when `status != "running"` — full copy naming what went stale and that host stats stay live.
 - **Server row**: four cards — CPU / RAM / storage with bars, plus a host-uptime card with load average as its sub-line.
 - **Xray row**: four cards — speed now (↑ green / ↓ blue, stacked big lines), total traffic (up + down), users online (`n / total` + unique IPs), xray process memory/goroutines.
-- **Users table**: online dot, email, protocol · security, up/down (no total column — derivable), speed now, online IPs (one per line), last seen (relative; literal `now` while online). Compact row density. `gone` users hidden behind a toggle.
+- **Users table**: online dot, email, protocol · security, up/down (no total column — derivable), speed now, online IPs (one per line, country flag beside each — ADR-0005), last seen (relative; literal `now` while online). Compact row density. `gone` users hidden behind a toggle.
 
 Polls all three endpoints every 5s; freshness is the header refresh note, not per-card; shows "stale" speeds when `stale: true`. Login page posting to `/api/v1/login`.
 
@@ -170,7 +171,7 @@ Two same-origin deployment shapes (ADR-0001):
 - **Proxy-hosted**: nginx (or the host's existing reverse proxy) serves the built SPA as static files and reverse-proxies `/api/*` to the Go API on loopback. Reference config: `deploy/nginx.conf.example`. Gotcha: `proxy_pass` must carry **no URI part**, otherwise `/api/v1/*` is rewritten to `/v1/*`.
 - **Subpath mounting**: the SPA is built mount-point agnostic (Vite `base: "./"`, relative API client), so either shape can hang under a subpath of an existing vhost (e.g. `/xform/`). The proxy strips the prefix — a deliberate `proxy_pass` URI rewrite, the one intentional exception to the gotcha above — and redirects the bare subpath to its trailing-slash form. Commented variants ship in both `deploy/` reference configs.
 
-- Configuration via env: `XFORM_LISTEN` (default `127.0.0.1:9090`), `XFORM_PASSWORD` (required), `XFORM_XRAY_API` (default `127.0.0.1:8080`), `XFORM_XRAY_CONFIG` (default `/usr/local/etc/xray/config.json`), `XFORM_DB` (default `/var/lib/xform/xform.db`), `XFORM_XRAY_UNIT` (default `xray.service`).
+- Configuration via env: `XFORM_LISTEN` (default `127.0.0.1:9090`), `XFORM_PASSWORD` (required), `XFORM_XRAY_API` (default `127.0.0.1:8080`), `XFORM_XRAY_CONFIG` (default `/usr/local/etc/xray/config.json`), `XFORM_DB` (default `/var/lib/xform/xform.db`), `XFORM_XRAY_UNIT` (default `xray.service`), `XFORM_GEOIP` (geoip.dat for the country flags; default searches `/usr/local/share/xray/` and the xray config's directory — flags silently off when not found).
 - Ships with a systemd unit (`xform.service`, `After=xray.service`). TLS terminates at the reverse proxy in both shapes — the panel itself serves plain HTTP on loopback.
 
 ## 8. Non-goals (v1)

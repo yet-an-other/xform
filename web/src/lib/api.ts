@@ -80,6 +80,9 @@ export interface User {
   down_bytes_total: number;
   online: boolean;
   ips: string[] | null;
+  // ISO alpha-2 per online IP (ADR-0005); absent when geoip.dat is
+  // unavailable on the host — or for private/reserved IPs.
+  ip_countries?: Record<string, string>;
   speed_up_bps: number;
   speed_down_bps: number;
   last_seen: number | null;

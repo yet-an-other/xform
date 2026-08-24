@@ -16,6 +16,7 @@ type Config struct {
 	XrayConfigPath string // XFORM_XRAY_CONFIG — xray config file (user roster)
 	DBPath         string // XFORM_DB — SQLite database file
 	XrayUnitName   string // XFORM_XRAY_UNIT — systemd unit of the xray service
+	GeoIPPath      string // XFORM_GEOIP — geoip.dat for country flags; empty = search well-known paths
 }
 
 // Load returns the SPEC.md §7 defaults, overridden by any XFORM_* environment
@@ -29,6 +30,7 @@ func Load() (Config, error) {
 		XrayConfigPath: env("XFORM_XRAY_CONFIG", "/usr/local/etc/xray/config.json"),
 		DBPath:         env("XFORM_DB", "/var/lib/xform/xform.db"),
 		XrayUnitName:   env("XFORM_XRAY_UNIT", "xray.service"),
+		GeoIPPath:      env("XFORM_GEOIP", ""),
 	}
 	if cfg.Password == "" {
 		return Config{}, errors.New("XFORM_PASSWORD is required (SPEC.md §7)")

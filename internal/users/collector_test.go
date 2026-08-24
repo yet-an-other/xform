@@ -462,3 +462,66 @@ func TestCollectorResumesTotalsAfterPanelRestart(t *testing.T) {
 		t.Errorf("alice totals = %d/%d after a panel restart, want 6000/52000 (resume, not re-seed)", alice.UpBytesTotal, alice.DownBytesTotal)
 	}
 }
+
+// fakeGeo resolves scripted IP → country lookups.
+type fakeGeo map[string]string
+
+func (f fakeGeo) Country(ip string) string { return f[ip] }
+
+func TestCollectorAttachesIPCountriesLiveAndStale(t *testing.T) {
+	now := time.Unix(1_780_000_000, 0)
+	traffic := &fakeTraffic{pages: [][]users.RawTraffic{
+		{{Email: "alice@example.com", UpBytes: 5_000, DownBytes: 50_000}},
+	}}
+	presence := &fakePresence{supported: true, pages: [][]users.Presence{
+		{{Email: "alice@example.com", IPs: []string{"203.0.113.10", "10.0.0.5"}, LastSeen: now.Unix()}},
+	}}
+	geo := fakeGeo{"203.0.113.10": "NL"} // 10.0.0.5 is private: no country
+	collector := users.NewCollector(traffic, presence, openMemoryStore(t)).
+		WithClock(func() time.Time { return now }).
+		WithGeo(geo)
+
+	snapshot, err := collector.Collect(context.Background())
+	if err != nil {
+		t.Fatalf("collect: %v", err)
+	}
+	alice := snapshot.Users[0]
+	if alice.IPCountries["203.0.113.10"] != "NL" {
+		t.Errorf("ip_countries = %v, want NL for 203.0.113.10", alice.IPCountries)
+	}
+	if _, ok := alice.IPCountries["10.0.0.5"]; ok {
+		t.Errorf("ip_countries = %v, want no entry for the private 10.0.0.5", alice.IPCountries)
+	}
+
+	// Stale: last-known IPs keep their flags — a country is a property of
+	// the IP, not of the live connection.
+	traffic.err = errors.New("stats API down")
+	snapshot, err = collector.Collect(context.Background())
+	if err != nil {
+		t.Fatalf("collect stale: %v", err)
+	}
+	alice = snapshot.Users[0]
+	if alice.IPCountries["203.0.113.10"] != "NL" {
+		t.Errorf("stale ip_countries = %v, want the last-known NL", alice.IPCountries)
+	}
+}
+
+func TestCollectorWithoutGeoOmitsIPCountries(t *testing.T) {
+	now := time.Unix(1_780_000_000, 0)
+	traffic := &fakeTraffic{pages: [][]users.RawTraffic{
+		{{Email: "alice@example.com", UpBytes: 5_000, DownBytes: 50_000}},
+	}}
+	presence := &fakePresence{supported: true, pages: [][]users.Presence{
+		{{Email: "alice@example.com", IPs: []string{"203.0.113.10"}, LastSeen: now.Unix()}},
+	}}
+	collector := users.NewCollector(traffic, presence, openMemoryStore(t)).
+		WithClock(func() time.Time { return now })
+
+	snapshot, err := collector.Collect(context.Background())
+	if err != nil {
+		t.Fatalf("collect: %v", err)
+	}
+	if snapshot.Users[0].IPCountries != nil {
+		t.Errorf("ip_countries = %v, want nil without a geo resolver", snapshot.Users[0].IPCountries)
+	}
+}
