@@ -135,7 +135,21 @@
   .presence-dot.online { background: var(--primary); box-shadow: 0 0 7px rgba(85, 214, 168, 0.55); }
   .muted { color: var(--muted); }
   .gone-row { opacity: 0.58; }
-  .row-action { color: var(--primary); font-family: var(--sans); font-weight: 700; text-align: right; }
+  .row-action { text-align: right; }
+  .icon-action {
+    display: inline-grid;
+    place-items: center;
+    width: 30px;
+    height: 30px;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    background: transparent;
+    color: var(--primary);
+    cursor: pointer;
+  }
+  .icon-action:hover, .icon-action:focus-visible { border-color: var(--primary); background: var(--accent); }
+  .icon-action:focus-visible { outline: 2px solid var(--primary); outline-offset: 2px; }
+  .icon-action svg { width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-linecap: round; stroke-linejoin: round; stroke-width: 1.8; }
   .prototype-note { margin: 14px 0 0; color: var(--muted); font-size: 12px; }
   .prototype-note a { color: var(--primary); }
 
@@ -542,7 +556,11 @@ function renderRows() {
       <td><span class="muted">${escapeHtml(user.protocol)} ·</span> ${escapeHtml(user.security)}</td>
       <td class="wide-hide">↑ ${escapeHtml(user.up)}<br>↓ ${escapeHtml(user.down)}</td>
       <td class="wide-hide">${user.ips.length ? user.ips.map((ip) => `${ip.flag} ${escapeHtml(ip.address)}`).join("<br>") : '<span class="muted">—</span>'}</td>
-      <td class="row-action">View ›</td>
+      <td class="row-action">
+        <button class="icon-action" type="button" aria-label="Open ${escapeHtml(user.email)} details">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M2.5 12s3.5-6 9.5-6 9.5 6 9.5 6-3.5 6-9.5 6-9.5-6-9.5-6Z"></path><circle cx="12" cy="12" r="2.5"></circle></svg>
+        </button>
+      </td>
     </tr>`).join("");
 }
 
@@ -682,7 +700,7 @@ userRows.addEventListener("click", (event) => {
 });
 userRows.addEventListener("keydown", (event) => {
   const row = event.target.closest(".user-row");
-  if (row && (event.key === "Enter" || event.key === " ")) {
+  if (row && event.target === row && (event.key === "Enter" || event.key === " ")) {
     event.preventDefault();
     openUser(row.dataset.email);
   }
@@ -698,7 +716,9 @@ document.addEventListener("keydown", (event) => {
 });
 
 renderRows();
-openUser("alice@example.com");
+if (new URLSearchParams(window.location.search).get("open") !== "false") {
+  openUser("alice@example.com");
+}
 </script>
 </body>
 </html>
