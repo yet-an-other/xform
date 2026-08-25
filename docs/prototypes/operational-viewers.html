@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>xform operational viewers prototype · issue #22</title>
+<title>xform operational viewers prototype · Prototype the operational viewers</title>
 <style>
   :root {
     color-scheme: dark;
@@ -84,6 +84,7 @@
   .metric { min-height: 138px; padding: 18px; border: 1px solid var(--border); border-radius: 12px; background: rgba(23, 33, 45, 0.84); }
   .eyebrow { color: var(--muted); font-size: 10px; font-weight: 800; letter-spacing: 0.13em; text-transform: uppercase; }
   .metric strong { display: block; margin-top: 14px; font: 600 21px var(--mono); }
+  .metric strong.two-line { display: grid; }
   .metric small { display: block; margin-top: 14px; color: var(--muted); }
   .up { color: var(--primary); }
   .down { color: var(--info); }
@@ -207,12 +208,14 @@
       <thead><tr><th style="width:42px" aria-label="Online"></th><th>User</th><th>Protocol</th><th class="wide-hide">Traffic</th><th class="wide-hide">Speed now</th><th class="wide-hide">Online IPs</th><th style="width:90px">Last seen</th></tr></thead>
       <tbody>
         <tr><td><span class="presence-dot online"></span></td><td class="user-cell">alice@example.com</td><td><span class="muted">VLESS ·</span> XTLS-Reality</td><td class="wide-hide"><span class="two-line"><span>↑ 12.4 GB</span><span>↓ 148.2 GB</span></span></td><td class="wide-hide"><span class="two-line"><span class="up">↑ 512 KB/s</span><span class="down">↓ 3.8 MB/s</span></span></td><td class="wide-hide">🇳🇱 203.0.113.10</td><td>now</td></tr>
-        <tr><td><span class="presence-dot online"></span></td><td class="user-cell">bob@example.com</td><td><span class="muted">VLESS ·</span> TLS</td><td class="wide-hide"><span class="two-line"><span>↑ 3.1 GB</span><span>↓ 41.7 GB</span></span></td><td class="wide-hide"><span class="two-line"><span class="up">↑ 48 KB/s</span><span class="down">↓ 1.1 MB/s</span></span></td><td class="wide-hide"><span class="two-line"><span>🇩🇪 198.51.100.7</span><span>🇩🇪 198.51.100.8</span></span></td><td>now</td></tr>
-        <tr><td><span class="presence-dot"></span></td><td class="user-cell">chandra@example.com</td><td><span class="muted">Trojan ·</span> TLS</td><td class="wide-hide"><span class="two-line"><span>↑ 890 MB</span><span>↓ 9.3 GB</span></span></td><td class="wide-hide"><span class="muted">idle</span></td><td class="wide-hide"><span class="muted">—</span></td><td>47m ago</td></tr>
+        <tr><td><span class="presence-dot online"></span></td><td class="user-cell">bob@example.com</td><td><span class="muted">VLESS ·</span> XTLS-Reality</td><td class="wide-hide"><span class="two-line"><span>↑ 3.1 GB</span><span>↓ 41.7 GB</span></span></td><td class="wide-hide"><span class="two-line"><span class="up">↑ 48 KB/s</span><span class="down">↓ 1.1 MB/s</span></span></td><td class="wide-hide"><span class="two-line"><span>🇩🇪 198.51.100.7</span><span>🇩🇪 198.51.100.8</span></span></td><td>now</td></tr>
+        <tr><td><span class="presence-dot"></span></td><td class="user-cell">chandra@example.com</td><td><span class="muted">VLESS ·</span> XTLS-Reality</td><td class="wide-hide"><span class="two-line"><span>↑ 890 MB</span><span>↓ 9.3 GB</span></span></td><td class="wide-hide"><span class="muted">idle</span></td><td class="wide-hide"><span class="muted">—</span></td><td>47m ago</td></tr>
+        <tr><td><span class="presence-dot online"></span></td><td class="user-cell">dmitri@example.com</td><td><span class="muted">VLESS ·</span> XTLS-Reality</td><td class="wide-hide"><span class="two-line"><span>↑ 465 GB</span><span>↓ 3.2 TB</span></span></td><td class="wide-hide"><span class="two-line"><span class="up">↑ 1.84 MB/s</span><span class="down">↓ 13.6 MB/s</span></span></td><td class="wide-hide">🇸🇬 192.0.2.81</td><td>now</td></tr>
+        <tr><td><span class="presence-dot"></span></td><td class="user-cell">elena@example.com</td><td><span class="muted">VLESS ·</span> XTLS-Reality</td><td class="wide-hide"><span class="two-line"><span>↑ 610 MB</span><span>↓ 300.8 GB</span></span></td><td class="wide-hide"><span class="muted">idle</span></td><td class="wide-hide"><span class="muted">—</span></td><td>3h ago</td></tr>
       </tbody>
     </table>
   </section>
-  <p class="prototype-note">Draft operational viewers for <a href="https://github.com/yet-an-other/xform/issues/22">Wayfinder issue #22 · Prototype the operational viewers</a>. Use the compact header icon to open a viewer.</p>
+  <p class="prototype-note">Draft operational viewers for <a href="https://github.com/yet-an-other/xform/issues/22">Prototype the operational viewers</a>. Use the compact header icon to open a viewer.</p>
 </main>
 
 <div class="dialog-layer" id="dialogLayer" hidden>
@@ -241,15 +244,12 @@
 
 <textarea id="configSource" hidden>{
   "log": {
-    "loglevel": "warning",
-    "access": "/var/log/xray/access.log",
-    "error": "/var/log/xray/error.log"
+    "loglevel": "warning"
   },
   "api": {
     "tag": "api",
+    "listen": "127.0.0.1:8080",
     "services": [
-      "HandlerService",
-      "LoggerService",
       "StatsService"
     ]
   },
@@ -262,7 +262,8 @@
         "uplinkOnly": 2,
         "downlinkOnly": 5,
         "statsUserUplink": true,
-        "statsUserDownlink": true
+        "statsUserDownlink": true,
+        "statsUserOnline": true
       }
     },
     "system": {
@@ -288,6 +289,21 @@
           {
             "id": "7ac08767-f53d-4eaf-8311-a91e6c92c143",
             "email": "bob@example.com",
+            "flow": "xtls-rprx-vision"
+          },
+          {
+            "id": "0e35510d-619e-4ce6-88bd-5fd5027569bc",
+            "email": "chandra@example.com",
+            "flow": "xtls-rprx-vision"
+          },
+          {
+            "id": "75b624d4-00b4-4612-bb7d-8a702e59fc85",
+            "email": "dmitri@example.com",
+            "flow": "xtls-rprx-vision"
+          },
+          {
+            "id": "829aa4a2-3fc1-4312-8bf0-a4e09ea51e62",
+            "email": "elena@example.com",
             "flow": "xtls-rprx-vision"
           }
         ],
@@ -320,15 +336,6 @@
         ],
         "routeOnly": true
       }
-    },
-    {
-      "tag": "api-inbound",
-      "listen": "127.0.0.1",
-      "port": 10085,
-      "protocol": "dokodemo-door",
-      "settings": {
-        "address": "127.0.0.1"
-      }
     }
   ],
   "outbounds": [
@@ -352,13 +359,6 @@
   "routing": {
     "domainStrategy": "IPIfNonMatch",
     "rules": [
-      {
-        "type": "field",
-        "inboundTag": [
-          "api-inbound"
-        ],
-        "outboundTag": "api"
-      },
       {
         "type": "field",
         "ip": [
@@ -412,14 +412,14 @@ const xrayTemplates = [
 ];
 
 const panelTemplates = [
-  { priority: "info", message: "HTTP request completed method=GET path=/api/status/xray status=200 duration_ms=8 remote_addr=127.0.0.1:48624", unit: "xform" },
+  { priority: "info", message: "HTTP request completed method=GET path=/api/v1/xray status=200 duration_ms=8 remote_addr=127.0.0.1:48624", unit: "xform" },
   { priority: "info", message: "observation cycle completed host_ms=3 xray_ms=14 roster_users=5 online_users=3 durable_deltas=4", unit: "xform" },
-  { priority: "notice", message: "roster reloaded path=/usr/local/etc/xray/config.json inbounds=2 users=5 profiles=6", unit: "xform" },
+  { priority: "notice", message: "roster reloaded path=/usr/local/etc/xray/config.json inbounds=1 users=5 profiles=5", unit: "xform" },
   { priority: "warning", message: "presence RPC returned incomplete IP data user=chandra@example.com rpc=GetOnlineUsers detail=\"accepted response without address metadata; preserving last-seen and reporting no current IPs\"", unit: "xform" },
   { priority: "info", message: "traffic sample persisted sequence=194408 xray_uplink_delta=245761 xray_downlink_delta=3879204 users_changed=3 transaction_ms=6", unit: "xform" },
-  { priority: "error", message: "xray observation failed attempt=1 endpoint=127.0.0.1:10085 error=\"rpc error: code = Unavailable desc = connection error: desc = transport: Error while dialing: dial tcp 127.0.0.1:10085: connect: connection refused\"\nnext_retry=5s Dashboard_mode=degraded", unit: "xform" },
+  { priority: "error", message: "xray observation failed attempt=1 endpoint=127.0.0.1:8080 error=\"rpc error: code = Unavailable desc = connection error: desc = transport: Error while dialing: dial tcp 127.0.0.1:8080: connect: connection refused\"\nnext_retry=5s Dashboard_mode=degraded", unit: "xform" },
   { priority: "info", message: "session continued idle_age=3m14s expires_in=23h56m request_id=01JSE4QXJ83BXJQR2H4M7P0NNP", unit: "xform" },
-  { priority: "info", message: "HTTP request completed method=GET path=/api/users status=200 duration_ms=12 response_bytes=4817 remote_addr=192.0.2.44:53108", unit: "xform" }
+  { priority: "info", message: "HTTP request completed method=GET path=/api/v1/users status=200 duration_ms=12 response_bytes=4817 remote_addr=192.0.2.44:53108", unit: "xform" }
 ];
 
 function escapeHtml(value) {
