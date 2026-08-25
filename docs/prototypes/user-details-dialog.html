@@ -1,0 +1,704 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>xform user details dialog prototype</title>
+<style>
+  :root {
+    color-scheme: dark;
+    --background: #0b0f14;
+    --foreground: #e9eef5;
+    --card: #17212d;
+    --surface: #121922;
+    --surface-strong: #1a2430;
+    --border: #253242;
+    --border-strong: #34465a;
+    --muted: #8d9aaa;
+    --primary: #55d6a8;
+    --primary-ink: #0b0f14;
+    --accent: rgba(85, 214, 168, 0.14);
+    --info: #6cb6ff;
+    --warning: #f5b94d;
+    --destructive: #ff7c86;
+    --shadow: 0 24px 80px rgba(0, 0, 0, 0.58);
+    --sans: Inter, ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    --mono: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  }
+
+  * { box-sizing: border-box; }
+  html { min-width: 320px; }
+  body {
+    min-height: 100vh;
+    margin: 0;
+    background:
+      radial-gradient(circle at 85% -10%, rgba(61, 107, 145, 0.23), transparent 38rem),
+      var(--background);
+    color: var(--foreground);
+    font: 14px/1.45 var(--sans);
+  }
+  button { font: inherit; }
+  code { font-family: var(--mono); }
+  .shell {
+    width: min(1180px, calc(100% - 40px));
+    margin: 0 auto;
+    padding: 32px 0 48px;
+  }
+  .app-header {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 10px;
+    margin-bottom: 24px;
+  }
+  .wordmark { margin: 0; font-size: 18px; letter-spacing: -0.02em; }
+  .version, .refresh { color: var(--muted); font: 12px var(--mono); }
+  .spacer { flex: 1; }
+  .pill {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    min-height: 30px;
+    padding: 5px 11px;
+    border: 1px solid var(--border);
+    border-radius: 999px;
+    background: rgba(18, 25, 34, 0.72);
+    font-size: 11px;
+    font-weight: 700;
+    letter-spacing: 0.07em;
+    text-transform: uppercase;
+  }
+  .pill .dot {
+    width: 7px;
+    height: 7px;
+    border-radius: 50%;
+    background: var(--primary);
+    box-shadow: 0 0 0 4px rgba(85, 214, 168, 0.1);
+  }
+  .button {
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    background: transparent;
+    color: var(--muted);
+    padding: 7px 11px;
+    cursor: pointer;
+    font-size: 11px;
+    font-weight: 750;
+    letter-spacing: 0.07em;
+    text-transform: uppercase;
+  }
+  .button:hover, .button:focus-visible { border-color: var(--border-strong); color: var(--foreground); }
+  .button:focus-visible, .close:focus-visible, .user-row:focus-visible { outline: 2px solid var(--primary); outline-offset: 2px; }
+  .metrics { display: grid; grid-template-columns: repeat(4, 1fr); gap: 16px; }
+  .metric {
+    min-height: 132px;
+    padding: 18px;
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    background: rgba(23, 33, 45, 0.84);
+  }
+  .eyebrow {
+    color: var(--muted);
+    font-size: 10px;
+    font-weight: 800;
+    letter-spacing: 0.13em;
+    text-transform: uppercase;
+  }
+  .metric strong { display: block; margin-top: 14px; font: 600 21px var(--mono); }
+  .metric small { display: block; margin-top: 14px; color: var(--muted); }
+  .users-card {
+    margin-top: 16px;
+    overflow: hidden;
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    background: rgba(18, 25, 34, 0.8);
+  }
+  .users-title { padding: 16px 20px 10px; }
+  table { width: 100%; border-collapse: collapse; table-layout: fixed; }
+  th {
+    padding: 10px 12px;
+    border-top: 1px solid var(--border);
+    border-bottom: 1px solid var(--border);
+    color: var(--muted);
+    font-size: 10px;
+    font-weight: 800;
+    letter-spacing: 0.08em;
+    text-align: left;
+    text-transform: uppercase;
+  }
+  td { padding: 11px 12px; border-bottom: 1px solid var(--border); font: 12px var(--mono); }
+  tr:last-child td { border-bottom: 0; }
+  .user-row { cursor: pointer; }
+  .user-row:hover, .user-row:focus-visible { background: rgba(85, 214, 168, 0.06); }
+  .user-cell { font-family: var(--sans); font-weight: 650; }
+  .presence-dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; background: #526070; }
+  .presence-dot.online { background: var(--primary); box-shadow: 0 0 7px rgba(85, 214, 168, 0.55); }
+  .muted { color: var(--muted); }
+  .gone-row { opacity: 0.58; }
+  .row-action { color: var(--primary); font-family: var(--sans); font-weight: 700; text-align: right; }
+  .prototype-note { margin: 14px 0 0; color: var(--muted); font-size: 12px; }
+  .prototype-note a { color: var(--primary); }
+
+  .dialog-layer {
+    position: fixed;
+    inset: 0;
+    z-index: 20;
+    display: grid;
+    place-items: center;
+    padding: 24px;
+    background: rgba(3, 7, 11, 0.74);
+    backdrop-filter: blur(5px);
+  }
+  .dialog-layer[hidden] { display: none; }
+  .dialog {
+    display: flex;
+    flex-direction: column;
+    width: min(1040px, 100%);
+    max-height: min(900px, calc(100vh - 48px));
+    overflow: hidden;
+    border: 1px solid var(--border-strong);
+    border-radius: 16px;
+    background: var(--surface);
+    box-shadow: var(--shadow);
+  }
+  .dialog-header {
+    display: flex;
+    align-items: flex-start;
+    gap: 16px;
+    padding: 20px 22px 17px;
+    border-bottom: 1px solid var(--border);
+  }
+  .dialog-heading { min-width: 0; }
+  .dialog-heading h2 {
+    margin: 4px 0 0;
+    overflow: hidden;
+    font-size: 20px;
+    letter-spacing: -0.02em;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .status-line { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-top: 8px; }
+  .status-badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 7px;
+    padding: 4px 8px;
+    border: 1px solid var(--border);
+    border-radius: 999px;
+    font-size: 11px;
+    font-weight: 700;
+  }
+  .status-badge.online { border-color: rgba(85, 214, 168, 0.35); color: var(--primary); }
+  .status-badge.gone { border-color: rgba(245, 185, 77, 0.35); color: var(--warning); }
+  .close {
+    display: grid;
+    flex: 0 0 auto;
+    place-items: center;
+    width: 34px;
+    height: 34px;
+    margin-left: auto;
+    border: 1px solid var(--border);
+    border-radius: 9px;
+    background: transparent;
+    color: var(--muted);
+    cursor: pointer;
+    font-size: 20px;
+    line-height: 1;
+  }
+  .close:hover { color: var(--foreground); }
+  .dialog-scroll { overflow: auto; padding: 20px 22px 24px; }
+  .section-title {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: 12px;
+    margin-bottom: 10px;
+  }
+  .section-title h3 { margin: 0; font-size: 13px; }
+  .section-title span { color: var(--muted); font-size: 11px; }
+  .observations {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 10px;
+  }
+  .observation {
+    min-width: 0;
+    padding: 13px 14px;
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    background: rgba(23, 33, 45, 0.62);
+  }
+  .observation dt { color: var(--muted); font-size: 10px; font-weight: 750; letter-spacing: 0.08em; text-transform: uppercase; }
+  .observation dd { margin: 7px 0 0; font: 600 13px var(--mono); }
+  .observation dd.two-lines { display: grid; gap: 3px; }
+  .up { color: var(--primary); }
+  .down { color: var(--info); }
+  .presence {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 8px;
+    margin-top: 10px;
+    padding: 12px 14px;
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    background: rgba(23, 33, 45, 0.38);
+  }
+  .presence strong { margin-right: 4px; font-size: 12px; }
+  .ip-chip {
+    padding: 4px 8px;
+    border: 1px solid var(--border);
+    border-radius: 999px;
+    background: var(--surface-strong);
+    font: 11px var(--mono);
+  }
+  .profiles-section { margin-top: 22px; }
+  .profiles { display: grid; gap: 12px; }
+  .profile {
+    overflow: hidden;
+    border: 1px solid var(--border-strong);
+    border-radius: 12px;
+    background: rgba(23, 33, 45, 0.68);
+  }
+  .profile-header {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 9px;
+    padding: 13px 15px;
+    border-bottom: 1px solid var(--border);
+  }
+  .profile-header h4 { margin: 0; font-size: 13px; }
+  .profile-tag { color: var(--muted); font: 10px var(--mono); }
+  .profile-number {
+    display: inline-grid;
+    place-items: center;
+    width: 21px;
+    height: 21px;
+    border-radius: 6px;
+    background: var(--accent);
+    color: var(--primary);
+    font: 700 11px var(--mono);
+  }
+  .profile-body {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) 154px;
+    gap: 16px;
+    padding: 15px;
+  }
+  .field-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 9px; }
+  .field {
+    min-width: 0;
+    padding: 10px 11px;
+    border: 1px solid var(--border);
+    border-radius: 9px;
+    background: rgba(11, 15, 20, 0.52);
+  }
+  .field-label {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    color: var(--muted);
+    font-size: 9px;
+    font-weight: 800;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+  }
+  .field-value { display: block; margin-top: 6px; overflow-wrap: anywhere; font: 11px/1.45 var(--mono); }
+  .copy {
+    border: 0;
+    background: transparent;
+    color: var(--primary);
+    padding: 0;
+    cursor: pointer;
+    font-size: 9px;
+    font-weight: 800;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+  }
+  .qr-wrap {
+    align-self: start;
+    padding: 10px;
+    border-radius: 10px;
+    background: #fff;
+    color: #111;
+    text-align: center;
+  }
+  .qr { display: block; width: 134px; height: 134px; shape-rendering: crispEdges; }
+  .qr-wrap small { display: block; margin-top: 6px; color: #454545; font: 9px var(--sans); }
+  .uri-row {
+    margin: 0 15px 15px;
+    padding: 11px;
+    border: 1px solid var(--border);
+    border-radius: 9px;
+    background: rgba(11, 15, 20, 0.74);
+  }
+  .uri-value {
+    display: block;
+    max-height: 62px;
+    margin-top: 6px;
+    overflow: auto;
+    color: #cbd7e4;
+    font: 10.5px/1.5 var(--mono);
+    overflow-wrap: anywhere;
+  }
+  .empty-profiles {
+    padding: 18px;
+    border: 1px dashed var(--border-strong);
+    border-radius: 11px;
+    color: var(--muted);
+    text-align: center;
+  }
+  .dialog-footer {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px 14px;
+    padding: 11px 22px;
+    border-top: 1px solid var(--border);
+    color: var(--muted);
+    font-size: 10px;
+  }
+  .dialog-footer span + span::before { content: "·"; margin-right: 14px; }
+
+  @media (max-width: 820px) {
+    .metrics { grid-template-columns: repeat(2, 1fr); }
+    .observations { grid-template-columns: repeat(2, 1fr); }
+    .profile-body { grid-template-columns: minmax(0, 1fr) 134px; }
+    .qr { width: 114px; height: 114px; }
+    .wide-hide { display: none; }
+  }
+  @media (max-width: 560px) {
+    .shell { width: calc(100% - 28px); padding-top: 20px; }
+    .metrics { grid-template-columns: 1fr; }
+    .dialog-layer { padding: 0; place-items: stretch; }
+    .dialog { width: 100%; max-height: 100vh; min-height: 100vh; border: 0; border-radius: 0; }
+    .dialog-header, .dialog-scroll { padding-left: 16px; padding-right: 16px; }
+    .observations { grid-template-columns: 1fr 1fr; }
+    .profile-body { grid-template-columns: 1fr; }
+    .field-grid { grid-template-columns: 1fr; }
+    .qr-wrap { justify-self: center; }
+    .uri-row { margin-left: 15px; margin-right: 15px; }
+    .dialog-footer span + span::before { content: none; margin: 0; }
+    .dialog-footer { display: grid; padding-left: 16px; padding-right: 16px; }
+  }
+</style>
+</head>
+<body>
+<main class="shell">
+  <header class="app-header">
+    <h1 class="wordmark">xform</h1>
+    <span class="version">v0.4.2</span>
+    <span class="pill"><span class="dot"></span>xray running</span>
+    <span class="pill">v26.4.13</span>
+    <span class="spacer"></span>
+    <span class="refresh">refreshing every 5s · updated 14:32</span>
+    <button class="button" type="button">Log out</button>
+  </header>
+
+  <section class="metrics" aria-label="Dashboard sample">
+    <article class="metric"><span class="eyebrow">CPU</span><strong>23.4%</strong><small>4 cores</small></article>
+    <article class="metric"><span class="eyebrow">RAM</span><strong>59.4%</strong><small>4.7 GB of 8 GB</small></article>
+    <article class="metric"><span class="eyebrow">Speed now</span><strong><span class="up">↑ 2.4 MB/s</span><br><span class="down">↓ 18.5 MB/s</span></strong><small>all Users, sampled 5s</small></article>
+    <article class="metric"><span class="eyebrow">Users online</span><strong>3 <span class="muted">/ 5</span></strong><small>4 unique IPs</small></article>
+  </section>
+
+  <section class="users-card" aria-label="Users">
+    <div class="users-title eyebrow">Users</div>
+    <table>
+      <thead>
+        <tr><th style="width:42px"></th><th>User</th><th>Protocol</th><th class="wide-hide">Traffic</th><th class="wide-hide">Online IPs</th><th style="width:78px"></th></tr>
+      </thead>
+      <tbody id="userRows"></tbody>
+    </table>
+  </section>
+  <p class="prototype-note">Select a User to inspect the dialog. Alice has two connection profiles, Bob has one, and Carol is a gone User. Context: <a href="https://github.com/yet-an-other/xform/issues/21">Prototype the User details dialog</a>.</p>
+</main>
+
+<div class="dialog-layer" id="dialogLayer" role="presentation" hidden>
+  <section class="dialog" role="dialog" aria-modal="true" aria-labelledby="dialogTitle">
+    <header class="dialog-header">
+      <div class="dialog-heading">
+        <span class="eyebrow">User details</span>
+        <h2 id="dialogTitle"></h2>
+        <div class="status-line" id="statusLine"></div>
+      </div>
+      <button class="close" id="closeDialog" type="button" aria-label="Close User details">×</button>
+    </header>
+    <div class="dialog-scroll">
+      <section aria-labelledby="observationsTitle">
+        <div class="section-title"><h3 id="observationsTitle">Current observations</h3><span id="snapshotStatus"></span></div>
+        <dl class="observations" id="observations"></dl>
+        <div class="presence" id="presence"></div>
+      </section>
+      <section class="profiles-section" aria-labelledby="profilesTitle">
+        <div class="section-title"><h3 id="profilesTitle">Connection profiles</h3><span id="profileCount"></span></div>
+        <div class="profiles" id="profiles"></div>
+      </section>
+    </div>
+    <footer class="dialog-footer"><span>Read-only</span><span>Credentials shown in full</span><span>Collected at 14:32:05</span><span>QR marks are layout placeholders</span></footer>
+  </section>
+</div>
+
+<script>
+const users = [
+  {
+    email: "alice@example.com",
+    online: true,
+    gone: false,
+    protocol: "VLESS",
+    security: "XTLS-Reality",
+    up: "12.4 GB",
+    down: "148.2 GB",
+    speedUp: "512 KB/s",
+    speedDown: "3.8 MB/s",
+    lastSeen: "now",
+    ips: [{ address: "203.0.113.10", country: "NL", flag: "🇳🇱" }],
+    profiles: [
+      {
+        label: "Primary · Reality",
+        tag: "vless-reality-main",
+        clientId: "1d37a118-4f1b-4dc0-9e3c-3426b07518df",
+        flow: "xtls-rprx-vision",
+        endpoint: "edge.example.com:443",
+        transport: "RAW",
+        security: "Reality",
+        uri: "vless://1d37a118-4f1b-4dc0-9e3c-3426b07518df@edge.example.com:443?type=tcp&encryption=none&flow=xtls-rprx-vision&security=reality&fp=chrome&sni=www.microsoft.com&pbk=2W3SFl5TqQ0sJYpXNEe7Hhk5LQvDldIE9Q0qzybt6iQ&sid=6ba85179e30d4fc2#alice%40example.com%20%C2%B7%20Primary"
+      },
+      {
+        label: "Fallback · gRPC",
+        tag: "vless-grpc-fallback",
+        clientId: "75b624d4-00b4-4612-bb7d-8a702e59fc85",
+        flow: "none",
+        endpoint: "edge.example.com:8443",
+        transport: "gRPC",
+        security: "TLS",
+        uri: "vless://75b624d4-00b4-4612-bb7d-8a702e59fc85@edge.example.com:8443?type=grpc&encryption=none&security=tls&fp=chrome&sni=edge.example.com&serviceName=xray-fallback&mode=gun#alice%40example.com%20%C2%B7%20Fallback"
+      }
+    ]
+  },
+  {
+    email: "bob@example.com",
+    online: true,
+    gone: false,
+    protocol: "VLESS",
+    security: "TLS",
+    up: "3.1 GB",
+    down: "41.7 GB",
+    speedUp: "48 KB/s",
+    speedDown: "1.1 MB/s",
+    lastSeen: "now",
+    ips: [
+      { address: "198.51.100.7", country: "DE", flag: "🇩🇪" },
+      { address: "198.51.100.8", country: "DE", flag: "🇩🇪" }
+    ],
+    profiles: [
+      {
+        label: "WebSocket · TLS",
+        tag: "vless-websocket",
+        clientId: "40b0868a-6c7a-49aa-a2e8-9fcfbb8f671c",
+        flow: "none",
+        endpoint: "proxy.example.com:443",
+        transport: "WebSocket",
+        security: "TLS",
+        uri: "vless://40b0868a-6c7a-49aa-a2e8-9fcfbb8f671c@proxy.example.com:443?type=ws&encryption=none&security=tls&fp=chrome&sni=proxy.example.com&path=%2Fxray&host=proxy.example.com#bob%40example.com"
+      }
+    ]
+  },
+  {
+    email: "carol@example.com",
+    online: false,
+    gone: true,
+    protocol: "VLESS",
+    security: "XTLS-Reality",
+    up: "890 MB",
+    down: "9.3 GB",
+    speedUp: "0 B/s",
+    speedDown: "0 B/s",
+    lastSeen: "47m ago",
+    ips: [],
+    profiles: []
+  }
+];
+
+const userRows = document.getElementById("userRows");
+const layer = document.getElementById("dialogLayer");
+const closeButton = document.getElementById("closeDialog");
+let previouslyFocused = null;
+
+function escapeHtml(value) {
+  return String(value)
+    .replaceAll("&", "&amp;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;")
+    .replaceAll('"', "&quot;");
+}
+
+function renderRows() {
+  userRows.innerHTML = users.map((user) => `
+    <tr class="user-row ${user.gone ? "gone-row" : ""}" tabindex="0" data-email="${escapeHtml(user.email)}" aria-label="View ${escapeHtml(user.email)} details">
+      <td><span class="presence-dot ${user.online ? "online" : ""}"></span></td>
+      <td class="user-cell">${escapeHtml(user.email)}${user.gone ? ' <span class="muted">· gone</span>' : ""}</td>
+      <td><span class="muted">${escapeHtml(user.protocol)} ·</span> ${escapeHtml(user.security)}</td>
+      <td class="wide-hide">↑ ${escapeHtml(user.up)}<br>↓ ${escapeHtml(user.down)}</td>
+      <td class="wide-hide">${user.ips.length ? user.ips.map((ip) => `${ip.flag} ${escapeHtml(ip.address)}`).join("<br>") : '<span class="muted">—</span>'}</td>
+      <td class="row-action">View ›</td>
+    </tr>`).join("");
+}
+
+function observation(label, value, extraClass = "") {
+  return `<div class="observation"><dt>${escapeHtml(label)}</dt><dd class="${extraClass}">${value}</dd></div>`;
+}
+
+function profileMarkup(profile, index) {
+  return `
+    <article class="profile">
+      <header class="profile-header">
+        <span class="profile-number">${index + 1}</span>
+        <h4>${escapeHtml(profile.label)}</h4>
+        <code class="profile-tag">${escapeHtml(profile.tag)}</code>
+      </header>
+      <div class="profile-body">
+        <div class="field-grid">
+          <div class="field">
+            <div class="field-label"><span>Client ID</span><button class="copy" type="button" data-copy="${escapeHtml(profile.clientId)}">Copy</button></div>
+            <code class="field-value">${escapeHtml(profile.clientId)}</code>
+          </div>
+          <div class="field"><div class="field-label"><span>Flow</span></div><code class="field-value">${escapeHtml(profile.flow)}</code></div>
+          <div class="field"><div class="field-label"><span>Public endpoint</span></div><code class="field-value">${escapeHtml(profile.endpoint)}</code></div>
+          <div class="field"><div class="field-label"><span>Transport · security</span></div><code class="field-value">${escapeHtml(profile.transport)} · ${escapeHtml(profile.security)}</code></div>
+        </div>
+        <div class="qr-wrap"><svg class="qr" data-qr="${escapeHtml(profile.uri)}" role="img" aria-label="QR code layout placeholder"></svg><small>Scan to connect</small></div>
+      </div>
+      <div class="uri-row">
+        <div class="field-label"><span>Connection string</span><button class="copy" type="button" data-copy="${escapeHtml(profile.uri)}">Copy</button></div>
+        <code class="uri-value">${escapeHtml(profile.uri)}</code>
+      </div>
+    </article>`;
+}
+
+function openUser(email) {
+  const user = users.find((candidate) => candidate.email === email);
+  if (!user) return;
+  previouslyFocused = document.activeElement;
+  document.getElementById("dialogTitle").textContent = user.email;
+  document.getElementById("statusLine").innerHTML = `
+    <span class="status-badge ${user.gone ? "gone" : user.online ? "online" : ""}"><span class="presence-dot ${user.online ? "online" : ""}"></span>${user.gone ? "Gone User" : user.online ? "Online" : "Offline"}</span>
+    <span class="status-badge">${escapeHtml(user.protocol)} · ${escapeHtml(user.security)}</span>`;
+  document.getElementById("snapshotStatus").textContent = user.gone ? "historical observations" : "live snapshot";
+  document.getElementById("observations").innerHTML = [
+    observation("Traffic up", `<span class="up">↑ ${escapeHtml(user.up)}</span>`),
+    observation("Traffic down", `<span class="down">↓ ${escapeHtml(user.down)}</span>`),
+    observation("Speed now", `<span class="up">↑ ${escapeHtml(user.speedUp)}</span><span class="down">↓ ${escapeHtml(user.speedDown)}</span>`, "two-lines"),
+    observation("Last seen", escapeHtml(user.lastSeen))
+  ].join("");
+  document.getElementById("presence").innerHTML = user.ips.length
+    ? `<strong>Online IPs</strong>${user.ips.map((ip) => `<span class="ip-chip">${ip.flag} ${escapeHtml(ip.address)} · ${escapeHtml(ip.country)}</span>`).join("")}`
+    : `<strong>Online IPs</strong><span class="muted">None</span>`;
+  document.getElementById("profileCount").textContent = user.profiles.length === 1 ? "1 matching inbound" : `${user.profiles.length} matching inbounds`;
+  document.getElementById("profiles").innerHTML = user.profiles.length
+    ? user.profiles.map(profileMarkup).join("")
+    : `<div class="empty-profiles"><strong>No connection profiles</strong><br><span>Gone Users keep Traffic and presence history, but xform no longer has current credentials to export.</span></div>`;
+  layer.hidden = false;
+  document.body.style.overflow = "hidden";
+  drawQrs();
+  closeButton.focus();
+}
+
+function closeDialog() {
+  layer.hidden = true;
+  document.body.style.overflow = "";
+  if (previouslyFocused) previouslyFocused.focus();
+}
+
+function hashSeed(text) {
+  let seed = 2166136261;
+  for (let i = 0; i < text.length; i += 1) {
+    seed ^= text.charCodeAt(i);
+    seed = Math.imul(seed, 16777619);
+  }
+  return seed >>> 0;
+}
+
+function drawQr(svg) {
+  const size = 29;
+  const ns = "http://www.w3.org/2000/svg";
+  const seedText = svg.dataset.qr || "";
+  let seed = hashSeed(seedText);
+  svg.setAttribute("viewBox", `-3 -3 ${size + 6} ${size + 6}`);
+  svg.innerHTML = `<rect x="-3" y="-3" width="${size + 6}" height="${size + 6}" fill="#fff"/>`;
+  const reserved = new Set();
+  const key = (x, y) => `${x},${y}`;
+  function module(x, y) {
+    const rect = document.createElementNS(ns, "rect");
+    rect.setAttribute("x", x);
+    rect.setAttribute("y", y);
+    rect.setAttribute("width", 1);
+    rect.setAttribute("height", 1);
+    rect.setAttribute("fill", "#0b0f14");
+    svg.append(rect);
+  }
+  function finder(originX, originY) {
+    for (let y = -1; y <= 7; y += 1) for (let x = -1; x <= 7; x += 1) reserved.add(key(originX + x, originY + y));
+    for (let y = 0; y < 7; y += 1) for (let x = 0; x < 7; x += 1) {
+      const edge = x === 0 || y === 0 || x === 6 || y === 6;
+      const center = x >= 2 && x <= 4 && y >= 2 && y <= 4;
+      if (edge || center) module(originX + x, originY + y);
+    }
+  }
+  finder(0, 0); finder(size - 7, 0); finder(0, size - 7);
+  for (let y = 0; y < size; y += 1) for (let x = 0; x < size; x += 1) {
+    if (reserved.has(key(x, y))) continue;
+    seed = (Math.imul(seed, 1664525) + 1013904223) >>> 0;
+    if ((seed >>> 30) > 1) module(x, y);
+  }
+  svg.style.imageRendering = "pixelated";
+}
+
+function drawQrs() {
+  document.querySelectorAll("svg[data-qr]").forEach(drawQr);
+}
+
+async function copyValue(button) {
+  const value = button.dataset.copy || "";
+  try {
+    await navigator.clipboard.writeText(value);
+  } catch {
+    const area = document.createElement("textarea");
+    area.value = value;
+    document.body.append(area);
+    area.select();
+    document.execCommand("copy");
+    area.remove();
+  }
+  const original = button.textContent;
+  button.textContent = "Copied";
+  window.setTimeout(() => { button.textContent = original; }, 1200);
+}
+
+userRows.addEventListener("click", (event) => {
+  const row = event.target.closest(".user-row");
+  if (row) openUser(row.dataset.email);
+});
+userRows.addEventListener("keydown", (event) => {
+  const row = event.target.closest(".user-row");
+  if (row && (event.key === "Enter" || event.key === " ")) {
+    event.preventDefault();
+    openUser(row.dataset.email);
+  }
+});
+layer.addEventListener("click", (event) => {
+  const copyButton = event.target.closest("[data-copy]");
+  if (copyButton) void copyValue(copyButton);
+  if (event.target === layer) closeDialog();
+});
+closeButton.addEventListener("click", closeDialog);
+document.addEventListener("keydown", (event) => {
+  if (event.key === "Escape" && !layer.hidden) closeDialog();
+});
+
+renderRows();
+openUser("alice@example.com");
+</script>
+</body>
+</html>
