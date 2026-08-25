@@ -1,4 +1,4 @@
-Context: [Wayfinder ticket #20, "Determine bounded journald access"](https://github.com/yet-an-other/xform/issues/20)
+Context: [Determine bounded journald access](https://github.com/yet-an-other/xform/issues/20)
 
 # Bounded journald access
 
