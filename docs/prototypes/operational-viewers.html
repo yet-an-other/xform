@@ -45,12 +45,11 @@
   }
   .shell { width: min(1180px, calc(100% - 40px)); margin: 0 auto; padding: 32px 0 48px; }
   .app-header { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-bottom: 24px; }
-  .wordmark { margin: 0; font-size: 18px; letter-spacing: -0.02em; }
-  .service-name { display: inline-flex; align-items: center; gap: 7px; font-size: 14px; font-weight: 750; letter-spacing: -0.01em; }
+  .wordmark { margin: 0; font-size: 18px; font-weight: 700; letter-spacing: -0.02em; }
+  .service-name { display: inline-flex; align-items: center; gap: 4px; font-size: 18px; font-weight: 700; letter-spacing: -0.02em; }
   .running-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--primary); box-shadow: 0 0 0 3px rgba(85, 214, 168, 0.1); }
   .header-meta { color: var(--muted); font: 12px var(--mono); white-space: nowrap; }
   .header-separator { color: #526070; font-size: 11px; }
-  .header-divider { margin: 0 2px; color: var(--border-strong); font: 14px var(--mono); }
   .spacer { flex: 1 1 18px; }
   .header-button, .secondary-button {
     display: inline-flex; align-items: center; justify-content: center; gap: 7px; min-height: 32px;
@@ -148,8 +147,7 @@
     <button class="header-button viewer-button" type="button" data-view="panel-logs" aria-label="View Panel logs" title="Panel logs">
       <svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 5h16M4 12h16M4 19h10"></path></svg>
     </button>
-    <span class="header-divider" aria-hidden="true">/</span>
-    <span class="service-name">xray<span class="running-dot" role="img" aria-label="running"></span></span>
+    <span class="service-name"><span class="running-dot" role="img" aria-label="running"></span>xray</span>
     <span class="header-meta">v26.4.13</span>
     <span class="header-separator" aria-hidden="true">·</span>
     <span class="header-meta">up 18d 7h</span>
