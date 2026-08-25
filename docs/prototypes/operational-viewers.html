@@ -44,41 +44,23 @@
     outline-offset: 2px;
   }
   .shell { width: min(1180px, calc(100% - 40px)); margin: 0 auto; padding: 32px 0 48px; }
-  .app-header { position: relative; display: flex; flex-wrap: wrap; align-items: center; gap: 10px; margin-bottom: 24px; }
+  .app-header { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-bottom: 24px; }
   .wordmark { margin: 0; font-size: 18px; letter-spacing: -0.02em; }
-  .version, .auto-refresh { color: var(--muted); font: 12px var(--mono); }
-  .spacer { flex: 1; }
-  .pill {
-    display: inline-flex; align-items: center; gap: 8px; min-height: 30px; padding: 5px 11px;
-    border: 1px solid var(--border); border-radius: 999px; background: rgba(18, 25, 34, 0.72);
-    font-size: 11px; font-weight: 750; letter-spacing: 0.07em; text-transform: uppercase;
-  }
-  .pill .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--primary); box-shadow: 0 0 0 4px rgba(85, 214, 168, 0.1); }
+  .service-name { display: inline-flex; align-items: center; gap: 7px; font-size: 14px; font-weight: 750; letter-spacing: -0.01em; }
+  .running-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--primary); box-shadow: 0 0 0 3px rgba(85, 214, 168, 0.1); }
+  .header-meta { color: var(--muted); font: 12px var(--mono); white-space: nowrap; }
+  .header-separator { color: #526070; font-size: 11px; }
+  .header-divider { margin: 0 2px; color: var(--border-strong); font: 14px var(--mono); }
+  .spacer { flex: 1 1 18px; }
   .header-button, .secondary-button {
     display: inline-flex; align-items: center; justify-content: center; gap: 7px; min-height: 32px;
     border: 1px solid var(--border); border-radius: 8px; background: transparent; color: var(--muted);
     padding: 7px 11px; cursor: pointer; font-size: 11px; font-weight: 750; letter-spacing: 0.07em; text-transform: uppercase;
   }
   .header-button:hover, .secondary-button:hover { border-color: var(--border-strong); color: var(--foreground); }
-  .operations-button { width: 34px; padding: 0; color: var(--foreground); }
-  .operations-button[aria-expanded="true"] { border-color: rgba(85, 214, 168, 0.55); background: var(--accent); color: var(--primary); }
+  .viewer-button { width: 34px; height: 32px; min-height: 32px; padding: 0; color: var(--foreground); }
+  .viewer-button:hover { border-color: var(--primary); background: var(--accent); color: var(--primary); }
   .icon { width: 17px; height: 17px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
-
-  .operations-menu {
-    position: absolute; z-index: 10; top: calc(100% + 7px); right: 74px; width: 250px; padding: 6px;
-    border: 1px solid var(--border-strong); border-radius: 11px; background: #151e28; box-shadow: 0 18px 50px rgba(0, 0, 0, 0.48);
-  }
-  .operations-menu[hidden] { display: none; }
-  .menu-label { padding: 8px 10px 6px; color: var(--muted); font-size: 9px; font-weight: 800; letter-spacing: 0.13em; text-transform: uppercase; }
-  .menu-item {
-    display: grid; grid-template-columns: 29px minmax(0, 1fr); gap: 10px; width: 100%; padding: 9px 10px;
-    border: 0; border-radius: 8px; background: transparent; color: var(--foreground); cursor: pointer; text-align: left;
-  }
-  .menu-item:hover, .menu-item:focus-visible { background: var(--accent); }
-  .menu-item .menu-icon { display: grid; place-items: center; width: 29px; height: 29px; border: 1px solid var(--border); border-radius: 7px; color: var(--primary); }
-  .menu-item strong { display: block; font-size: 12px; }
-  .menu-item small { display: block; margin-top: 2px; color: var(--muted); font-size: 10.5px; }
-  .menu-rule { height: 1px; margin: 5px 8px; background: var(--border); }
 
   .metrics { display: grid; grid-template-columns: repeat(4, 1fr); gap: 16px; }
   .metric { min-height: 138px; padding: 18px; border: 1px solid var(--border); border-radius: 12px; background: rgba(23, 33, 45, 0.84); }
@@ -136,15 +118,13 @@
   @media (max-width: 820px) {
     .metrics { grid-template-columns: repeat(2, 1fr); }
     .wide-hide { display: none; }
-    .operations-menu { right: 74px; }
     .dialog-actions .label { display: none; }
     .action-button { width: 34px; padding: 0; }
   }
   @media (max-width: 560px) {
     .shell { width: calc(100% - 28px); padding-top: 20px; }
     .metrics { grid-template-columns: 1fr; }
-    .auto-refresh { order: 2; width: 100%; }
-    .operations-menu { top: calc(100% - 27px); right: 42px; width: min(250px, calc(100vw - 28px)); }
+    .spacer { flex-basis: 100%; height: 0; }
     .dialog-layer { padding: 0; place-items: stretch; }
     .dialog { width: 100vw; min-width: 0; max-width: 100vw; max-height: 100vh; min-height: 100vh; border: 0; border-radius: 0; }
     .dialog-header { position: relative; min-height: 108px; padding: 15px 104px 13px 14px; }
@@ -162,31 +142,27 @@
 <main class="shell" id="dashboard">
   <header class="app-header">
     <h1 class="wordmark">xform</h1>
-    <span class="version">v0.10.0</span>
-    <span class="pill"><span class="dot"></span>xray running</span>
-    <span class="pill">v26.4.13</span>
-    <span class="pill">up 18d 7h</span>
-    <span class="spacer"></span>
-    <span class="auto-refresh">refreshing every 5s · updated 14:32</span>
-    <button class="header-button operations-button" id="menuButton" type="button" aria-label="Open operational viewers" aria-haspopup="menu" aria-expanded="false" aria-controls="operationsMenu" title="Operational viewers">
-      <svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 6h16M4 12h16M4 18h16"></path><circle cx="9" cy="6" r="1.8" fill="currentColor" stroke="none"></circle><circle cx="15" cy="12" r="1.8" fill="currentColor" stroke="none"></circle><circle cx="11" cy="18" r="1.8" fill="currentColor" stroke="none"></circle></svg>
+    <span class="header-meta">v0.10.0</span>
+    <span class="header-separator" aria-hidden="true">·</span>
+    <span class="header-meta">up 6d 3h</span>
+    <button class="header-button viewer-button" type="button" data-view="panel-logs" aria-label="View Panel logs" title="Panel logs">
+      <svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 5h16M4 12h16M4 19h10"></path></svg>
     </button>
-    <div class="operations-menu" id="operationsMenu" role="menu" aria-label="Operational viewers" hidden>
-      <div class="menu-label">Operational viewers</div>
-      <button class="menu-item" type="button" role="menuitem" data-view="xray-logs">
-        <span class="menu-icon"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 5h16M4 12h16M4 19h10"></path></svg></span>
-        <span><strong>xray logs</strong><small>Latest 500 journal entries</small></span>
-      </button>
-      <button class="menu-item" type="button" role="menuitem" data-view="panel-logs">
-        <span class="menu-icon"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 5h16M4 12h16M4 19h10"></path></svg></span>
-        <span><strong>Panel logs</strong><small>Latest 500 journal entries</small></span>
-      </button>
-      <div class="menu-rule"></div>
-      <button class="menu-item" type="button" role="menuitem" data-view="config">
-        <span class="menu-icon"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M7 3h7l4 4v14H7zM14 3v5h4M10 13h5M10 17h5"></path></svg></span>
-        <span><strong>xray config</strong><small>Exact configured file text</small></span>
-      </button>
-    </div>
+    <span class="header-divider" aria-hidden="true">/</span>
+    <span class="service-name">xray<span class="running-dot" role="img" aria-label="running"></span></span>
+    <span class="header-meta">v26.4.13</span>
+    <span class="header-separator" aria-hidden="true">·</span>
+    <span class="header-meta">up 18d 7h</span>
+    <button class="header-button viewer-button" type="button" data-view="xray-logs" aria-label="View xray logs" title="xray logs">
+      <svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 5h16M4 12h16M4 19h10"></path></svg>
+    </button>
+    <button class="header-button viewer-button" type="button" data-view="config" aria-label="View xray config" title="xray config">
+      <svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M7 3h7l4 4v14H7zM14 3v5h4M10 13h5M10 17h5"></path></svg>
+    </button>
+    <span class="spacer"></span>
+    <span class="header-meta">refresh 5s</span>
+    <span class="header-separator" aria-hidden="true">·</span>
+    <span class="header-meta">updated 14:32</span>
     <button class="header-button" type="button">Log out</button>
   </header>
 
@@ -215,7 +191,7 @@
       </tbody>
     </table>
   </section>
-  <p class="prototype-note">Draft operational viewers for <a href="https://github.com/yet-an-other/xform/issues/22">Prototype the operational viewers</a>. Use the compact header icon to open a viewer.</p>
+  <p class="prototype-note">Draft operational viewers for <a href="https://github.com/yet-an-other/xform/issues/22">Prototype the operational viewers</a>. Use the direct header buttons for Panel logs, xray logs, and xray config.</p>
 </main>
 
 <div class="dialog-layer" id="dialogLayer" hidden>
@@ -385,9 +361,7 @@
 }</textarea>
 
 <script>
-const menuButton = document.getElementById("menuButton");
-const menu = document.getElementById("operationsMenu");
-const menuItems = [...menu.querySelectorAll('[role="menuitem"]')];
+const viewerButtons = [...document.querySelectorAll(".viewer-button")];
 const layer = document.getElementById("dialogLayer");
 const dialog = layer.querySelector('[role="dialog"]');
 const closeButton = document.getElementById("closeDialog");
@@ -449,12 +423,6 @@ function logMarkup(templates) {
     </article>`).join("")}</div>`;
 }
 
-function setMenu(open, focusFirst = false) {
-  menu.hidden = !open;
-  menuButton.setAttribute("aria-expanded", String(open));
-  if (open && focusFirst) menuItems[0].focus();
-}
-
 function configureDialog(view) {
   activeView = view;
   refreshSequence = 0;
@@ -491,7 +459,6 @@ function configureDialog(view) {
 
 function openDialog(view) {
   previouslyFocused = document.activeElement;
-  setMenu(false);
   configureDialog(view);
   layer.hidden = false;
   dashboard.inert = true;
@@ -511,19 +478,7 @@ function focusableInDialog() {
   return [...dialog.querySelectorAll('button:not([hidden]), [href], [tabindex]:not([tabindex="-1"])')].filter((element) => !element.disabled);
 }
 
-menuButton.addEventListener("click", () => setMenu(menu.hidden));
-menuItems.forEach((item) => item.addEventListener("click", () => openDialog(item.dataset.view)));
-menu.addEventListener("keydown", (event) => {
-  const index = menuItems.indexOf(document.activeElement);
-  if (event.key === "ArrowDown" || event.key === "ArrowUp") {
-    event.preventDefault();
-    const step = event.key === "ArrowDown" ? 1 : -1;
-    menuItems[(index + step + menuItems.length) % menuItems.length].focus();
-  } else if (event.key === "Home" || event.key === "End") {
-    event.preventDefault();
-    menuItems[event.key === "Home" ? 0 : menuItems.length - 1].focus();
-  }
-});
+viewerButtons.forEach((button) => button.addEventListener("click", () => openDialog(button.dataset.view)));
 closeButton.addEventListener("click", () => closeDialog());
 layer.addEventListener("click", (event) => { if (event.target === layer) closeDialog(); });
 refreshButton.addEventListener("click", () => {
@@ -547,14 +502,8 @@ copyButton.addEventListener("click", async () => {
   label.textContent = "Copied";
   window.setTimeout(() => { label.textContent = "Copy"; }, 1200);
 });
-document.addEventListener("click", (event) => {
-  if (!menu.hidden && !menu.contains(event.target) && event.target !== menuButton && !menuButton.contains(event.target)) setMenu(false);
-});
 document.addEventListener("keydown", (event) => {
-  if (event.key === "Escape") {
-    if (!layer.hidden) closeDialog();
-    else if (!menu.hidden) { setMenu(false); menuButton.focus(); }
-  }
+  if (event.key === "Escape" && !layer.hidden) closeDialog();
   if (!layer.hidden && event.key === "Tab") {
     const items = focusableInDialog();
     const first = items[0];
@@ -563,13 +512,9 @@ document.addEventListener("keydown", (event) => {
     else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first.focus(); }
   }
 });
-menuButton.addEventListener("keydown", (event) => {
-  if (event.key === "ArrowDown") { event.preventDefault(); setMenu(true, true); }
-});
 
-const requestedState = new URLSearchParams(window.location.search).get("state") || "menu";
+const requestedState = new URLSearchParams(window.location.search).get("state") || "closed-header";
 if (["xray-logs", "panel-logs", "config"].includes(requestedState)) openDialog(requestedState);
-else if (requestedState !== "closed") setMenu(true);
 </script>
 </body>
 </html>
