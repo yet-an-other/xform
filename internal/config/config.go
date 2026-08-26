@@ -1,5 +1,5 @@
 // Package config loads xform's runtime configuration from XFORM_* environment
-// variables, falling back to the SPEC.md §7 defaults.
+// variables, falling back to the documented defaults.
 package config
 
 import (
@@ -7,30 +7,33 @@ import (
 	"os"
 )
 
-// Config is the panel's runtime configuration. The xray settings are consumed
-// by later slices (status, collector).
+// Config is the Panel's runtime configuration.
 type Config struct {
-	ListenAddress  string // XFORM_LISTEN — panel listen address
-	Password       string // XFORM_PASSWORD — login password (required)
-	XrayAPIAddress string // XFORM_XRAY_API — xray gRPC StatsService address
-	XrayConfigPath string // XFORM_XRAY_CONFIG — xray config file (user roster)
-	DBPath         string // XFORM_DB — SQLite database file
-	XrayUnitName   string // XFORM_XRAY_UNIT — systemd unit of the xray service
-	GeoIPPath      string // XFORM_GEOIP — geoip.dat for country flags; empty = search well-known paths
+	ListenAddress         string // XFORM_LISTEN; Panel listen address
+	Password              string // XFORM_PASSWORD; login password, required
+	XrayAPIAddress        string // XFORM_XRAY_API; xray gRPC StatsService address
+	XrayConfigPath        string // XFORM_XRAY_CONFIG; xray config file for the Roster
+	ConnectionsConfigPath string // XFORM_CONNECTIONS_CONFIG; advertised connection settings, optional
+	DBPath                string // XFORM_DB; SQLite database file
+	XrayUnitName          string // XFORM_XRAY_UNIT; systemd unit of the xray service
+	JournalctlPath        string // XFORM_JOURNALCTL; journalctl executable
+	GeoIPPath             string // XFORM_GEOIP; geoip.dat, empty searches well-known paths
 }
 
-// Load returns the SPEC.md §7 defaults, overridden by any XFORM_* environment
-// variable that is set to a non-empty value. XFORM_PASSWORD is required — the
-// panel refuses to start without it.
+// Load returns the documented defaults, overridden by any XFORM_* environment
+// variable set to a non-empty value. XFORM_PASSWORD is required; the Panel
+// refuses to start without it.
 func Load() (Config, error) {
 	cfg := Config{
-		ListenAddress:  env("XFORM_LISTEN", "127.0.0.1:9090"),
-		Password:       env("XFORM_PASSWORD", ""),
-		XrayAPIAddress: env("XFORM_XRAY_API", "127.0.0.1:8080"),
-		XrayConfigPath: env("XFORM_XRAY_CONFIG", "/usr/local/etc/xray/config.json"),
-		DBPath:         env("XFORM_DB", "/var/lib/xform/xform.db"),
-		XrayUnitName:   env("XFORM_XRAY_UNIT", "xray.service"),
-		GeoIPPath:      env("XFORM_GEOIP", ""),
+		ListenAddress:         env("XFORM_LISTEN", "127.0.0.1:9090"),
+		Password:              env("XFORM_PASSWORD", ""),
+		XrayAPIAddress:        env("XFORM_XRAY_API", "127.0.0.1:8080"),
+		XrayConfigPath:        env("XFORM_XRAY_CONFIG", "/usr/local/etc/xray/config.json"),
+		ConnectionsConfigPath: env("XFORM_CONNECTIONS_CONFIG", ""),
+		DBPath:                env("XFORM_DB", "/var/lib/xform/xform.db"),
+		XrayUnitName:          env("XFORM_XRAY_UNIT", "xray.service"),
+		JournalctlPath:        env("XFORM_JOURNALCTL", "/usr/bin/journalctl"),
+		GeoIPPath:             env("XFORM_GEOIP", ""),
 	}
 	if cfg.Password == "" {
 		return Config{}, errors.New("XFORM_PASSWORD is required (SPEC.md §7)")

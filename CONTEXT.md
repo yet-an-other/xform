@@ -30,6 +30,18 @@ _Avoid_: home page, main screen
 A client of the xray proxy, identified by an email address. The email IS the identity — renaming an email creates a new user, it does not rename the old one.
 _Avoid_: client, account, customer, subscriber
 
+**Client ID**:
+An xray credential used by a User to connect. It is distinct from the User's email identity.
+_Avoid_: User ID, ID (alone), UUID (alone)
+
+**Connection profile**:
+A client-ready VLESS connection for one User through one matching xray inbound. The User's email and the inbound's tag identify it.
+_Avoid_: connection, link, share link, export
+
+**Advertised connection settings**:
+The public endpoint and client-side transport and security values needed for a Connection profile. They describe how a User reaches xray from outside the Host and may differ from the inbound's local settings.
+_Avoid_: overrides, profile config, connection metadata
+
 **Gone user**:
 A user who no longer exists in xray's configuration but whose history the panel retains. Gone users are hidden by default, never erased.
 _Avoid_: deleted user, removed user, inactive user
@@ -37,6 +49,14 @@ _Avoid_: deleted user, removed user, inactive user
 **Roster**:
 The set of users the xray config currently defines, parsed from the config file and re-read when it changes. The roster supplies the protocol · security labels and decides who is — or becomes — a gone user.
 _Avoid_: config users, client list
+
+**Config snapshot**:
+The exact text of the configured xray file read when requested. It is distinct from the parsed Roster.
+_Avoid_: parsed config, formatted config, config export
+
+**Log snapshot**:
+The latest bounded set of journal entries for the Panel or xray, collected when requested. It is a point-in-time view, never a live stream.
+_Avoid_: live logs, log stream, log tail
 
 **Release**:
 A published, versioned build of the panel, cut from a git tag. The updater consumes releases, never arbitrary commits.
@@ -49,6 +69,10 @@ _Avoid_: auto-update, agent, cron job (that's its schedule, not the thing)
 **Session**:
 A successful login's continuing right to use the API, carried by the `xform_session` cookie. It expires 24h after last use and never survives a panel restart.
 _Avoid_: login (that's the act that starts one), token, cookie (those are its carrier)
+
+**Panel uptime**:
+The elapsed time since the current Panel process started. It resets whenever the Panel restarts.
+_Avoid_: service uptime, host uptime, xray uptime
 
 ### Metrics
 
