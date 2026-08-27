@@ -122,7 +122,7 @@ function UsersTable({
             <TableHead>User</TableHead>
             <TableHead className="w-48">Protocol</TableHead>
             <TableHead className="w-28 pl-5">Traffic</TableHead>
-            <TableHead className="w-52 text-right">Speed now</TableHead>
+            <TableHead className="w-52">Speed now</TableHead>
             <TableHead className="w-40">Online IPs</TableHead>
             <TableHead className="w-24 text-right">Last seen</TableHead>
             <TableHead className="w-14 pr-5" aria-label="Details" />
@@ -171,13 +171,13 @@ function UsersTable({
                     <span>↓ {formatBytes(user.down_bytes_total)}</span>
                   </div>
                 </TableCell>
-                <TableCell className="py-1.5 text-right font-mono text-xs">
+                <TableCell className="py-1.5 font-mono text-xs">
                   {snapshot.stale ? (
                     <span className="text-muted-foreground">stale</span>
                   ) : user.speed_up_bps > 0 || user.speed_down_bps > 0 ? (
-                    // Uplink above downlink, mirroring the Traffic column;
-                    // right-aligned under the right-aligned header.
-                    <div className="flex flex-col items-end">
+                    // Uplink above downlink, mirroring the Traffic column
+                    // and left-aligned like every other column.
+                    <div className="flex flex-col">
                       <span>↑ {formatSpeed(user.speed_up_bps)}</span>
                       <span>↓ {formatSpeed(user.speed_down_bps)}</span>
                     </div>
