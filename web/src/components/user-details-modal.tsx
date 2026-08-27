@@ -42,11 +42,12 @@ export function UserDetailsModal({ email, snapshot, open, opener, onClose }: Use
           {user ? (
             <div className="mt-2 flex flex-wrap items-center gap-2">
               {user.gone ? (
-                <Badge className="border-warning/35 text-warning gap-2 rounded-full border px-2 py-1 text-[11px] font-bold">
+                <Badge variant="outline" className="border-warning/35 text-warning gap-2 rounded-full border px-2 py-1 text-[11px] font-bold">
                   Gone User
                 </Badge>
               ) : (
                 <Badge
+                  variant="outline"
                   className={cn(
                     "gap-2 rounded-full border px-2 py-1 text-[11px] font-bold",
                     user.online
@@ -65,7 +66,7 @@ export function UserDetailsModal({ email, snapshot, open, opener, onClose }: Use
                 </Badge>
               )}
               {user.protocol !== null ? (
-                <Badge className="text-muted-foreground rounded-full border px-2 py-1 text-[11px] font-bold">
+                <Badge variant="outline" className="text-muted-foreground rounded-full border px-2 py-1 text-[11px] font-bold">
                   {user.protocol} · {user.security}
                 </Badge>
               ) : null}
@@ -94,12 +95,17 @@ export function UserDetailsModal({ email, snapshot, open, opener, onClose }: Use
                     : "live snapshot"}
               </span>
             </div>
-            <dl className="grid grid-cols-2 gap-2.5 lg:grid-cols-4">
-              <Observation label="Traffic up">
-                <span className="text-primary">↑ {formatBytes(user.up_bytes_total)}</span>
-              </Observation>
-              <Observation label="Traffic down">
-                <span className="text-info">↓ {formatBytes(user.down_bytes_total)}</span>
+            <dl className="grid grid-cols-2 gap-2.5 lg:grid-cols-3">
+              <Observation label="Traffic">
+                {/* Uplink above downlink, mirroring the table's Traffic column. */}
+                <span className="grid gap-0.5">
+                  <span className="text-primary whitespace-nowrap">
+                    ↑ {formatBytes(user.up_bytes_total)}
+                  </span>
+                  <span className="text-info whitespace-nowrap">
+                    ↓ {formatBytes(user.down_bytes_total)}
+                  </span>
+                </span>
               </Observation>
               <Observation label="Speed now">
                 {snapshot?.stale ? (
