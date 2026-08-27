@@ -223,7 +223,9 @@ describe("header", () => {
     render(<Dashboard onUnauthenticated={() => {}} />);
 
     const banner = await screen.findByRole("banner");
-    const dot = within(banner).getByRole("img", { name: "running" });
+    // The banner renders before the xray status arrives — await the content,
+    // not just the container, or the assertion races the xray fetch.
+    const dot = await within(banner).findByRole("img", { name: "running" });
     const name = within(banner).getByText("xray");
     // The status indicator sits immediately before the service name: it is
     // the name span's first child.
@@ -238,8 +240,9 @@ describe("header", () => {
     render(<Dashboard onUnauthenticated={() => {}} />);
 
     const banner = await screen.findByRole("banner");
+    // Same progressive-fill race: the updated timestamp needs fetched data.
     expect(
-      within(banner).getByText(/refreshing every 5s · updated \d{2}:\d{2}:\d{2}/),
+      await within(banner).findByText(/refreshing every 5s · updated \d{2}:\d{2}:\d{2}/),
     ).toBeInTheDocument();
     expect(within(banner).getByRole("button", { name: /log out/i })).toBeInTheDocument();
   });
