@@ -11,6 +11,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/yet-an-other/xform/internal/advertisements"
 	"github.com/yet-an-other/xform/internal/api"
 	"github.com/yet-an-other/xform/internal/config"
 	"github.com/yet-an-other/xform/internal/geoip"
@@ -57,6 +58,8 @@ func main() {
 	xrayStatus.Start(shutdownSignal)
 	configWatcher := xrayconfig.NewWatcher(cfg.XrayConfigPath)
 	configWatcher.Start(shutdownSignal)
+	advertisementWatcher := advertisements.NewWatcher(cfg.ConnectionsConfigPath).WithInbounds(configWatcher)
+	advertisementWatcher.Start(shutdownSignal)
 	usersCollector := users.NewCollector(statsAPI, statsAPI, store).WithRoster(configWatcher)
 	if geo := loadGeoIP(cfg); geo != nil {
 		usersCollector.WithGeo(geo)

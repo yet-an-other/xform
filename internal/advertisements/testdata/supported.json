@@ -1,0 +1,98 @@
+{
+  "version": 1,
+  "advertisements": [
+    {
+      "inbound_tag": "tcp-reality",
+      "name": "Primary REALITY",
+      "topology": "direct",
+      "host": "reality.example.com",
+      "port": 443,
+      "transport": {"type": "tcp"},
+      "security": {
+        "type": "reality",
+        "fingerprint": "firefox",
+        "server_name": "www.microsoft.com",
+        "public_key": "public-key",
+        "short_id": "",
+        "post_quantum_verify": "verify-key",
+        "spider_x": "/news"
+      }
+    },
+    {
+      "inbound_tag": "ws-tls",
+      "topology": "fronted",
+      "host": "cdn.example.com",
+      "port": 8443,
+      "transport": {
+        "type": "ws",
+        "path": "/socket",
+        "host": "origin.example.com"
+      },
+      "security": {
+        "type": "tls",
+        "fingerprint": "chrome",
+        "server_name": "cdn.example.com",
+        "alpn": ["h2", "http/1.1"],
+        "ech": "ech-value",
+        "certificate_pins": ["pin-one", "pin-two"],
+        "verify_name": "verify.example.com"
+      }
+    },
+    {
+      "inbound_tag": "httpupgrade-tls",
+      "topology": "direct",
+      "host": "upgrade.example.com",
+      "port": 443,
+      "transport": {
+        "type": "httpupgrade",
+        "path": "/upgrade",
+        "host": "upgrade.example.com"
+      },
+      "security": {"type": "tls"}
+    },
+    {
+      "inbound_tag": "grpc-reality",
+      "topology": "direct",
+      "host": "grpc.example.com",
+      "port": 443,
+      "transport": {
+        "type": "grpc",
+        "service_name": "xform.Profile",
+        "authority": "",
+        "mode": "multi"
+      },
+      "security": {
+        "type": "reality",
+        "server_name": "grpc.example.com",
+        "public_key": "grpc-public-key",
+        "short_id": "abcd"
+      }
+    },
+    {
+      "inbound_tag": "xhttp-tls",
+      "topology": "direct",
+      "host": "xhttp.example.com",
+      "port": 443,
+      "transport": {
+        "type": "xhttp",
+        "path": "/split",
+        "host": "xhttp.example.com",
+        "mode": "stream-up",
+        "extra": {
+          "noSSEHeader": true,
+          "nested": {"count": 2},
+          "emoji": "\ud83d\ude00"
+        }
+      },
+      "security": {"type": "tls"}
+    },
+    {
+      "inbound_tag": "private-none",
+      "topology": "direct",
+      "host": "192.0.2.10",
+      "port": 8080,
+      "transport": {"type": "grpc", "service_name": "private"},
+      "security": {"type": "none"}
+    }
+  ]
+}

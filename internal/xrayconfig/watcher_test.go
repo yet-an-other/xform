@@ -129,6 +129,34 @@ func TestWatcherUpdatesViewWithoutChangingRosterVersion(t *testing.T) {
 	}
 }
 
+func TestWatcherPublishesOnlySuccessfulParsedViewChanges(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.json")
+	writeConfig(t, path, oneUserConfig)
+
+	watcher := xrayconfig.NewWatcher(path)
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	watcher.Start(ctx)
+	changes := watcher.Changes()
+
+	writeConfig(t, path, `{"inbounds": [`)
+	select {
+	case <-changes:
+		t.Fatal("received a parsed-view change for malformed config")
+	case <-time.After(600 * time.Millisecond):
+	}
+
+	writeConfig(t, path, twoUserConfig)
+	select {
+	case <-changes:
+	case <-time.After(5 * time.Second):
+		t.Fatal("timed out waiting for successful parsed-view change")
+	}
+	if got := watcher.Snapshot().View.Inbounds()[0].Users(); len(got) != 2 {
+		t.Errorf("changed view Users = %d, want 2", len(got))
+	}
+}
+
 // A broken write (a config saved half-edited) must not empty the roster:
 // the watcher keeps serving the last good parse.
 func TestWatcherKeepsLastGoodRosterOnParseError(t *testing.T) {

@@ -1,0 +1,55 @@
+{
+  "version": 1,
+  "advertisements": [
+    {
+      "inbound_tag": "healthy",
+      "topology": "direct",
+      "host": "healthy.example.com",
+      "port": 443,
+      "transport": {"type": "tcp"},
+      "security": {"type": "tls"}
+    },
+    {
+      "inbound_tag": "broken",
+      "name": "Broken",
+      "topology": "direct",
+      "host": "broken.example.com",
+      "port": 443,
+      "transport": {"type": "tcp"},
+      "security": {"type": "tls"},
+      "private_value_must_not_leak": "secret-value-must-not-leak"
+    },
+    {
+      "inbound_tag": "duplicate",
+      "topology": "direct",
+      "host": "one.example.com",
+      "port": 443,
+      "transport": {"type": "tcp"},
+      "security": {"type": "tls"}
+    },
+    {
+      "inbound_tag": "duplicate",
+      "topology": "fronted",
+      "host": "two.example.com",
+      "port": 443,
+      "transport": {"type": "ws", "path": "/ws", "host": "two.example.com", "unknown": true},
+      "security": {"type": "tls"}
+    },
+    {
+      "inbound_tag": "future-transport",
+      "topology": "direct",
+      "host": "future.example.com",
+      "port": 443,
+      "transport": {"type": "future"},
+      "security": {"type": "tls"}
+    },
+    {
+      "inbound_tag": "future-security",
+      "topology": "direct",
+      "host": "future.example.com",
+      "port": 443,
+      "transport": {"type": "tcp"},
+      "security": {"type": "future"}
+    }
+  ]
+}

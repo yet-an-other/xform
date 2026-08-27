@@ -28,15 +28,16 @@ type Watcher struct {
 	path string
 	now  func() time.Time
 
-	mu        sync.Mutex
-	roster    map[string]User
-	version   uint64
-	view      View
-	loadedAt  time.Time
-	loaded    bool
-	stale     bool
-	sourceErr *SourceError
-	lastErr   string // last logged source failure; "" when healthy
+	mu          sync.Mutex
+	roster      map[string]User
+	version     uint64
+	view        View
+	loadedAt    time.Time
+	loaded      bool
+	stale       bool
+	sourceErr   *SourceError
+	lastErr     string // last logged source failure; "" when healthy
+	subscribers []chan struct{}
 }
 
 // NewWatcher creates a Watcher for the xray config at path.
@@ -128,6 +129,16 @@ func (w *Watcher) Roster() (map[string]User, uint64) {
 	return w.roster, w.version
 }
 
+// Changes subscribes to successful parsed-view loads. Notifications are
+// buffered and coalesced when the receiver is still handling an earlier load.
+func (w *Watcher) Changes() <-chan struct{} {
+	changes := make(chan struct{}, 1)
+	w.mu.Lock()
+	w.subscribers = append(w.subscribers, changes)
+	w.mu.Unlock()
+	return changes
+}
+
 // Snapshot returns the current parsed-xray source state. Its View is
 // immutable, and its SourceError is copied so callers cannot mutate Watcher
 // state.
@@ -177,6 +188,12 @@ func (w *Watcher) reload() {
 	w.sourceErr = nil
 	recovered := w.lastErr != ""
 	w.lastErr = ""
+	for _, changes := range w.subscribers {
+		select {
+		case changes <- struct{}{}:
+		default:
+		}
+	}
 	w.mu.Unlock()
 
 	if recovered {
