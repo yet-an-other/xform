@@ -120,8 +120,8 @@ function UsersTable({
           <TableRow className="text-muted-foreground text-[0.7rem] font-bold tracking-[0.08em] uppercase hover:bg-transparent">
             <TableHead className="w-10 px-5" aria-label="Online" />
             <TableHead>User</TableHead>
-            <TableHead className="w-36">Protocol</TableHead>
-            <TableHead className="w-28">Traffic</TableHead>
+            <TableHead className="w-48">Protocol</TableHead>
+            <TableHead className="w-28 pl-5">Traffic</TableHead>
             <TableHead className="w-52 text-right">Speed now</TableHead>
             <TableHead className="w-40">Online IPs</TableHead>
             <TableHead className="w-24 text-right">Last seen</TableHead>
@@ -164,7 +164,7 @@ function UsersTable({
                     <span className="text-muted-foreground">—</span>
                   )}
                 </TableCell>
-                <TableCell className="py-1.5 font-mono text-xs">
+                <TableCell className="py-1.5 pl-5 font-mono text-xs">
                   {/* Uplink above downlink: the approved Traffic column. */}
                   <div className="flex flex-col">
                     <span>↑ {formatBytes(user.up_bytes_total)}</span>
@@ -175,12 +175,11 @@ function UsersTable({
                   {snapshot.stale ? (
                     <span className="text-muted-foreground">stale</span>
                   ) : user.speed_up_bps > 0 || user.speed_down_bps > 0 ? (
-                    // One nowrap span per direction inside a flex-wrap
-                    // container: the pair can wrap between directions but
-                    // never overflow into the next column.
-                    <div className="flex flex-wrap justify-end gap-x-1.5">
-                      <span className="whitespace-nowrap">↑ {formatSpeed(user.speed_up_bps)}</span>{" "}
-                      <span className="whitespace-nowrap">↓ {formatSpeed(user.speed_down_bps)}</span>
+                    // Uplink above downlink, mirroring the Traffic column;
+                    // right-aligned under the right-aligned header.
+                    <div className="flex flex-col items-end">
+                      <span>↑ {formatSpeed(user.speed_up_bps)}</span>
+                      <span>↓ {formatSpeed(user.speed_down_bps)}</span>
                     </div>
                   ) : (
                     <span className="text-muted-foreground">idle</span>

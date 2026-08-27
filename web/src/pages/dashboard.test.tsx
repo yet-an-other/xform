@@ -463,7 +463,9 @@ describe("users table", () => {
     // Uplink and downlink share one Traffic cell, stacked on two lines.
     const trafficCell = within(aliceRow).getByText("↑ 11.5 GiB").closest("td");
     expect(trafficCell).toHaveTextContent("↓ 138 GiB");
-    expect(aliceRow).toHaveTextContent("↑ 500 KiB/s ↓ 3.62 MiB/s"); // speed now
+    // Stacked like the Traffic column, so the directions are asserted separately.
+    expect(aliceRow).toHaveTextContent("↑ 500 KiB/s"); // speed now, uplink
+    expect(aliceRow).toHaveTextContent("↓ 3.62 MiB/s"); // speed now, downlink
     // No total column: up + down already carry the information.
     expect(within(table).queryByRole("columnheader", { name: "Total" })).not.toBeInTheDocument();
     const bobRow = within(table).getByRole("row", { name: /bob@example\.com/ });
