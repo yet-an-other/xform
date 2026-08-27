@@ -27,6 +27,12 @@ import (
 // version is stamped at release time via -ldflags "-X main.version=<tag>".
 var version = "dev"
 
+// processStart is the panel's own process start (OP-1): a monotonic
+// reading the panel uptime endpoint counts whole seconds from. Package
+// initialization precedes main, so it starts when the process does; a
+// restart produces a fresh one and uptime resets.
+var processStart = time.Now()
+
 func main() {
 	cfg, err := config.Load()
 	if err != nil {
@@ -120,7 +126,7 @@ func (s currentProfileSources) Current() profiles.Sources {
 }
 
 func newHandler(snapshots *hoststats.Cache, statuses *xraystatus.Cache, usersCache *users.Cache, profileSources currentProfileSources, sessions *session.Manager, cfg config.Config) http.Handler {
-	panel := api.PanelInfo{Version: version, XrayAPIEndpoint: cfg.XrayAPIAddress}
+	panel := api.PanelInfo{Version: version, XrayAPIEndpoint: cfg.XrayAPIAddress, Uptime: api.UptimeSeconds(processStart, time.Now)}
 	return api.New(snapshots, statuses, usersCache, profileSources, sessions, newDashboardHandler(), panel)
 }
 

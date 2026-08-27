@@ -45,6 +45,12 @@ function stubApi() {
           headers: { "Content-Type": "application/json" },
         });
       }
+      if (url.endsWith("api/v1/panel")) {
+        return new Response(JSON.stringify({ version: "v0.0.0-test", uptime_seconds: 300 }), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        });
+      }
       if (url.endsWith("api/v1/xray")) {
         return new Response(
           JSON.stringify({

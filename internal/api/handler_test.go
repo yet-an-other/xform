@@ -29,7 +29,11 @@ func (f fixedHostStats) Latest(context.Context) (hoststats.Stats, error) {
 const testPassword = "test-panel-password"
 
 // testPanelInfo is the panel identity handed to every test handler.
-var testPanelInfo = api.PanelInfo{Version: "v0.0.0-test", XrayAPIEndpoint: "127.0.0.1:8080"}
+var testPanelInfo = api.PanelInfo{
+	Version:         "v0.0.0-test",
+	XrayAPIEndpoint: "127.0.0.1:8080",
+	Uptime:          func() int64 { return 0 },
+}
 
 // newHandler wires the API with a real session manager against stub sources.
 func newHandler(snapshots hostStatsSnapshots) http.Handler {
@@ -436,6 +440,9 @@ func TestXrayEndpointNamesTheConfiguredAPIEndpoint(t *testing.T) {
 	}
 }
 
+// TestPanelEndpointReturnsTheReleaseVersion proves the panel identity
+// response: version plus current uptime, never cacheable (IN-DEV-SPEC §6:
+// every endpoint returns Cache-Control: no-store).
 func TestPanelEndpointReturnsTheReleaseVersion(t *testing.T) {
 	handler := api.New(fixedHostStats{}, fixedXrayStatus{}, fixedUsers{}, fixedProfileSources{}, session.NewManager(testPassword, time.Now), http.NotFoundHandler(), testPanelInfo)
 	request := httptest.NewRequest(http.MethodGet, "/api/v1/panel", nil)
@@ -447,6 +454,9 @@ func TestPanelEndpointReturnsTheReleaseVersion(t *testing.T) {
 	if response.Code != http.StatusOK {
 		t.Fatalf("status = %d, want %d; body = %s", response.Code, http.StatusOK, response.Body.String())
 	}
+	if got := response.Header().Get("Cache-Control"); got != "no-store" {
+		t.Errorf("Cache-Control = %q, want no-store", got)
+	}
 	var payload struct {
 		Version string `json:"version"`
 	}
@@ -455,6 +465,79 @@ func TestPanelEndpointReturnsTheReleaseVersion(t *testing.T) {
 	}
 	if payload.Version != testPanelInfo.Version {
 		t.Errorf("version = %q, want %q", payload.Version, testPanelInfo.Version)
+	}
+}
+
+// TestPanelEndpointReportsCurrentUptime proves the endpoint evaluates the
+// uptime source per request (IN-DEV-SPEC §6.1): the dashboard polls it every
+// five seconds, so each response carries the value at request time.
+func TestPanelEndpointReportsCurrentUptime(t *testing.T) {
+	elapsed := 4_831
+	panel := testPanelInfo
+	panel.Uptime = func() int64 { return int64(elapsed) }
+	handler := api.New(fixedHostStats{}, fixedXrayStatus{}, fixedUsers{}, fixedProfileSources{}, session.NewManager(testPassword, time.Now), http.NotFoundHandler(), panel)
+	cookie := login(t, handler, testPassword)
+
+	request := httptest.NewRequest(http.MethodGet, "/api/v1/panel", nil)
+	request.AddCookie(cookie)
+	response := httptest.NewRecorder()
+	handler.ServeHTTP(response, request)
+
+	var payload struct {
+		UptimeSeconds int64 `json:"uptime_seconds"`
+	}
+	if err := json.Unmarshal(response.Body.Bytes(), &payload); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if payload.UptimeSeconds != 4_831 {
+		t.Errorf("uptime_seconds = %d, want 4831", payload.UptimeSeconds)
+	}
+
+	// Time passes; the next poll must observe it.
+	elapsed = 4_836
+	request = httptest.NewRequest(http.MethodGet, "/api/v1/panel", nil)
+	request.AddCookie(cookie)
+	response = httptest.NewRecorder()
+	handler.ServeHTTP(response, request)
+
+	if err := json.Unmarshal(response.Body.Bytes(), &payload); err != nil {
+		t.Fatalf("decode second response: %v", err)
+	}
+	if payload.UptimeSeconds != 4_836 {
+		t.Errorf("second uptime_seconds = %d, want 4836", payload.UptimeSeconds)
+	}
+}
+
+// TestPanelUptimeMeasuresWholeMonotonicSeconds is the controlled-clock
+// proof of OP-1: uptime counts elapsed whole seconds from one monotonic
+// start, and a newly started process reads from its own start again.
+func TestPanelUptimeMeasuresWholeMonotonicSeconds(t *testing.T) {
+	start := time.Unix(1_723_800_000, 0)
+	now := start
+	clock := func() time.Time { return now }
+
+	uptime := api.UptimeSeconds(start, clock)
+
+	// 30.9s in: whole seconds only — no rounding up.
+	now = start.Add(30_900 * time.Millisecond)
+	if got := uptime(); got != 30 {
+		t.Errorf("uptime after 30.9s = %d, want 30", got)
+	}
+	// Elapsed whole seconds increase one for one.
+	now = start.Add(91_200 * time.Millisecond)
+	if got := uptime(); got != 91 {
+		t.Errorf("uptime after 91.2s = %d, want 91", got)
+	}
+
+	// A new process starts again from its own elapsed time.
+	newStart := start.Add(500 * time.Second)
+	newProcessUptime := api.UptimeSeconds(newStart, clock)
+	now = newStart.Add(5_400 * time.Millisecond)
+	if got := newProcessUptime(); got != 5 {
+		t.Errorf("new process uptime = %d, want 5", got)
+	}
+	if got := uptime(); got != 505 {
+		t.Errorf("first process uptime = %d, want 505", got)
 	}
 }
 

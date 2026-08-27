@@ -49,6 +49,24 @@ export function formatUptime(seconds: number): string {
   return `${minutes} ${minutes === 1 ? "minute" : "minutes"}`;
 }
 
+// formatUptimeShort renders uptime the way the approved header prototype
+// does — two significant units, compact ("6d 3h", "5h 12m", "48m").
+export function formatUptimeShort(seconds: number): string {
+  const days = Math.floor(seconds / 86_400);
+  if (days > 0) {
+    return `${days}d ${Math.floor((seconds % 86_400) / 3_600)}h`;
+  }
+  const hours = Math.floor(seconds / 3_600);
+  if (hours > 0) {
+    return `${hours}h ${Math.floor((seconds % 3_600) / 60)}m`;
+  }
+  const minutes = Math.floor(seconds / 60);
+  if (minutes > 0) {
+    return `${minutes}m`;
+  }
+  return "<1m";
+}
+
 export function percentUsed(used: number, total: number): number {
   if (total <= 0) {
     return 0;

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { flagEmoji, formatBytes, formatUptime, percentUsed } from "./format";
+import { flagEmoji, formatBytes, formatUptime, formatUptimeShort, percentUsed } from "./format";
 
 describe("formatBytes", () => {
   it("renders whole bytes without decimals", () => {
@@ -30,6 +30,16 @@ describe("formatUptime", () => {
     expect(formatUptime(7_200)).toBe("2 hours");
     expect(formatUptime(86_400)).toBe("1 day");
     expect(formatUptime(1_987_200)).toBe("23 days");
+  });
+});
+
+describe("formatUptimeShort", () => {
+  it("renders two significant units the way the approved header does", () => {
+    expect(formatUptimeShort(529_200)).toBe("6d 3h");
+    expect(formatUptimeShort(1_209_600)).toBe("14d 0h");
+    expect(formatUptimeShort(18_720)).toBe("5h 12m");
+    expect(formatUptimeShort(2_880)).toBe("48m");
+    expect(formatUptimeShort(59)).toBe("<1m");
   });
 });
 

@@ -7,6 +7,7 @@
   --color-card-foreground: #e9eef5;
   --color-surface: #121922;
   --color-border: #253242;
+  --color-border-strong: #34465a;
   --color-input: #253242;
   --color-ring: #55d6a8;
   --color-primary: #55d6a8;
@@ -24,6 +25,13 @@
   --color-info: #6cb6ff;
   --color-meter-start: #3fb98e;
   --color-meter-end: #6ee6b9;
+
+  --shadow-modal: 0 24px 80px rgba(0, 0, 0, 0.58);
+
+  /* The approved dialog breakpoint (IN-DEV-SPEC §7.5): at 560 CSS pixels or
+     less modals go full-screen and fixed-format content scrolls instead of
+     reflowing. */
+  --breakpoint-xs: 560px;
 
   --font-sans:
     Inter, ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;

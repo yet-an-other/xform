@@ -1,9 +1,10 @@
-import { useEffect, useState, type ReactNode } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 
 import { MetricCard } from "@/components/metric-card";
 import { Badge } from "@/components/ui/badge";
 import { Card } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
+import { UserDetailsModal } from "@/components/user-details-modal";
 import {
   Table,
   TableBody,
@@ -30,6 +31,7 @@ import {
   formatSpeed,
   formatTime24,
   formatUptime,
+  formatUptimeShort,
   flagEmoji,
   percentUsed,
 } from "@/lib/format";
@@ -51,13 +53,48 @@ function XrayCard({ title, sub, children }: { title: string; sub: string; childr
   );
 }
 
+// PresenceDot is the live indicator beside a User's name: glowing when
+// online, muted otherwise.
+function PresenceDot({ online }: { online: boolean }) {
+  return (
+    <span
+      aria-label={online ? "online" : "offline"}
+      className={`inline-block size-2 rounded-full ${
+        online ? "bg-primary shadow-primary/30 shadow-[0_0_6px]" : "bg-muted"
+      }`}
+    />
+  );
+}
+
+// EyeIcon is the approved details entry point glyph (user-details prototype).
+function EyeIcon() {
+  return (
+    <svg
+      aria-hidden="true"
+      viewBox="0 0 24 24"
+      className="size-4 fill-none stroke-current stroke-[1.8] [stroke-linecap:round] [stroke-linejoin:round]"
+    >
+      <path d="M2.5 12s3.5-6 9.5-6 9.5 6 9.5 6-3.5 6-9.5 6-9.5-6-9.5-6Z" />
+      <circle cx="12" cy="12" r="2.5" />
+    </svg>
+  );
+}
+
 // UsersTable is the per-user traffic table (SPEC §6): durable totals,
 // current speed, presence (online dot, IPs, last seen), and the config
-// labels (protocol · security). Gone users — edited out of the xray config,
+// labels (protocol · security) — plus the named icon-only details action
+// opening the User dialog (IN-DEV-SPEC §7.2). Uplink and Downlink share one
+// Traffic column on two lines. Gone users — edited out of the xray config,
 // history retained — are hidden by default behind a toggle. Speeds read
 // "stale" on a stale snapshot — xray is unreachable and the totals are
 // last-known.
-function UsersTable({ snapshot }: { snapshot: UsersSnapshot }) {
+function UsersTable({
+  snapshot,
+  onOpenDetails,
+}: {
+  snapshot: UsersSnapshot;
+  onOpenDetails: (email: string, opener: HTMLButtonElement) => void;
+}) {
   const [showGone, setShowGone] = useState(false);
   const goneCount = snapshot.users.filter((user) => user.gone).length;
   const visible = showGone ? snapshot.users : snapshot.users.filter((user) => !user.gone);
@@ -84,11 +121,11 @@ function UsersTable({ snapshot }: { snapshot: UsersSnapshot }) {
             <TableHead className="w-10 px-5" aria-label="Online" />
             <TableHead>User</TableHead>
             <TableHead className="w-36">Protocol</TableHead>
-            <TableHead className="w-24 text-right">Up</TableHead>
-            <TableHead className="w-24 text-right">Down</TableHead>
+            <TableHead className="w-28">Traffic</TableHead>
             <TableHead className="w-52 text-right">Speed now</TableHead>
             <TableHead className="w-40">Online IPs</TableHead>
-            <TableHead className="w-24 pr-5 text-right">Last seen</TableHead>
+            <TableHead className="w-24 text-right">Last seen</TableHead>
+            <TableHead className="w-14 pr-5" aria-label="Details" />
           </TableRow>
         </TableHeader>
         <TableBody>
@@ -104,12 +141,7 @@ function UsersTable({ snapshot }: { snapshot: UsersSnapshot }) {
             visible.map((user) => (
               <TableRow key={user.email} className={user.gone ? "opacity-50" : undefined}>
                 <TableCell className="px-5 py-1.5">
-                  <span
-                    aria-label={user.online ? "online" : "offline"}
-                    className={`inline-block size-2 rounded-full ${
-                      user.online ? "bg-primary shadow-primary/30 shadow-[0_0_6px]" : "bg-muted"
-                    }`}
-                  />
+                  <PresenceDot online={user.online} />
                 </TableCell>
                 <TableCell className="truncate py-1.5 font-semibold">
                   {user.email}
@@ -132,8 +164,13 @@ function UsersTable({ snapshot }: { snapshot: UsersSnapshot }) {
                     <span className="text-muted-foreground">—</span>
                   )}
                 </TableCell>
-                <TableCell className="py-1.5 text-right font-mono text-xs">{formatBytes(user.up_bytes_total)}</TableCell>
-                <TableCell className="py-1.5 text-right font-mono text-xs">{formatBytes(user.down_bytes_total)}</TableCell>
+                <TableCell className="py-1.5 font-mono text-xs">
+                  {/* Uplink above downlink: the approved Traffic column. */}
+                  <div className="flex flex-col">
+                    <span>↑ {formatBytes(user.up_bytes_total)}</span>
+                    <span>↓ {formatBytes(user.down_bytes_total)}</span>
+                  </div>
+                </TableCell>
                 <TableCell className="py-1.5 text-right font-mono text-xs">
                   {snapshot.stale ? (
                     <span className="text-muted-foreground">stale</span>
@@ -170,7 +207,7 @@ function UsersTable({ snapshot }: { snapshot: UsersSnapshot }) {
                     <span className="text-muted-foreground">—</span>
                   )}
                 </TableCell>
-                <TableCell className="py-1.5 pr-5 text-right font-mono text-xs">
+                <TableCell className="py-1.5 text-right font-mono text-xs">
                   {user.online ? (
                     "now"
                   ) : user.last_seen !== null ? (
@@ -178,6 +215,17 @@ function UsersTable({ snapshot }: { snapshot: UsersSnapshot }) {
                   ) : (
                     <span className="text-muted-foreground">—</span>
                   )}
+                </TableCell>
+                <TableCell className="py-1.5 pr-5 text-right align-middle">
+                  <button
+                    type="button"
+                    aria-label={`Open ${user.email} details`}
+                    title={`Open ${user.email} details`}
+                    onClick={(event) => onOpenDetails(user.email, event.currentTarget)}
+                    className="border-border text-primary hover:border-primary hover:bg-accent inline-grid size-[30px] place-items-center rounded-lg border"
+                  >
+                    <EyeIcon />
+                  </button>
                 </TableCell>
               </TableRow>
             ))
@@ -188,7 +236,25 @@ function UsersTable({ snapshot }: { snapshot: UsersSnapshot }) {
   );
 }
 
-function XrayPills({ xray }: { xray: XrayStatus }) {
+// HeaderMeta is one mono muted readout of the identity groups (panel
+// version, uptime), separated by interpuncts as approved.
+function HeaderMeta({ children }: { children: ReactNode }) {
+  return <span className="text-muted-foreground font-mono text-xs">{children}</span>;
+}
+
+function Interpunct() {
+  return (
+    <span aria-hidden="true" className="text-muted-foreground/60 text-[11px]">
+      ·
+    </span>
+  );
+}
+
+// XrayIdentity is the xray identity group (IN-DEV-SPEC §7.1): the status
+// indicator immediately before the service name, then version and uptime.
+// The log and config viewer actions join this group in a later slice and
+// are deliberately absent — no dead controls.
+function XrayIdentity({ xray }: { xray: XrayStatus }) {
   const dotClass =
     xray.status === "running"
       ? "bg-primary shadow-primary/10"
@@ -197,31 +263,24 @@ function XrayPills({ xray }: { xray: XrayStatus }) {
         : "bg-warning shadow-warning/10";
 
   return (
-    <>
-      <Badge
-        className="gap-2 px-3 py-1.5 text-[0.78rem] font-bold tracking-[0.08em] uppercase"
-        variant="outline"
-      >
+    <span className="ml-4 flex flex-wrap items-center gap-x-2.5 gap-y-2">
+      <span className="inline-flex items-center gap-1.5 text-lg font-semibold tracking-tight">
         <span
-          aria-hidden="true"
-          className={`size-[7px] rounded-full shadow-[0_0_0_4px] ${dotClass}`}
+          role="img"
+          aria-label={xray.status}
+          title={xray.status}
+          className={`size-[7px] rounded-full shadow-[0_0_0_3px] ${dotClass}`}
         />
-        xray {xray.status}
-      </Badge>
-      {xray.version ? (
-        <Badge className="px-3 py-1.5 font-mono text-[0.78rem] font-semibold" variant="outline">
-          {xray.version}
-        </Badge>
-      ) : null}
+        xray
+      </span>
+      {xray.version ? <HeaderMeta>v{xray.version}</HeaderMeta> : null}
       {xray.status === "running" ? (
-        <Badge
-          className="px-3 py-1.5 text-[0.78rem] font-bold tracking-[0.08em] uppercase"
-          variant="outline"
-        >
-          up {formatUptime(xray.uptime_seconds)}
-        </Badge>
+        <>
+          <Interpunct />
+          <HeaderMeta>up {formatUptimeShort(xray.uptime_seconds)}</HeaderMeta>
+        </>
       ) : null}
-    </>
+    </span>
   );
 }
 
@@ -290,23 +349,22 @@ export function Dashboard({ onUnauthenticated }: { onUnauthenticated: () => void
   const [panel, setPanel] = useState<PanelInfo | null>(null);
   const [updatedAt, setUpdatedAt] = useState<Date | null>(null);
   const [error, setError] = useState<string | null>(null);
+  // The open User dialog's exact email — one slot, so at most one modal is
+  // ever mounted — and the row action that opened it, for focus restore.
+  const [detailsEmail, setDetailsEmail] = useState<string | null>(null);
+  const detailsOpener = useRef<HTMLButtonElement | null>(null);
 
-  // The panel's own version never changes at runtime — fetch it once.
-  useEffect(() => {
-    const controller = new AbortController();
-    fetchPanelInfo(controller.signal)
-      .then(setPanel)
-      .catch(() => {
-        // Cosmetic only — the header simply omits the version.
-      });
-    return () => controller.abort();
-  }, []);
+  function openDetails(email: string, opener: HTMLButtonElement) {
+    detailsOpener.current = opener;
+    setDetailsEmail(email);
+  }
 
   useEffect(() => {
     const controller = new AbortController();
 
     async function poll() {
       try {
+        // One cycle, three observations: host, xray, and users.
         const [serverStats, xrayStats, usersSnapshot] = await Promise.all([
           fetchServerStats(controller.signal),
           fetchXrayStatus(controller.signal),
@@ -326,6 +384,13 @@ export function Dashboard({ onUnauthenticated }: { onUnauthenticated: () => void
           setError(cause instanceof Error ? cause.message : "panel unavailable");
         }
       }
+      // Panel identity rides the same five-second cycle (uptime is
+      // re-fetched, never extrapolated), but stays cosmetic: on failure the
+      // header keeps the last-known version and uptime instead of erroring
+      // the whole dashboard.
+      fetchPanelInfo(controller.signal)
+        .then(setPanel)
+        .catch(() => {});
     }
 
     void poll();
@@ -352,13 +417,17 @@ export function Dashboard({ onUnauthenticated }: { onUnauthenticated: () => void
       <header className="mb-6 flex flex-wrap items-center gap-x-3 gap-y-2">
         <h1 className="text-lg font-semibold tracking-tight">xform</h1>
         {panel ? (
-          <span className="text-muted-foreground font-mono text-xs">{panel.version}</span>
+          <>
+            <HeaderMeta>{panel.version}</HeaderMeta>
+            <Interpunct />
+            <HeaderMeta>up {formatUptimeShort(panel.uptime_seconds)}</HeaderMeta>
+          </>
         ) : null}
-        {xray ? <XrayPills xray={xray} /> : null}
+        {xray ? <XrayIdentity xray={xray} /> : null}
         <span className="flex-1" />
-        <span className="text-muted-foreground font-mono text-xs">
+        <HeaderMeta>
           refreshing every 5s{updatedAt ? ` · updated ${formatTime24(updatedAt)}` : ""}
-        </span>
+        </HeaderMeta>
         <button
           type="button"
           onClick={() => void signOut()}
@@ -428,7 +497,22 @@ export function Dashboard({ onUnauthenticated }: { onUnauthenticated: () => void
         />
       ) : null}
 
-      {users ? <UsersTable snapshot={users} /> : null}
+      {users ? (
+        <UsersTable
+          snapshot={users}
+          onOpenDetails={(email, opener) => openDetails(email, opener)}
+        />
+      ) : null}
+
+      {detailsEmail !== null ? (
+        <UserDetailsModal
+          email={detailsEmail}
+          snapshot={users}
+          open
+          opener={detailsOpener}
+          onClose={() => setDetailsEmail(null)}
+        />
+      ) : null}
     </main>
   );
 }

@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"net/http"
+	"time"
 
 	"github.com/yet-an-other/xform/internal/hoststats"
 	"github.com/yet-an-other/xform/internal/profiles"
@@ -39,10 +40,31 @@ const sessionCookieName = "xform_session"
 
 // PanelInfo is the panel's own identity, exposed through the API: the
 // release version (ldflags-stamped at build time) and the configured xray
-// gRPC endpoint, which the dashboard names in its degraded banner.
+// gRPC endpoint, which the dashboard names in its degraded banner. Uptime
+// reports elapsed whole seconds since the panel process started (OP-1);
+// UptimeSeconds builds it from a monotonic start time.
 type PanelInfo struct {
 	Version         string
 	XrayAPIEndpoint string
+	Uptime          func() int64
+}
+
+// UptimeSeconds returns a Uptime source counting whole seconds elapsed
+// since start. start carries a monotonic reading in production (a time.Now
+// captured at process start), so restarts reset it. now is the clock seam:
+// production passes time.Now, tests pass a controlled clock.
+func UptimeSeconds(start time.Time, now func() time.Time) func() int64 {
+	return func() int64 {
+		return int64(now().Sub(start).Seconds())
+	}
+}
+
+// panelResponse is GET /api/v1/panel: the panel identity plus the current
+// process uptime, re-read on every request — the dashboard polls it every
+// five seconds instead of extrapolating in the browser.
+type panelResponse struct {
+	Version       string `json:"version"`
+	UptimeSeconds int64  `json:"uptime_seconds"`
 }
 
 // xrayResponse is GET /api/v1/xray: the observed Status plus the
@@ -110,9 +132,9 @@ func New(snapshots hostStatsSnapshots, xray xrayStatuses, usersSource usersSnaps
 	mux.HandleFunc("GET /api/v1/healthz", func(response http.ResponseWriter, _ *http.Request) {
 		writeJSON(response, http.StatusOK, map[string]string{"status": "ok"})
 	})
-	mux.HandleFunc("GET /api/v1/panel", requireSession(func(response http.ResponseWriter, _ *http.Request) {
-		writeJSON(response, http.StatusOK, map[string]string{"version": panel.Version})
-	}))
+	mux.HandleFunc("GET /api/v1/panel", noStore(requireSession(func(response http.ResponseWriter, _ *http.Request) {
+		writeJSON(response, http.StatusOK, panelResponse{Version: panel.Version, UptimeSeconds: panel.Uptime()})
+	})))
 	mux.HandleFunc("GET /api/v1/server", requireSession(func(response http.ResponseWriter, request *http.Request) {
 		response.Header().Set("Cache-Control", "no-store")
 		stats, err := snapshots.Latest(request.Context())

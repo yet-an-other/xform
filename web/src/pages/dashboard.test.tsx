@@ -1,4 +1,4 @@
-import { act, cleanup, fireEvent, render, screen, within } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { Dashboard } from "./dashboard";
@@ -70,7 +70,9 @@ function stubEndpoints(routes: {
       return routes.users ? routes.users() : json({ collected_at: 1_723_800_000, stale: false, users: [] });
     }
     if (url.endsWith("api/v1/panel")) {
-      return routes.panel ? routes.panel() : json({ version: "v0.0.0-test" });
+      return routes.panel
+        ? routes.panel()
+        : json({ version: "v0.0.0-test", uptime_seconds: 300 });
     }
     if (url.endsWith("api/v1/logout") && routes.logout) return routes.logout();
     return new Response("not found", { status: 404 });
@@ -171,27 +173,100 @@ describe("host stats", () => {
 });
 
 describe("header", () => {
-  it("shows the panel version and a 24h refresh note", async () => {
+  it("shows the panel identity group: wordmark, version, and process uptime", async () => {
+    stubEndpoints({
+      server: () => json(stats),
+      xray: () => json(xrayRunning),
+      panel: () => json({ version: "v0.0.0-test", uptime_seconds: 529_200 }), // 6d 3h
+    });
+
+    render(<Dashboard onUnauthenticated={() => {}} />);
+
+    const banner = await screen.findByRole("banner");
+    expect(within(banner).getByText("xform")).toBeInTheDocument();
+    expect(within(banner).getByText("v0.0.0-test")).toBeInTheDocument();
+    expect(within(banner).getByText("up 6d 3h")).toBeInTheDocument();
+  });
+
+  it("re-fetches panel uptime in the five-second cycle instead of extrapolating it", async () => {
+    vi.useFakeTimers();
+    let panelUptime = 300; // 5 minutes
+    const fetchMock = stubEndpoints({
+      server: () => json(stats),
+      xray: () => json(xrayRunning),
+      panel: () => json({ version: "v0.0.0-test", uptime_seconds: panelUptime }),
+    });
+
+    render(<Dashboard onUnauthenticated={() => {}} />);
+    await act(async () => {
+      await Promise.resolve();
+    });
+    expect(screen.getByText("up 5m")).toBeInTheDocument();
+
+    // Time passes on the panel; the next poll must report the new value.
+    panelUptime = 7_200; // 2h 0m
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(5_000);
+    });
+
+    const panelPolls = fetchMock.mock.calls.filter(([input]) =>
+      String(input).endsWith("api/v1/panel"),
+    );
+    expect(panelPolls).toHaveLength(2);
+    expect(screen.getByText("up 2h 0m")).toBeInTheDocument();
+    expect(screen.queryByText("up 5m")).not.toBeInTheDocument();
+  });
+
+  it("groups the xray identity with the status indicator before the service name", async () => {
     stubEndpoints({ server: () => json(stats), xray: () => json(xrayRunning) });
 
     render(<Dashboard onUnauthenticated={() => {}} />);
 
-    expect(await screen.findByText("v0.0.0-test")).toBeInTheDocument();
+    const banner = await screen.findByRole("banner");
+    const dot = within(banner).getByRole("img", { name: "running" });
+    const name = within(banner).getByText("xray");
+    // The status indicator sits immediately before the service name: it is
+    // the name span's first child.
+    expect(name.firstChild).toBe(dot);
+    expect(within(banner).getByText("v26.4.13")).toBeInTheDocument();
+    expect(within(banner).getByText("up 14d 0h")).toBeInTheDocument();
+  });
+
+  it("keeps the refresh note and Log out in the header", async () => {
+    stubEndpoints({ server: () => json(stats), xray: () => json(xrayRunning) });
+
+    render(<Dashboard onUnauthenticated={() => {}} />);
+
+    const banner = await screen.findByRole("banner");
     expect(
-      screen.getByText(/refreshing every 5s · updated \d{2}:\d{2}:\d{2}/),
+      within(banner).getByText(/refreshing every 5s · updated \d{2}:\d{2}:\d{2}/),
     ).toBeInTheDocument();
+    expect(within(banner).getByRole("button", { name: /log out/i })).toBeInTheDocument();
+  });
+
+  it("marks the xray group stopped without an uptime, banner carrying the detail", async () => {
+    stubEndpoints({ server: () => json(stats), xray: () => json(xrayStopped) });
+
+    render(<Dashboard onUnauthenticated={() => {}} />);
+
+    const banner = await screen.findByRole("banner");
+    expect(within(banner).getByRole("img", { name: "stopped" })).toBeInTheDocument();
+    // xray's own uptime is gone while stopped (the panel's "up …" remains).
+    expect(within(banner).queryByText("up 14d 0h")).not.toBeInTheDocument();
+    expect(await screen.findByRole("alert")).toHaveTextContent(/xray-core is stopped/i);
   });
 });
 
 describe("xray status", () => {
-  it("shows the status, version, and uptime pills when xray is running", async () => {
+  it("shows the status indicator, version, and uptime in the xray group when running", async () => {
     stubEndpoints({ server: () => json(stats), xray: () => json(xrayRunning) });
 
     render(<Dashboard onUnauthenticated={() => {}} />);
 
-    expect(await screen.findByText("xray running")).toBeInTheDocument();
-    expect(screen.getByText("26.4.13")).toBeInTheDocument();
-    expect(screen.getByText("up 14 days")).toBeInTheDocument();
+    const banner = await screen.findByRole("banner");
+    expect(within(banner).getByRole("img", { name: "running" })).toBeInTheDocument();
+    expect(within(banner).getByText("v26.4.13")).toBeInTheDocument();
+    expect(within(banner).getByText("up 14d 0h")).toBeInTheDocument();
     expect(screen.queryByRole("alert")).not.toBeInTheDocument();
   });
 
@@ -369,7 +444,7 @@ describe("users table", () => {
     expect(within(table).queryByRole("button", { name: /gone/i })).not.toBeInTheDocument();
   });
 
-  it("renders durable traffic and current speed per user", async () => {
+  it("renders durable traffic stacked in one Traffic column and current speed per user", async () => {
     stubEndpoints({
       server: () => json(stats),
       xray: () => json(xrayRunning),
@@ -379,15 +454,55 @@ describe("users table", () => {
     render(<Dashboard onUnauthenticated={() => {}} />);
 
     const table = await screen.findByRole("region", { name: "Users" });
+    expect(within(table).getByRole("columnheader", { name: "Traffic" })).toBeInTheDocument();
+    // The separate Up and Down columns are gone.
+    expect(within(table).queryByRole("columnheader", { name: "Up" })).not.toBeInTheDocument();
+    expect(within(table).queryByRole("columnheader", { name: "Down" })).not.toBeInTheDocument();
     expect(within(table).getByText("alice@example.com")).toBeInTheDocument();
     const aliceRow = within(table).getByRole("row", { name: /alice@example\.com/ });
-    expect(aliceRow).toHaveTextContent("11.5 GiB"); // up
-    expect(aliceRow).toHaveTextContent("138 GiB"); // down
+    // Uplink and downlink share one Traffic cell, stacked on two lines.
+    const trafficCell = within(aliceRow).getByText("↑ 11.5 GiB").closest("td");
+    expect(trafficCell).toHaveTextContent("↓ 138 GiB");
     expect(aliceRow).toHaveTextContent("↑ 500 KiB/s ↓ 3.62 MiB/s"); // speed now
     // No total column: up + down already carry the information.
     expect(within(table).queryByRole("columnheader", { name: "Total" })).not.toBeInTheDocument();
     const bobRow = within(table).getByRole("row", { name: /bob@example\.com/ });
     expect(bobRow).toHaveTextContent("idle"); // zero speeds read as idle
+  });
+
+  it("adds a named icon-only details action for every visible user", async () => {
+    stubEndpoints({
+      server: () => json(stats),
+      xray: () => json(xrayRunning),
+      users: () =>
+        json({
+          ...usersSnapshot,
+          users: [
+            ...usersSnapshot.users,
+            { ...usersSnapshot.users[1], email: "carol@example.com", gone: true },
+          ],
+        }),
+    });
+
+    render(<Dashboard onUnauthenticated={() => {}} />);
+
+    const table = await screen.findByRole("region", { name: "Users" });
+    // alice and bob are visible; gone carol is hidden, so only two actions.
+    expect(
+      within(table).getByRole("button", { name: "Open alice@example.com details" }),
+    ).toBeInTheDocument();
+    expect(
+      within(table).getByRole("button", { name: "Open bob@example.com details" }),
+    ).toBeInTheDocument();
+    expect(
+      within(table).queryByRole("button", { name: "Open carol@example.com details" }),
+    ).not.toBeInTheDocument();
+
+    // Revealing gone users gives them the action too — every visible User.
+    fireEvent.click(within(table).getByRole("button", { name: /show gone/i }));
+    expect(
+      within(table).getByRole("button", { name: "Open carol@example.com details" }),
+    ).toBeInTheDocument();
   });
 
   it("renders presence: the online dot, online IPs, and relative last seen", async () => {
@@ -449,5 +564,210 @@ describe("users table", () => {
     expect(aliceRow).toHaveTextContent("203.0.113.10");
     expect(aliceRow).toHaveTextContent("2m ago");
     expect(aliceRow).toHaveTextContent("stale");
+  });
+});
+
+describe("user details dialog", () => {
+  function openAction(email: string) {
+    return screen.getByRole("button", { name: `Open ${email} details` });
+  }
+
+  it("opens a modal for the exact selected User with real current observations", async () => {
+    stubEndpoints({
+      server: () => json(stats),
+      xray: () => json(xrayRunning),
+      users: () => json(usersSnapshot),
+    });
+
+    render(<Dashboard onUnauthenticated={() => {}} />);
+    await screen.findByRole("region", { name: "Users" });
+
+    fireEvent.click(openAction("alice@example.com"));
+
+    // The dialog is named for the exact selected User.
+    const dialog = await screen.findByRole("dialog", { name: "alice@example.com details" });
+    expect(within(dialog).getByText("alice@example.com")).toBeInTheDocument();
+    expect(within(dialog).getByText("Online")).toBeInTheDocument();
+    expect(within(dialog).getByText("↑ 11.5 GiB")).toBeInTheDocument();
+    expect(within(dialog).getByText("↓ 138 GiB")).toBeInTheDocument();
+    expect(within(dialog).getByText("↑ 500 KiB/s")).toBeInTheDocument();
+    expect(within(dialog).getByText("↓ 3.62 MiB/s")).toBeInTheDocument();
+    expect(within(dialog).getByText("now")).toBeInTheDocument(); // online: last seen is now
+    expect(within(dialog).getByText("203.0.113.10")).toBeInTheDocument();
+    expect(within(dialog).getByTitle("NL")).toHaveTextContent("🇳🇱");
+
+    // Closing it, then activating bob's action, shows bob — not stale alice.
+    fireEvent.click(within(dialog).getByRole("button", { name: "Close User details" }));
+    await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+
+    fireEvent.click(openAction("bob@example.com"));
+    const bobDialog = await screen.findByRole("dialog", { name: "bob@example.com details" });
+    expect(within(bobDialog).getByText("bob@example.com")).toBeInTheDocument();
+    expect(within(bobDialog).getByText("Offline")).toBeInTheDocument();
+    expect(within(bobDialog).getByText("↑ 2.89 GiB")).toBeInTheDocument();
+    expect(within(bobDialog).getByText("↓ 38.8 GiB")).toBeInTheDocument();
+    expect(within(bobDialog).getByText("idle")).toBeInTheDocument();
+    expect(within(bobDialog).getByText("None")).toBeInTheDocument(); // no online IPs
+    expect(within(bobDialog).queryByText("203.0.113.10")).not.toBeInTheDocument();
+  });
+
+  it("moves focus into the dialog on open and restores it to the opener on close", async () => {
+    stubEndpoints({
+      server: () => json(stats),
+      xray: () => json(xrayRunning),
+      users: () => json(usersSnapshot),
+    });
+
+    render(<Dashboard onUnauthenticated={() => {}} />);
+    await screen.findByRole("region", { name: "Users" });
+
+    const action = openAction("alice@example.com");
+    // Keyboard operable: the action is a focusable native button with an
+    // accessible name (Enter/Space activation is the browser's job — jsdom
+    // does not synthesize it).
+    action.focus();
+    expect(action).toHaveFocus();
+    fireEvent.click(action);
+
+    const dialog = await screen.findByRole("dialog");
+    await waitFor(() => expect(dialog.contains(document.activeElement)).toBe(true));
+
+    // Escape closes; focus returns to the exact opener.
+    fireEvent.keyDown(within(dialog).getByText("Current observations"), { key: "Escape" });
+    await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+    expect(action).toHaveFocus();
+
+    // The close action behaves the same way.
+    fireEvent.click(action);
+    const reopened = await screen.findByRole("dialog");
+    fireEvent.click(
+      within(reopened).getByRole("button", { name: "Close User details" }),
+    );
+    await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+    expect(action).toHaveFocus();
+  });
+
+  it("keeps focus trapped inside the dialog while it is open", async () => {
+    stubEndpoints({
+      server: () => json(stats),
+      xray: () => json(xrayRunning),
+      users: () => json(usersSnapshot),
+    });
+
+    render(<Dashboard onUnauthenticated={() => {}} />);
+    await screen.findByRole("region", { name: "Users" });
+
+    fireEvent.click(openAction("alice@example.com"));
+    const dialog = await screen.findByRole("dialog");
+    await waitFor(() => expect(dialog.contains(document.activeElement)).toBe(true));
+
+    // Tab at the dialog's boundary cannot escape to the page behind it.
+    fireEvent.keyDown(within(dialog).getByRole("button", { name: "Close User details" }), {
+      key: "Tab",
+    });
+    expect(dialog.contains(document.activeElement)).toBe(true);
+  });
+
+  it("permits one modal at a time", async () => {
+    stubEndpoints({
+      server: () => json(stats),
+      xray: () => json(xrayRunning),
+      users: () => json(usersSnapshot),
+    });
+
+    render(<Dashboard onUnauthenticated={() => {}} />);
+    await screen.findByRole("region", { name: "Users" });
+
+    fireEvent.click(openAction("alice@example.com"));
+    await screen.findByRole("dialog");
+
+    expect(screen.getAllByRole("dialog")).toHaveLength(1);
+  });
+
+  it("keeps dashboard polling running while the modal is open and updates the dialog", async () => {
+    vi.useFakeTimers();
+    let users = usersSnapshot;
+    const fetchMock = stubEndpoints({
+      server: () => json(stats),
+      xray: () => json(xrayRunning),
+      users: () => json(users),
+    });
+
+    render(<Dashboard onUnauthenticated={() => {}} />);
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    fireEvent.click(openAction("alice@example.com"));
+    const dialog = screen.getByRole("dialog", { name: "alice@example.com details" });
+    expect(within(dialog).getByText("↑ 11.5 GiB")).toBeInTheDocument();
+
+    // Traffic moves on the next poll; the open dialog follows it.
+    users = {
+      ...usersSnapshot,
+      users: [{ ...usersSnapshot.users[0], down_bytes_total: 150_000_000_000 }, usersSnapshot.users[1]],
+    };
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(5_000);
+    });
+
+    const usersPolls = fetchMock.mock.calls.filter(([input]) =>
+      String(input).endsWith("api/v1/users"),
+    );
+    expect(usersPolls).toHaveLength(2);
+    expect(
+      screen.getByRole("dialog", { name: "alice@example.com details" }),
+    ).toBeInTheDocument();
+    expect(within(dialog).getByText("↓ 140 GiB")).toBeInTheDocument();
+  });
+
+  it("marks a gone User as gone and shows historical observations", async () => {
+    stubEndpoints({
+      server: () => json(stats),
+      xray: () => json(xrayRunning),
+      users: () =>
+        json({
+          ...usersSnapshot,
+          users: [
+            ...usersSnapshot.users,
+            {
+              ...usersSnapshot.users[1],
+              email: "carol@example.com",
+              gone: true,
+              last_seen: Math.floor(Date.now() / 1000) - 2_820, // 47m ago
+            },
+          ],
+        }),
+    });
+
+    render(<Dashboard onUnauthenticated={() => {}} />);
+    const table = await screen.findByRole("region", { name: "Users" });
+
+    fireEvent.click(within(table).getByRole("button", { name: /show gone/i }));
+    fireEvent.click(openAction("carol@example.com"));
+
+    const dialog = await screen.findByRole("dialog", { name: "carol@example.com details" });
+    expect(within(dialog).getByText("Gone User")).toBeInTheDocument();
+    expect(within(dialog).getByText("historical observations")).toBeInTheDocument();
+    expect(within(dialog).getByText("47m ago")).toBeInTheDocument();
+    expect(within(dialog).getByText("None")).toBeInTheDocument(); // no online IPs
+  });
+
+  it("flags observations as stale in the dialog when the users snapshot is stale", async () => {
+    stubEndpoints({
+      server: () => json(stats),
+      xray: () => json(xrayRunning),
+      users: () => json({ ...usersSnapshot, stale: true }),
+    });
+
+    render(<Dashboard onUnauthenticated={() => {}} />);
+    await screen.findByRole("region", { name: "Users" });
+
+    fireEvent.click(openAction("alice@example.com"));
+
+    const dialog = await screen.findByRole("dialog", { name: "alice@example.com details" });
+    expect(within(dialog).getByText("stale snapshot")).toBeInTheDocument();
+    expect(within(dialog).getByText("stale")).toBeInTheDocument(); // speeds read stale
+    expect(within(dialog).queryByText("↑ 500 KiB/s")).not.toBeInTheDocument();
   });
 });
