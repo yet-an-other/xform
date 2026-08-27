@@ -16,6 +16,7 @@ import (
 	"github.com/yet-an-other/xform/internal/config"
 	"github.com/yet-an-other/xform/internal/geoip"
 	"github.com/yet-an-other/xform/internal/hoststats"
+	"github.com/yet-an-other/xform/internal/profiles"
 	"github.com/yet-an-other/xform/internal/session"
 	"github.com/yet-an-other/xform/internal/users"
 	"github.com/yet-an-other/xform/internal/xrayconfig"
@@ -72,8 +73,15 @@ func main() {
 	sessions := session.NewManager(cfg.Password, time.Now)
 
 	server := &http.Server{
-		Addr:              cfg.ListenAddress,
-		Handler:           newHandler(hostStats, xrayStatus, usersCache, sessions, cfg),
+		Addr: cfg.ListenAddress,
+		Handler: newHandler(
+			hostStats,
+			xrayStatus,
+			usersCache,
+			currentProfileSources{xray: configWatcher, advertisements: advertisementWatcher},
+			sessions,
+			cfg,
+		),
 		ReadHeaderTimeout: 5 * time.Second,
 		IdleTimeout:       60 * time.Second,
 	}
@@ -102,9 +110,18 @@ func main() {
 	}
 }
 
-func newHandler(snapshots *hoststats.Cache, statuses *xraystatus.Cache, usersCache *users.Cache, sessions *session.Manager, cfg config.Config) http.Handler {
+type currentProfileSources struct {
+	xray           *xrayconfig.Watcher
+	advertisements *advertisements.Watcher
+}
+
+func (s currentProfileSources) Current() profiles.Sources {
+	return profiles.SourcesFromSnapshots(s.xray.Snapshot(), s.advertisements.Snapshot())
+}
+
+func newHandler(snapshots *hoststats.Cache, statuses *xraystatus.Cache, usersCache *users.Cache, profileSources currentProfileSources, sessions *session.Manager, cfg config.Config) http.Handler {
 	panel := api.PanelInfo{Version: version, XrayAPIEndpoint: cfg.XrayAPIAddress}
-	return api.New(snapshots, statuses, usersCache, sessions, newDashboardHandler(), panel)
+	return api.New(snapshots, statuses, usersCache, profileSources, sessions, newDashboardHandler(), panel)
 }
 
 // loadGeoIP opens the geoip.dat behind the users table's country flags

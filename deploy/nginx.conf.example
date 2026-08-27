@@ -40,14 +40,19 @@ server {
 
 # ── Subpath variant ──────────────────────────────────────────────────────────
 # The dashboard is built mount-point agnostic (relative asset and API URLs),
-# so the panel can hang under a subpath of an existing vhost. The API rewrite
-# below is the one DELIBERATE exception to the no-URI gotcha above: it strips
-# the /xform prefix. The bare /xform must redirect to /xform/, or the page's
+# so the panel can hang under a subpath of an existing vhost. Add the map to
+# the enclosing http block. It strips /xform from the original request URI,
+# preserving encoded email bytes such as %2F instead of normalizing them
+# into path separators. The bare /xform must redirect to /xform/, or the page's
 # relative URLs resolve against the wrong directory.
+#
+# map $request_uri $xform_api_request_uri {
+#     ~^/xform(?<xform_api_path>/api/.*)$ $xform_api_path;
+# }
 #
 # location = /xform { return 308 /xform/; }
 # location /xform/api/ {
-#     proxy_pass http://127.0.0.1:9090/api/;
+#     proxy_pass http://127.0.0.1:9090$xform_api_request_uri;
 #     proxy_set_header Host              $host;
 #     proxy_set_header X-Real-IP         $remote_addr;
 #     proxy_set_header X-Forwarded-For   $proxy_add_x_forwarded_for;

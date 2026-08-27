@@ -7,6 +7,7 @@ import (
 	"net/http"
 
 	"github.com/yet-an-other/xform/internal/hoststats"
+	"github.com/yet-an-other/xform/internal/profiles"
 	"github.com/yet-an-other/xform/internal/session"
 	"github.com/yet-an-other/xform/internal/users"
 	"github.com/yet-an-other/xform/internal/xraystatus"
@@ -30,6 +31,10 @@ type usersSnapshots interface {
 	Latest(context.Context) (users.Snapshot, error)
 }
 
+type connectionProfileSources interface {
+	Current() profiles.Sources
+}
+
 const sessionCookieName = "xform_session"
 
 // PanelInfo is the panel's own identity, exposed through the API: the
@@ -51,7 +56,13 @@ type xrayResponse struct {
 // New returns the HTTP handler for the API and dashboard. Every /api/ route
 // except login and healthz requires a session (SPEC.md §5); the dashboard
 // itself loads openly and lets the SPA route to its login page on 401.
-func New(snapshots hostStatsSnapshots, xray xrayStatuses, usersSource usersSnapshots, sessions sessionManager, dashboard http.Handler, panel PanelInfo) http.Handler {
+func New(snapshots hostStatsSnapshots, xray xrayStatuses, usersSource usersSnapshots, profileSources connectionProfileSources, sessions sessionManager, dashboard http.Handler, panel PanelInfo) http.Handler {
+	noStore := func(next http.HandlerFunc) http.HandlerFunc {
+		return func(response http.ResponseWriter, request *http.Request) {
+			response.Header().Set("Cache-Control", "no-store")
+			next(response, request)
+		}
+	}
 	requireSession := func(next http.HandlerFunc) http.HandlerFunc {
 		return func(response http.ResponseWriter, request *http.Request) {
 			cookie, err := request.Cookie(sessionCookieName)
@@ -137,6 +148,33 @@ func New(snapshots hostStatsSnapshots, xray xrayStatuses, usersSource usersSnaps
 
 		writeJSON(response, http.StatusOK, snapshot)
 	}))
+	mux.HandleFunc("GET /api/v1/users/{email}", noStore(requireSession(func(response http.ResponseWriter, request *http.Request) {
+		if malformedUserEmailEscape(request.RequestURI) {
+			writeJSON(response, http.StatusBadRequest, map[string]string{"error": "invalid_request"})
+			return
+		}
+		snapshot, err := usersSource.Latest(request.Context())
+		if err != nil {
+			writeJSON(response, http.StatusInternalServerError, map[string]string{"error": "user detail unavailable"})
+			return
+		}
+
+		email := request.PathValue("email")
+		for _, user := range snapshot.Users {
+			if user.Email != email {
+				continue
+			}
+			collection := profiles.Evaluate(email, user.Gone, profileSources.Current())
+			writeJSON(response, http.StatusOK, userDetailResponse{
+				CollectedAt:        snapshot.CollectedAt,
+				Stale:              snapshot.Stale,
+				User:               user,
+				ConnectionProfiles: connectionProfilesJSON(collection),
+			})
+			return
+		}
+		writeJSON(response, http.StatusNotFound, map[string]string{"error": "not_found"})
+	})))
 	mux.Handle("/api/", requireSession(func(response http.ResponseWriter, _ *http.Request) {
 		writeJSON(response, http.StatusNotFound, map[string]string{"error": "not found"})
 	}))
