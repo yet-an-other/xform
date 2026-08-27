@@ -16,26 +16,38 @@ import (
 // chmod, or temp-file rename) before re-reading the file.
 const debounce = 250 * time.Millisecond
 
-// Watcher keeps the roster from the xray config file current: it parses the
-// file at start and re-parses on every fsnotify change (SPEC.md §3). A
-// failed re-parse keeps the last good roster — a half-saved config must not
-// empty the users table or mark everyone gone. Version 0 means no config
-// was ever parsed, so consumers can tell "no roster yet" from an empty one.
+// Watcher keeps the Roster and parsed Connection profile view current. It
+// parses the xray config at startup and after each fsnotify change. A failed
+// reload keeps both last-valid results, so a half-saved config cannot empty
+// the Users table or mark every User gone. Roster version 0 and an unavailable
+// Snapshot mean the config has never parsed successfully.
 //
-// The watcher follows the path, not the inode: it watches the parent
-// directory, so atomic replaces (write temp + rename) are picked up.
+// Watcher follows the path rather than the inode. It watches the parent
+// directory so it also detects atomic file replacement.
 type Watcher struct {
 	path string
+	now  func() time.Time
 
-	mu      sync.Mutex
-	roster  map[string]User
-	version uint64
-	lastErr string // last logged parse failure; "" when healthy
+	mu        sync.Mutex
+	roster    map[string]User
+	version   uint64
+	view      View
+	loadedAt  time.Time
+	loaded    bool
+	stale     bool
+	sourceErr *SourceError
+	lastErr   string // last logged source failure; "" when healthy
 }
 
 // NewWatcher creates a Watcher for the xray config at path.
 func NewWatcher(path string) *Watcher {
-	return &Watcher{path: path}
+	return &Watcher{path: path, now: time.Now}
+}
+
+// WithClock overrides the successful-load clock. Call it before Start.
+func (w *Watcher) WithClock(now func() time.Time) *Watcher {
+	w.now = now
+	return w
 }
 
 // Start parses the config immediately, then re-parses on every file change
@@ -109,49 +121,85 @@ func (w *Watcher) Start(ctx context.Context) {
 
 // Roster returns the last good roster parse and its version. The version
 // bumps only when the roster actually changes; 0 means no config was ever
-// parsed successfully. The map is shared — callers must not mutate it.
+// parsed successfully. The map is shared; callers must not mutate it.
 func (w *Watcher) Roster() (map[string]User, uint64) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 	return w.roster, w.version
 }
 
-// reload re-reads and re-parses the config, swapping the roster only when
-// the parse succeeds and the roster actually changed.
+// Snapshot returns the current parsed-xray source state. Its View is
+// immutable, and its SourceError is copied so callers cannot mutate Watcher
+// state.
+func (w *Watcher) Snapshot() Snapshot {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+
+	snapshot := Snapshot{
+		View:      w.view,
+		LoadedAt:  w.loadedAt,
+		Stale:     w.stale,
+		available: w.loaded,
+	}
+	if w.sourceErr != nil {
+		sourceErr := *w.sourceErr
+		snapshot.Error = &sourceErr
+	}
+	return snapshot
+}
+
+// reload re-reads and re-parses the config, swapping each last-valid result
+// only when the shared parse succeeds. Roster versioning remains independent
+// from successful profile-view loads.
 func (w *Watcher) reload() {
 	document, err := os.ReadFile(w.path)
 	if err != nil {
-		w.logFailure("cannot read xray config; keeping the last known roster", err)
+		w.logFailure(ReadFailed, "cannot read xray config; keeping the last known roster", err)
 		return
 	}
-	roster, err := Parse(document)
+	roster, view, err := parse(document)
 	if err != nil {
-		w.logFailure("cannot parse xray config; keeping the last known roster", err)
+		w.logFailure(ParseFailed, "cannot parse xray config; keeping the last known roster", err)
 		return
 	}
+	loadedAt := w.now()
 
 	w.mu.Lock()
-	defer w.mu.Unlock()
-	if w.roster != nil && maps.Equal(w.roster, roster) {
-		return // a save that changed nothing the panel reads
+	rosterChanged := w.roster == nil || !maps.Equal(w.roster, roster)
+	if rosterChanged {
+		w.roster = roster
+		w.version++
 	}
-	w.roster = roster
-	w.version++
-	if w.lastErr != "" {
-		w.lastErr = ""
+	w.view = view
+	w.loadedAt = loadedAt
+	w.loaded = true
+	w.stale = false
+	w.sourceErr = nil
+	recovered := w.lastErr != ""
+	w.lastErr = ""
+	w.mu.Unlock()
+
+	if recovered {
 		slog.Info("xray config parse recovered")
 	}
-	slog.Info("xray config roster updated", "path", w.path, "users", len(roster))
+	if rosterChanged {
+		slog.Info("xray config roster updated", "path", w.path, "users", len(roster))
+	}
 }
 
-// logFailure logs a persistent failure once — when its message changes —
-// instead of on every save attempt.
-func (w *Watcher) logFailure(msg string, err error) {
+// logFailure records safe source state and logs a persistent failure once,
+// when its reason or diagnostic changes, instead of on every save attempt.
+func (w *Watcher) logFailure(reason ErrorReason, msg string, err error) {
 	w.mu.Lock()
-	defer w.mu.Unlock()
-	if w.lastErr == err.Error() {
-		return
+	w.stale = w.loaded
+	sourceErr := safeSourceError(reason, w.stale)
+	w.sourceErr = &sourceErr
+	failure := string(reason) + ": " + err.Error()
+	changed := w.lastErr != failure
+	w.lastErr = failure
+	w.mu.Unlock()
+
+	if changed {
+		slog.Warn(msg, "path", w.path, "error", err)
 	}
-	w.lastErr = err.Error()
-	slog.Warn(msg, "path", w.path, "error", err)
 }

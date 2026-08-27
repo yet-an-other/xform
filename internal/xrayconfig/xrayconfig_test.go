@@ -108,3 +108,9 @@ func TestParseRejectsMalformedConfig(t *testing.T) {
 		t.Fatal("parse malformed JSON: got nil error, want one")
 	}
 }
+
+func TestParseRejectsTrailingJSONValue(t *testing.T) {
+	if _, err := xrayconfig.Parse([]byte(`{"inbounds": []} {"inbounds": []}`)); err == nil {
+		t.Fatal("parse trailing JSON value: got nil error, want one")
+	}
+}

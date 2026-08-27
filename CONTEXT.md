@@ -123,7 +123,7 @@ The panel's view of the xray service: running, stopped, or unreachable.
 _Avoid_: health, state (alone)
 
 **Stale**:
-The mark on user data being served from the panel's last-known snapshot because xray is unreachable. Stale data is shown, but always flagged.
+The mark on observations or source-derived data served from the Panel's last-valid snapshot because the current query, read, or parse failed. User observations become stale when xray is unreachable; parsed xray config and Advertised connection settings become stale when a reload fails. Each source reports freshness independently. Stale data is shown, but always flagged.
 _Avoid_: cached, outdated, frozen
 
 **Degraded**:

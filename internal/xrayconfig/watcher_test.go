@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"sync"
 	"testing"
 	"time"
 
@@ -21,6 +22,23 @@ const twoUserConfig = `{
 		{"protocol": "vless", "settings": {"clients": [{"email": "alice@example.com"}, {"email": "bob@example.com"}]}, "streamSettings": {"security": "reality"}}
 	]
 }`
+
+type watcherClock struct {
+	mu  sync.Mutex
+	now time.Time
+}
+
+func (c *watcherClock) Now() time.Time {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.now
+}
+
+func (c *watcherClock) Set(now time.Time) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.now = now
+}
 
 func writeConfig(t *testing.T, path, content string) {
 	t.Helper()
@@ -68,6 +86,49 @@ func TestWatcherLoadsRosterAndPicksUpEdits(t *testing.T) {
 	}
 }
 
+func TestWatcherUpdatesViewWithoutChangingRosterVersion(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.json")
+	writeConfig(t, path, `{
+		"inbounds": [{
+			"tag": "before",
+			"protocol": "vless",
+			"settings": {"clients": [{"email": "alice@example.com", "id": "before-id"}]},
+			"streamSettings": {"network": "raw", "security": "reality"}
+		}]
+	}`)
+	firstLoad := time.Date(2026, time.August, 27, 10, 0, 0, 0, time.UTC)
+	clock := &watcherClock{now: firstLoad}
+
+	watcher := xrayconfig.NewWatcher(path).WithClock(clock.Now)
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	watcher.Start(ctx)
+	_, rosterVersion := watcher.Roster()
+
+	secondLoad := firstLoad.Add(time.Minute)
+	clock.Set(secondLoad)
+	writeConfig(t, path, `{
+		"inbounds": [{
+			"tag": "after",
+			"protocol": "vless",
+			"settings": {"clients": [{"email": "alice@example.com", "id": "after-id"}]},
+			"streamSettings": {"network": "raw", "security": "reality"}
+		}]
+	}`)
+	waitFor(t, "profile-only config edit", func() bool {
+		return watcher.Snapshot().LoadedAt.Equal(secondLoad)
+	})
+
+	snapshot := watcher.Snapshot()
+	inbound := snapshot.View.Inbounds()[0]
+	if inbound.Tag != "after" || inbound.Users()[0].ClientID != "after-id" {
+		t.Errorf("updated view = %+v, want changed tag and Client ID", inbound)
+	}
+	if _, version := watcher.Roster(); version != rosterVersion {
+		t.Errorf("roster version = %d after profile-only edit, want unchanged %d", version, rosterVersion)
+	}
+}
+
 // A broken write (a config saved half-edited) must not empty the roster:
 // the watcher keeps serving the last good parse.
 func TestWatcherKeepsLastGoodRosterOnParseError(t *testing.T) {
@@ -98,6 +159,62 @@ func TestWatcherKeepsLastGoodRosterOnParseError(t *testing.T) {
 	})
 }
 
+func TestWatcherRetainsAStaleLastValidViewAfterParseFailure(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.json")
+	writeConfig(t, path, oneUserConfig)
+	loadedAt := time.Date(2026, time.August, 27, 8, 30, 0, 0, time.UTC)
+	clock := &watcherClock{now: loadedAt}
+
+	watcher := xrayconfig.NewWatcher(path).WithClock(clock.Now)
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	watcher.Start(ctx)
+
+	initial := watcher.Snapshot()
+	if !initial.Available() || !initial.LoadedAt.Equal(loadedAt) || initial.Stale || initial.Error != nil {
+		t.Fatalf("initial snapshot = %+v, want current view loaded at %v", initial, loadedAt)
+	}
+	if got := initial.View.Inbounds(); len(got) != 1 || got[0].Users()[0].Email != "alice@example.com" {
+		t.Fatalf("initial view = %+v, want alice's inbound", got)
+	}
+	_, initialRosterVersion := watcher.Roster()
+
+	clock.Set(loadedAt.Add(time.Hour))
+	writeConfig(t, path, `{"inbounds": []} {"privateKey": "must-not-leak"}`)
+	waitFor(t, "stale parsed view", func() bool {
+		return watcher.Snapshot().Stale
+	})
+
+	stale := watcher.Snapshot()
+	if !stale.Available() || !stale.LoadedAt.Equal(loadedAt) {
+		t.Errorf("stale snapshot loaded_at = %v (available %t), want retained %v", stale.LoadedAt, stale.Available(), loadedAt)
+	}
+	if stale.Error == nil || stale.Error.Reason != xrayconfig.ParseFailed {
+		t.Fatalf("stale snapshot error = %+v, want parse_failed", stale.Error)
+	}
+	if got, want := stale.Error.Message, "The configured xray file could not be parsed; profiles use the last valid parse."; got != want {
+		t.Errorf("safe error = %q, want %q", got, want)
+	}
+	if got := stale.View.Inbounds(); len(got) != 1 || got[0].Users()[0].Email != "alice@example.com" {
+		t.Errorf("stale view = %+v, want retained alice inbound", got)
+	}
+	if roster, version := watcher.Roster(); version != initialRosterVersion || len(roster) != 1 {
+		t.Errorf("stale roster = %v (version %d), want retained version %d", roster, version, initialRosterVersion)
+	}
+
+	recoveredAt := loadedAt.Add(2 * time.Hour)
+	clock.Set(recoveredAt)
+	writeConfig(t, path, twoUserConfig)
+	waitFor(t, "recovered parsed view", func() bool {
+		snapshot := watcher.Snapshot()
+		return !snapshot.Stale && snapshot.LoadedAt.Equal(recoveredAt)
+	})
+	recovered := watcher.Snapshot()
+	if recovered.Error != nil || len(recovered.View.Inbounds()[0].Users()) != 2 {
+		t.Errorf("recovered snapshot = %+v, want current two-User view", recovered)
+	}
+}
+
 // Editors and config managers often replace the file atomically (write temp
 // + rename). The watcher follows the path, not the inode.
 func TestWatcherFollowsAtomicReplace(t *testing.T) {
@@ -126,8 +243,9 @@ func TestWatcherFollowsAtomicReplace(t *testing.T) {
 // flags alone rather than marking everyone gone on a panel misconfiguration.
 func TestWatcherWithoutReadableConfigReportsNoRoster(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "config.json")
+	loadedAt := time.Date(2026, time.August, 27, 9, 45, 0, 0, time.UTC)
 
-	watcher := xrayconfig.NewWatcher(path)
+	watcher := xrayconfig.NewWatcher(path).WithClock(func() time.Time { return loadedAt })
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
 	watcher.Start(ctx)
@@ -136,10 +254,21 @@ func TestWatcherWithoutReadableConfigReportsNoRoster(t *testing.T) {
 	if roster, version := watcher.Roster(); version != 0 || roster != nil {
 		t.Errorf("roster = %v (version %d), want nil at version 0 for a missing config", roster, version)
 	}
+	snapshot := watcher.Snapshot()
+	if snapshot.Available() || snapshot.Stale || !snapshot.LoadedAt.IsZero() || len(snapshot.View.Inbounds()) != 0 {
+		t.Errorf("never-loaded snapshot = %+v, want unavailable without a stale View", snapshot)
+	}
+	if snapshot.Error == nil || snapshot.Error.Reason != xrayconfig.ReadFailed ||
+		snapshot.Error.Message != "The configured xray file could not be read." {
+		t.Errorf("never-loaded error = %+v, want safe read_failed", snapshot.Error)
+	}
 
 	writeConfig(t, path, oneUserConfig)
 	waitFor(t, "the appearing config", func() bool {
-		_, version := watcher.Roster()
-		return version > 0
+		return watcher.Snapshot().Available()
 	})
+	snapshot = watcher.Snapshot()
+	if !snapshot.LoadedAt.Equal(loadedAt) || snapshot.Stale || snapshot.Error != nil {
+		t.Errorf("first successful snapshot = %+v, want current View loaded at %v", snapshot, loadedAt)
+	}
 }

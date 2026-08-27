@@ -1,0 +1,141 @@
+{
+  "inbounds": [
+    {
+      "tag": "duplicate-tag",
+      "protocol": "vless",
+      "settings": {
+        "flow": "xtls-rprx-vision",
+        "decryption": "none",
+        "clients": [
+          {
+            "email": "alice@example.com",
+            "id": "alice-custom-id",
+            "flow": "xtls-rprx-vision"
+          },
+          {
+            "email": "alice@example.com",
+            "id": "alice-second-id"
+          },
+          {
+            "email": "reverse@example.com",
+            "id": "reverse-custom-id",
+            "reverse": {"tag": "reverse-tunnel"}
+          }
+        ]
+      },
+      "streamSettings": {
+        "network": "raw",
+        "security": "reality",
+        "rawSettings": {
+          "header": {"type": "none"}
+        },
+        "realitySettings": {
+          "serverNames": ["one.example.com", "two.example.com"],
+          "shortIds": ["", "0123456789abcdef"],
+          "privateKey": "must-not-be-retained",
+          "mldsa65Seed": "must-not-be-retained-either"
+        }
+      }
+    },
+    {
+      "tag": "duplicate-tag",
+      "protocol": "vless",
+      "settings": {
+        "decryption": "none",
+        "clients": [
+          {
+            "email": "alice@example.com",
+            "id": "alice-websocket-id"
+          }
+        ]
+      },
+      "streamSettings": {
+        "network": "ws",
+        "security": "tls",
+        "wsSettings": {
+          "path": "/socket",
+          "host": "ws.example.com"
+        },
+        "tlsSettings": {
+          "serverName": "tls.example.com",
+          "alpn": ["h2", "http/1.1"],
+          "rejectUnknownSni": true,
+          "certificates": [
+            {"key": ["must-not-be-retained-tls-key"]}
+          ]
+        }
+      }
+    },
+    {
+      "protocol": "vless",
+      "settings": {
+        "decryption": "none",
+        "clients": [
+          {
+            "email": "upgrade@example.com",
+            "id": "upgrade-custom-id",
+            "flow": ""
+          }
+        ]
+      },
+      "streamSettings": {
+        "network": "httpupgrade",
+        "security": "tls",
+        "httpupgradeSettings": {
+          "path": "/upgrade",
+          "host": "upgrade.example.com"
+        }
+      }
+    },
+    {
+      "tag": "grpc-reality",
+      "protocol": "vless",
+      "settings": {
+        "flow": "xtls-rprx-vision",
+        "decryption": "none",
+        "clients": [
+          {
+            "email": "grpc@example.com",
+            "id": "grpc-custom-id"
+          }
+        ]
+      },
+      "streamSettings": {
+        "network": "grpc",
+        "security": "reality",
+        "grpcSettings": {
+          "serviceName": "xform.Profile",
+          "authority": "grpc.example.com",
+          "multiMode": true
+        },
+        "realitySettings": {
+          "serverNames": ["grpc.example.com"],
+          "shortIds": ["abcd"]
+        }
+      }
+    },
+    {
+      "tag": "xhttp-tls",
+      "protocol": "vless",
+      "settings": {
+        "decryption": "none",
+        "clients": [
+          {
+            "email": "xhttp@example.com",
+            "id": "xhttp-custom-id"
+          }
+        ]
+      },
+      "streamSettings": {
+        "network": "xhttp",
+        "security": "tls",
+        "xhttpSettings": {
+          "path": "/split",
+          "host": "xhttp.example.com",
+          "mode": "stream-up",
+          "extra": {"noSSEHeader": true}
+        }
+      }
+    }
+  ]
+}
