@@ -17,6 +17,26 @@ User=xform
 # Creates /var/lib/xform (default XFORM_DB location) owned by the system user.
 StateDirectory=xform
 
+# Log snapshots. Both this unit and the configured xray service log into one
+# dedicated journal namespace, and the xform user gets read ACLs on that
+# namespace alone — never membership in systemd-journal, adm, or wheel, which
+# would grant every journal on the host. The namespace is the boundary: any
+# other unit assigned to it becomes readable by the panel.
+#
+# Consequence for admins: this unit's own records leave the default journal.
+# Read them with `journalctl --namespace=xform -u xform.service`.
+# Full procedure: docs/journal-namespace.md.
+LogNamespace=xform
+
+# Re-apply the namespace ACLs, as root, before the panel starts. Boot-time
+# tmpfiles processing runs long before systemd-journald@xform creates the
+# volatile /run/log/journal/<machine-id>.xform directory, so on a volatile host
+# that pass has nothing to act on; by the time this runs, LogNamespace= above
+# has already brought the namespace up. "+" runs it as root outside this unit's
+# sandbox; "-" keeps a host that never ran the migration starting normally,
+# with Log snapshots reporting their own error and nothing else affected.
+ExecStartPre=-+/usr/bin/systemd-tmpfiles --create /etc/tmpfiles.d/xform-journal-acl.conf
+
 # Hardening. The panel needs exactly: read-only host /proc + /sys, the D-Bus
 # system bus, a loopback listener, outbound loopback to the xray gRPC API,
 # and its writable StateDirectory (ProtectSystem=strict leaves that writable).
@@ -45,6 +65,11 @@ Environment=XFORM_LISTEN=127.0.0.1:9090
 # Environment=XFORM_XRAY_CONFIG=/usr/local/etc/xray/config.json
 # Environment=XFORM_DB=/var/lib/xform/xform.db
 # Environment=XFORM_XRAY_UNIT=xray.service
+# journalctl is exec'd for Log snapshots; the panel refuses to start when this
+# path is not an absolute, executable, regular file. Override on distros that
+# ship it elsewhere. The hardening above is deliberately not relaxed for it:
+# a journalctl this sandbox cannot run costs the panel its Log snapshots only.
+# Environment=XFORM_JOURNALCTL=/usr/bin/journalctl
 
 [Install]
 WantedBy=multi-user.target

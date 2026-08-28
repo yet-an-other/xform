@@ -7,6 +7,10 @@
 #
 # Overrides: XFORM_INSTALL_PATH, XFORM_SERVICE, XFORM_HEALTH_URL.
 # The default health URL is the one unauthenticated endpoint, so no session is needed.
+#
+# Scope: the binary and a service restart. Never a unit, drop-in, tmpfiles, or
+# ACL file — an update can neither grant nor revoke the panel's journal access
+# (docs/journal-namespace.md).
 set -euo pipefail
 
 REPO="yet-an-other/xform"

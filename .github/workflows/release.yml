@@ -64,5 +64,9 @@ jobs:
           if gh release view "$VERSION" >/dev/null 2>&1; then
             gh release upload "$VERSION" --clobber $assets
           else
-            gh release create "$VERSION" --generate-notes $assets
+            # The preamble rides above the generated notes: every release has
+            # to name the manual journal-namespace migration, because no
+            # release performs it.
+            gh release create "$VERSION" --generate-notes \
+              --notes-file deploy/release-notes-preamble.md $assets
           fi

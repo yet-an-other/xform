@@ -89,6 +89,33 @@ ssh root@HOST 'chgrp xform /usr/local/etc/xray/config.json && chmod 0640 /usr/lo
 
 or via an ACL: `setfacl -m u:xform:r /usr/local/etc/xray/config.json`. Either way the file's directory (`/usr/local/etc/xray`, typically `0755`) must stay traversable by the `xform` system user.
 
+### Journal namespace (log snapshots)
+
+The panel's Log snapshot viewers read the journal as the unprivileged `xform`
+user, bounded by a dedicated journal namespace rather than by membership in
+`systemd-journal`, `adm`, or `wheel` — those would grant every journal on the
+host. Both `xform.service` and the canonical xray unit log into the `xform`
+namespace, and the `xform` user gets read ACLs on that namespace's directories
+only. Needs Linux with systemd 245+, `journalctl`, ACL support, and tmpfiles.
+
+It takes three artifacts — the panel unit above (`LogNamespace=xform`), an xray
+drop-in ([`deploy/xray-journal-namespace.conf.example`](deploy/xray-journal-namespace.conf.example)),
+and tmpfiles ACL rules ([`deploy/xform-journal-acl.conf`](deploy/xform-journal-acl.conf))
+— plus a restart of both services. It is a manual, one-time migration: updates
+never install or change root-owned configuration. Existing installs should add
+`LogNamespace=` with `systemctl edit xform.service` rather than overwrite the
+unit, which would discard the `XFORM_PASSWORD` you put in it.
+
+Both services' records leave the default journal afterwards: read them with
+`journalctl --namespace=xform -u xform.service`. Nothing is copied —
+pre-migration records stay in the default journal, out of the panel's reach.
+**Any other unit you assign to this namespace becomes readable by the panel.**
+
+Skipping this is fine: monitoring, users, and Config snapshots all work without
+it, and only the Log snapshot endpoints report their own `access_denied` or
+`journalctl_unavailable`. Step-by-step migration, rollback, and the root-run
+verification procedure: [docs/journal-namespace.md](docs/journal-namespace.md).
+
 ### xray prerequisites
 
 xray must expose per-user and system stats to its loopback gRPC API (without them the panel still runs, but reports xray as `unreachable`). Merge this into the xray config (SPEC.md §2):

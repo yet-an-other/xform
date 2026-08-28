@@ -1,0 +1,27 @@
+# xray journal namespace drop-in
+#
+# Install as a drop-in for the *canonical* xray unit — the Id systemd reports,
+# not the spelling you happen to type:
+#
+#   unit="$(systemctl show -p Id --value xray.service)"
+#   install -d "/etc/systemd/system/${unit}.d"
+#   install -m 0644 xray-journal-namespace.conf.example \
+#       "/etc/systemd/system/${unit}.d/10-xform-journal.conf"
+#   systemctl daemon-reload && systemctl restart "$unit"
+#
+# This moves xray's records out of the default journal and into the namespace
+# the panel may read. Two consequences, both intended:
+#
+#   1. `journalctl -u xray.service` stops showing new records. Read them with
+#      `journalctl --namespace=xform -u xray.service`. Records written before
+#      the restart stay where they are; nothing is copied or migrated.
+#   2. Every unit assigned to this namespace becomes readable by the panel's
+#      unprivileged user. Assign xray and the panel — nothing else.
+#
+# The panel reads the namespace, never the unit name you type: XFORM_XRAY_UNIT
+# must resolve through systemd to this same canonical Id.
+#
+# Full procedure, including the ACLs this relies on: docs/journal-namespace.md.
+
+[Service]
+LogNamespace=xform
