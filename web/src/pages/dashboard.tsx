@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 
 import { MetricCard } from "@/components/metric-card";
 import { Badge } from "@/components/ui/badge";
@@ -358,6 +358,8 @@ export function Dashboard({ onUnauthenticated }: { onUnauthenticated: () => void
     setDetailsEmail(email);
   }
 
+  const closeDetails = useCallback(() => setDetailsEmail(null), []);
+
   useEffect(() => {
     const controller = new AbortController();
 
@@ -506,10 +508,10 @@ export function Dashboard({ onUnauthenticated }: { onUnauthenticated: () => void
       {detailsEmail !== null ? (
         <UserDetailsModal
           email={detailsEmail}
-          snapshot={users}
           open
           opener={detailsOpener}
-          onClose={() => setDetailsEmail(null)}
+          onClose={closeDetails}
+          onUnauthenticated={onUnauthenticated}
         />
       ) : null}
     </main>

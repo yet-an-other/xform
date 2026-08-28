@@ -101,6 +101,73 @@ export function fetchUsers(signal?: AbortSignal): Promise<UsersSnapshot> {
   return getJSON<UsersSnapshot>("api/v1/users", signal);
 }
 
+export type ConnectionProfileState =
+  | "ready"
+  | "gone_user"
+  | "no_matching_inbound"
+  | "source_unavailable";
+
+export interface ConnectionProfileSourceError {
+  source: "xray_config" | "advertisements";
+  reason: "read_failed" | "parse_failed" | "unsupported_version";
+  message: string;
+}
+
+export interface AvailableConnectionProfile {
+  status: "available";
+  inbound_tag: string;
+  name: string;
+  topology: string;
+  client_id: string;
+  flow: string | null;
+  endpoint: { host: string; port: number };
+  transport: { type: string; [key: string]: unknown };
+  security: { type: string; [key: string]: unknown };
+  uri: string;
+}
+
+export type ConnectionProfileUnavailableReason =
+  | "source_unavailable"
+  | "advertisement_missing"
+  | "advertisement_invalid"
+  | "duplicate_inbound_tag"
+  | "duplicate_user"
+  | "inbound_tag_missing"
+  | "reverse_user"
+  | "unsupported_transport"
+  | "unsupported_security"
+  | "unsupported_encryption"
+  | "insecure_connection"
+  | "inbound_mismatch"
+  | "invalid_client_id";
+
+export interface UnavailableConnectionProfile {
+  status: "unavailable";
+  inbound_tag: string | null;
+  name: string | null;
+  reason: ConnectionProfileUnavailableReason;
+  message: string;
+}
+
+export type ConnectionProfile = AvailableConnectionProfile | UnavailableConnectionProfile;
+
+export interface UserDetail {
+  collected_at: number;
+  stale: boolean;
+  user: User;
+  connection_profiles: {
+    state: ConnectionProfileState;
+    loaded_at: number | null;
+    stale: boolean;
+    errors: ConnectionProfileSourceError[];
+    items: ConnectionProfile[];
+  };
+}
+
+export function fetchUserDetail(email: string, signal?: AbortSignal): Promise<UserDetail> {
+  return getJSON<UserDetail>(`api/v1/users/${encodeURIComponent(email)}`, signal);
+}
+
 // PanelInfo is the panel's own identity (IN-DEV-SPEC §6.1): the release
 // version stamped into the binary at build time plus the current process
 // uptime in whole seconds. Fetched every poll — the dashboard refreshes

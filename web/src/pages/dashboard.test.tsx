@@ -59,15 +59,40 @@ function stubEndpoints(routes: {
   server?: () => Response;
   xray?: () => Response;
   users?: () => Response;
+  details?: (url: string, init?: RequestInit) => Response | Promise<Response>;
   panel?: () => Response;
   logout?: () => Response;
 }): ReturnType<typeof vi.fn> {
-  const mock = vi.fn(async (input: RequestInfo | URL) => {
+  let latestUsers: { collected_at: number; stale: boolean; users: typeof usersSnapshot.users } | null = null;
+  const mock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = String(input);
     if (url.endsWith("api/v1/server") && routes.server) return routes.server();
     if (url.endsWith("api/v1/xray") && routes.xray) return routes.xray();
     if (url.endsWith("api/v1/users")) {
-      return routes.users ? routes.users() : json({ collected_at: 1_723_800_000, stale: false, users: [] });
+      const response = routes.users
+        ? routes.users()
+        : json({ collected_at: 1_723_800_000, stale: false, users: [] });
+      if (response.ok) latestUsers = await response.clone().json();
+      return response;
+    }
+    if (url.includes("api/v1/users/")) {
+      if (routes.details) return routes.details(url, init);
+      const email = decodeURIComponent(url.slice(url.lastIndexOf("/") + 1));
+      const user = latestUsers?.users.find((candidate) => candidate.email === email);
+      return user
+        ? json({
+            collected_at: latestUsers?.collected_at,
+            stale: latestUsers?.stale,
+            user,
+            connection_profiles: {
+              state: user.gone ? "gone_user" : "no_matching_inbound",
+              loaded_at: latestUsers?.collected_at,
+              stale: false,
+              errors: [],
+              items: [],
+            },
+          })
+        : json({ error: "not found" }, 404);
     }
     if (url.endsWith("api/v1/panel")) {
       return routes.panel
@@ -577,6 +602,461 @@ describe("user details dialog", () => {
     return screen.getByRole("button", { name: `Open ${email} details` });
   }
 
+  it("requests the exact User email as one encoded path segment", async () => {
+    const email = "alice/50%@例.example";
+    const user = { ...usersSnapshot.users[0], email };
+    const fetchMock = stubEndpoints({
+      server: () => json(stats),
+      xray: () => json(xrayRunning),
+      users: () => json({ ...usersSnapshot, users: [user] }),
+      details: () =>
+        json({
+          collected_at: usersSnapshot.collected_at,
+          stale: false,
+          user,
+          connection_profiles: {
+            state: "no_matching_inbound",
+            loaded_at: usersSnapshot.collected_at,
+            stale: false,
+            errors: [],
+            items: [],
+          },
+        }),
+    });
+
+    render(<Dashboard onUnauthenticated={() => {}} />);
+    await screen.findByRole("region", { name: "Users" });
+    fireEvent.click(openAction(email));
+
+    expect(await screen.findByRole("dialog", { name: `${email} details` })).toHaveTextContent(email);
+    expect(
+      fetchMock.mock.calls.some(
+        ([input]) => String(input) === `api/v1/users/${encodeURIComponent(email)}`,
+      ),
+    ).toBe(true);
+  });
+
+  it("skips a refresh while a detail request is slow and cancels it on close", async () => {
+    vi.useFakeTimers();
+    let resolveDetail!: (response: Response) => void;
+    const pendingDetail = new Promise<Response>((resolve) => {
+      resolveDetail = resolve;
+    });
+    let detailSignal: AbortSignal | undefined;
+    const fetchMock = stubEndpoints({
+      server: () => json(stats),
+      xray: () => json(xrayRunning),
+      users: () => json(usersSnapshot),
+      details: (_url, init) => {
+        detailSignal = init?.signal ?? undefined;
+        return pendingDetail;
+      },
+    });
+
+    render(<Dashboard onUnauthenticated={() => {}} />);
+    await act(async () => {
+      await Promise.resolve();
+    });
+    fireEvent.click(openAction("alice@example.com"));
+    expect(
+      fetchMock.mock.calls.filter(([input]) => String(input).includes("api/v1/users/") ),
+    ).toHaveLength(1);
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(5_000);
+    });
+
+    expect(
+      fetchMock.mock.calls.filter(([input]) => String(input).includes("api/v1/users/") ),
+    ).toHaveLength(1);
+    expect(
+      fetchMock.mock.calls.filter(([input]) => String(input).endsWith("api/v1/users")),
+    ).toHaveLength(2);
+
+    fireEvent.click(screen.getByRole("button", { name: "Close User details" }));
+    expect(detailSignal?.aborted).toBe(true);
+    resolveDetail(json({}));
+  });
+
+  it("ignores a cancelled User response after another User opens", async () => {
+    let resolveAlice!: (response: Response) => void;
+    let aliceSignal: AbortSignal | undefined;
+    const alicePending = new Promise<Response>((resolve) => {
+      resolveAlice = resolve;
+    });
+    const fetchMock = stubEndpoints({
+      server: () => json(stats),
+      xray: () => json(xrayRunning),
+      users: () => json(usersSnapshot),
+      details: (url, init) => {
+        if (url.endsWith("alice%40example.com")) {
+          aliceSignal = init?.signal ?? undefined;
+          return alicePending;
+        }
+        const bob = usersSnapshot.users[1];
+        return json({
+          collected_at: usersSnapshot.collected_at,
+          stale: false,
+          user: bob,
+          connection_profiles: {
+            state: "no_matching_inbound",
+            loaded_at: usersSnapshot.collected_at,
+            stale: false,
+            errors: [],
+            items: [],
+          },
+        });
+      },
+    });
+
+    render(<Dashboard onUnauthenticated={() => {}} />);
+    await screen.findByRole("region", { name: "Users" });
+    fireEvent.click(openAction("alice@example.com"));
+    fireEvent.click(screen.getByRole("button", { name: "Close User details" }));
+    expect(aliceSignal?.aborted).toBe(true);
+
+    fireEvent.click(openAction("bob@example.com"));
+    const bobDialog = await screen.findByRole("dialog", { name: "bob@example.com details" });
+    expect(within(bobDialog).getByText("bob@example.com")).toBeInTheDocument();
+
+    resolveAlice(
+      json({
+        collected_at: usersSnapshot.collected_at,
+        stale: false,
+        user: usersSnapshot.users[0],
+        connection_profiles: {
+          state: "no_matching_inbound",
+          loaded_at: usersSnapshot.collected_at,
+          stale: false,
+          errors: [],
+          items: [],
+        },
+      }),
+    );
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    expect(screen.getByRole("dialog", { name: "bob@example.com details" })).toBeInTheDocument();
+    expect(within(bobDialog).queryByText("alice@example.com")).not.toBeInTheDocument();
+    expect(
+      fetchMock.mock.calls.filter(([input]) => String(input).includes("api/v1/users/")),
+    ).toHaveLength(2);
+  });
+
+  it("shows every available and unavailable Connection profile result", async () => {
+    const uri = "vless://full-secret@example.com:443?type=tcp&security=tls#Primary";
+    stubEndpoints({
+      server: () => json(stats),
+      xray: () => json(xrayRunning),
+      users: () => json(usersSnapshot),
+      details: () =>
+        json({
+          collected_at: usersSnapshot.collected_at,
+          stale: false,
+          user: usersSnapshot.users[0],
+          connection_profiles: {
+            state: "ready",
+            loaded_at: usersSnapshot.collected_at,
+            stale: false,
+            errors: [],
+            items: [
+              {
+                status: "available",
+                inbound_tag: "primary",
+                name: "Primary",
+                topology: "direct",
+                client_id: "full-secret",
+                flow: null,
+                endpoint: { host: "example.com", port: 443 },
+                transport: { type: "tcp" },
+                security: { type: "tls" },
+                uri,
+              },
+              {
+                status: "unavailable",
+                inbound_tag: "fallback",
+                name: "Fallback",
+                reason: "advertisement_missing",
+                message: "No Advertised connection settings select this inbound.",
+              },
+            ],
+          },
+        }),
+    });
+
+    render(<Dashboard onUnauthenticated={() => {}} />);
+    await screen.findByRole("region", { name: "Users" });
+    fireEvent.click(openAction("alice@example.com"));
+
+    const dialog = await screen.findByRole("dialog", { name: "alice@example.com details" });
+    expect(within(dialog).getByRole("heading", { name: "Connection profiles" })).toBeInTheDocument();
+    const available = within(dialog).getByRole("article", { name: "Primary Connection profile" });
+    expect(available).toHaveTextContent("Primary");
+    expect(available).toHaveTextContent("primary");
+    expect(available).toHaveTextContent(uri);
+
+    const unavailable = within(dialog).getByRole("article", { name: "Fallback unavailable Connection profile" });
+    expect(unavailable).toHaveTextContent("Fallback");
+    expect(unavailable).toHaveTextContent("fallback");
+    expect(unavailable).toHaveTextContent("advertisement_missing");
+    expect(unavailable).toHaveTextContent("No Advertised connection settings select this inbound.");
+    expect(unavailable).not.toHaveTextContent("full-secret");
+    expect(unavailable).not.toHaveTextContent("vless://");
+  });
+
+  it("shows current observations and stale profile sources independently", async () => {
+    const uri = "vless://last-valid@example.com:443#Primary";
+    stubEndpoints({
+      server: () => json(stats),
+      xray: () => json(xrayRunning),
+      users: () => json(usersSnapshot),
+      details: () =>
+        json({
+          collected_at: usersSnapshot.collected_at,
+          stale: false,
+          user: usersSnapshot.users[0],
+          connection_profiles: {
+            state: "ready",
+            loaded_at: usersSnapshot.collected_at - 60,
+            stale: true,
+            errors: [
+              {
+                source: "advertisements",
+                reason: "parse_failed",
+                message: "The advertised settings could not be parsed; profiles use the last valid parse.",
+              },
+            ],
+            items: [
+              {
+                status: "available",
+                inbound_tag: "primary",
+                name: "Primary",
+                topology: "direct",
+                client_id: "last-valid",
+                flow: null,
+                endpoint: { host: "example.com", port: 443 },
+                transport: { type: "tcp" },
+                security: { type: "tls" },
+                uri,
+              },
+            ],
+          },
+        }),
+    });
+
+    render(<Dashboard onUnauthenticated={() => {}} />);
+    await screen.findByRole("region", { name: "Users" });
+    fireEvent.click(openAction("alice@example.com"));
+
+    const dialog = await screen.findByRole("dialog", { name: "alice@example.com details" });
+    expect(within(dialog).getByText("live snapshot")).toBeInTheDocument();
+    expect(within(dialog).getByText("stale profile sources")).toBeInTheDocument();
+    const sourceWarning = within(dialog).getByText("Profile source warning").closest("div");
+    expect(sourceWarning).toHaveTextContent("advertisements");
+    expect(sourceWarning).toHaveTextContent("parse_failed");
+    expect(sourceWarning).toHaveTextContent("profiles use the last valid parse");
+    expect(within(dialog).getByText(uri)).toBeInTheDocument();
+  });
+
+  it("keeps stale observations separate from current profile results", async () => {
+    stubEndpoints({
+      server: () => json(stats),
+      xray: () => json(xrayRunning),
+      users: () => json(usersSnapshot),
+      details: () =>
+        json({
+          collected_at: usersSnapshot.collected_at,
+          stale: true,
+          user: { ...usersSnapshot.users[0], online: false },
+          connection_profiles: {
+            state: "no_matching_inbound",
+            loaded_at: usersSnapshot.collected_at,
+            stale: false,
+            errors: [],
+            items: [],
+          },
+        }),
+    });
+
+    render(<Dashboard onUnauthenticated={() => {}} />);
+    await screen.findByRole("region", { name: "Users" });
+    fireEvent.click(openAction("alice@example.com"));
+
+    const dialog = await screen.findByRole("dialog", { name: "alice@example.com details" });
+    expect(within(dialog).getByText("stale snapshot")).toBeInTheDocument();
+    expect(within(dialog).getByText("current profile sources")).toBeInTheDocument();
+    expect(within(dialog).getByText("No matching inbound")).toBeInTheDocument();
+  });
+
+  it.each([
+    ["gone_user", "No connection profiles", "Gone Users keep Traffic and presence history"],
+    ["no_matching_inbound", "No matching inbound", "not present in a current matching VLESS inbound"],
+    ["source_unavailable", "Profile source unavailable", "xray config has never parsed successfully"],
+  ])("presents the %s profile state distinctly", async (state, title, message) => {
+    const user = { ...usersSnapshot.users[0], gone: state === "gone_user" };
+    stubEndpoints({
+      server: () => json(stats),
+      xray: () => json(xrayRunning),
+      users: () => json({ ...usersSnapshot, users: [user] }),
+      details: () =>
+        json({
+          collected_at: usersSnapshot.collected_at,
+          stale: false,
+          user,
+          connection_profiles: {
+            state,
+            loaded_at: state === "source_unavailable" ? null : usersSnapshot.collected_at,
+            stale: false,
+            errors: [],
+            items: [],
+          },
+        }),
+    });
+
+    render(<Dashboard onUnauthenticated={() => {}} />);
+    await screen.findByRole("region", { name: "Users" });
+    if (user.gone) fireEvent.click(screen.getByRole("button", { name: /show gone/i }));
+    fireEvent.click(openAction("alice@example.com"));
+
+    const dialog = await screen.findByRole("dialog", { name: "alice@example.com details" });
+    expect(within(dialog).getByText(title)).toBeInTheDocument();
+    expect(within(dialog).getByText(new RegExp(message))).toBeInTheDocument();
+    if (state === "source_unavailable") {
+      expect(within(dialog).getByText("profile sources unavailable")).toBeInTheDocument();
+    }
+    expect(dialog).not.toHaveTextContent("vless://");
+  });
+
+  it("retains the previous detail with failed-refresh labels", async () => {
+    vi.useFakeTimers();
+    const uri = "vless://previous@example.com:443#Primary";
+    let detailRequests = 0;
+    stubEndpoints({
+      server: () => json(stats),
+      xray: () => json(xrayRunning),
+      users: () => json(usersSnapshot),
+      details: () => {
+        detailRequests += 1;
+        if (detailRequests > 1) return json({ error: "unavailable" }, 503);
+        return json({
+          collected_at: usersSnapshot.collected_at,
+          stale: false,
+          user: usersSnapshot.users[0],
+          connection_profiles: {
+            state: "ready",
+            loaded_at: usersSnapshot.collected_at,
+            stale: false,
+            errors: [],
+            items: [
+              {
+                status: "available",
+                inbound_tag: "primary",
+                name: "Primary",
+                topology: "direct",
+                client_id: "previous",
+                flow: null,
+                endpoint: { host: "example.com", port: 443 },
+                transport: { type: "tcp" },
+                security: { type: "tls" },
+                uri,
+              },
+            ],
+          },
+        });
+      },
+    });
+
+    render(<Dashboard onUnauthenticated={() => {}} />);
+    await act(async () => {
+      await Promise.resolve();
+    });
+    fireEvent.click(openAction("alice@example.com"));
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(5_000);
+    });
+
+    const dialog = screen.getByRole("dialog", { name: "alice@example.com details" });
+    expect(within(dialog).getByRole("alert")).toHaveTextContent("panel returned 503");
+    expect(within(dialog).getByText("refresh failed · showing previous observations")).toBeInTheDocument();
+    expect(within(dialog).getByText("refresh failed · showing previous profiles")).toBeInTheDocument();
+    expect(within(dialog).getByText(uri)).toBeInTheDocument();
+  });
+
+  it("keeps non-session failures inside the open modal", async () => {
+    const onUnauthenticated = vi.fn();
+    stubEndpoints({
+      server: () => json(stats),
+      xray: () => json(xrayRunning),
+      users: () => json(usersSnapshot),
+      details: () => json({ error: "unavailable" }, 500),
+    });
+
+    render(<Dashboard onUnauthenticated={onUnauthenticated} />);
+    await screen.findByRole("region", { name: "Users" });
+    fireEvent.click(openAction("alice@example.com"));
+
+    const dialog = await screen.findByRole("dialog", { name: "alice@example.com details" });
+    expect(await within(dialog).findByRole("alert")).toHaveTextContent("panel returned 500");
+    expect(screen.getByText("23.4%")).toBeInTheDocument();
+    expect(onUnauthenticated).not.toHaveBeenCalled();
+  });
+
+  it("closes and returns to login when a detail refresh answers 401", async () => {
+    vi.useFakeTimers();
+    const onUnauthenticated = vi.fn();
+    let detailRequests = 0;
+    const fetchMock = stubEndpoints({
+      server: () => json(stats),
+      xray: () => json(xrayRunning),
+      users: () => json(usersSnapshot),
+      details: () => {
+        detailRequests += 1;
+        if (detailRequests > 1) return json({ error: "unauthenticated" }, 401);
+        return json({
+          collected_at: usersSnapshot.collected_at,
+          stale: false,
+          user: usersSnapshot.users[0],
+          connection_profiles: {
+            state: "no_matching_inbound",
+            loaded_at: usersSnapshot.collected_at,
+            stale: false,
+            errors: [],
+            items: [],
+          },
+        });
+      },
+    });
+
+    render(<Dashboard onUnauthenticated={onUnauthenticated} />);
+    await act(async () => {
+      await Promise.resolve();
+    });
+    fireEvent.click(openAction("alice@example.com"));
+    await act(async () => {
+      await Promise.resolve();
+    });
+    expect(screen.getByRole("dialog", { name: "alice@example.com details" })).toBeInTheDocument();
+    expect(onUnauthenticated).not.toHaveBeenCalled();
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(5_000);
+    });
+    expect(onUnauthenticated).toHaveBeenCalledTimes(1);
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(5_000);
+    });
+    expect(
+      fetchMock.mock.calls.filter(([input]) => String(input).includes("api/v1/users/")),
+    ).toHaveLength(2);
+  });
+
   it("opens a modal for the exact selected User with real current observations", async () => {
     stubEndpoints({
       server: () => json(stats),
@@ -704,6 +1184,9 @@ describe("user details dialog", () => {
     });
 
     fireEvent.click(openAction("alice@example.com"));
+    await act(async () => {
+      await Promise.resolve();
+    });
     const dialog = screen.getByRole("dialog", { name: "alice@example.com details" });
     expect(within(dialog).getByText("↑ 11.5 GiB")).toBeInTheDocument();
 
@@ -720,10 +1203,81 @@ describe("user details dialog", () => {
       String(input).endsWith("api/v1/users"),
     );
     expect(usersPolls).toHaveLength(2);
+    const detailPolls = fetchMock.mock.calls.filter(([input]) =>
+      String(input).includes("api/v1/users/"),
+    );
+    expect(detailPolls).toHaveLength(2);
     expect(
       screen.getByRole("dialog", { name: "alice@example.com details" }),
     ).toBeInTheDocument();
     expect(within(dialog).getByText("↓ 140 GiB")).toBeInTheDocument();
+  });
+
+  it("retains observations and removes profiles when a User becomes gone", async () => {
+    vi.useFakeTimers();
+    let gone = false;
+    const uri = "vless://credential@example.com:443#Primary";
+    stubEndpoints({
+      server: () => json(stats),
+      xray: () => json(xrayRunning),
+      users: () =>
+        json({
+          ...usersSnapshot,
+          users: [{ ...usersSnapshot.users[0], gone }, usersSnapshot.users[1]],
+        }),
+      details: () => {
+        const user = { ...usersSnapshot.users[0], gone };
+        return json({
+          collected_at: usersSnapshot.collected_at,
+          stale: false,
+          user,
+          connection_profiles: {
+            state: gone ? "gone_user" : "ready",
+            loaded_at: usersSnapshot.collected_at,
+            stale: false,
+            errors: [],
+            items: gone
+              ? []
+              : [
+                  {
+                    status: "available",
+                    inbound_tag: "primary",
+                    name: "Primary",
+                    topology: "direct",
+                    client_id: "credential",
+                    flow: null,
+                    endpoint: { host: "example.com", port: 443 },
+                    transport: { type: "tcp" },
+                    security: { type: "tls" },
+                    uri,
+                  },
+                ],
+          },
+        });
+      },
+    });
+
+    render(<Dashboard onUnauthenticated={() => {}} />);
+    await act(async () => {
+      await Promise.resolve();
+    });
+    fireEvent.click(openAction("alice@example.com"));
+    await act(async () => {
+      await Promise.resolve();
+    });
+    const dialog = screen.getByRole("dialog", { name: "alice@example.com details" });
+    expect(within(dialog).getByText(uri)).toBeInTheDocument();
+
+    gone = true;
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(5_000);
+    });
+
+    expect(within(dialog).getByText("Gone User")).toBeInTheDocument();
+    expect(within(dialog).getByText("historical observations")).toBeInTheDocument();
+    expect(within(dialog).getByText("↑ 11.5 GiB")).toBeInTheDocument();
+    expect(within(dialog).getByText("No connection profiles")).toBeInTheDocument();
+    expect(within(dialog).queryByText(uri)).not.toBeInTheDocument();
   });
 
   it("marks a gone User as gone and shows historical observations", async () => {
