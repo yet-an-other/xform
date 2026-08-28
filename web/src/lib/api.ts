@@ -113,16 +113,44 @@ export interface ConnectionProfileSourceError {
   message: string;
 }
 
+// The typed public transport and security values the URI was built from
+// (IN-DEV-SPEC §6.2). Every field beyond `type` is omitted when it does not
+// apply — except a REALITY short ID, which is present even when empty,
+// because an explicitly empty `sid` is meaningful to the client.
+export interface ConnectionTransport {
+  type: "tcp" | "ws" | "httpupgrade" | "grpc" | "xhttp";
+  path?: string;
+  host?: string;
+  service_name?: string;
+  mode?: string;
+  authority?: string;
+  extra?: unknown;
+}
+
+export interface ConnectionSecurity {
+  type: "tls" | "reality";
+  fingerprint?: string;
+  server_name?: string;
+  alpn?: string[];
+  ech?: string;
+  certificate_pins?: string[];
+  verify_name?: string;
+  public_key?: string;
+  short_id?: string;
+  post_quantum_verify?: string;
+  spider_x?: string;
+}
+
 export interface AvailableConnectionProfile {
   status: "available";
   inbound_tag: string;
   name: string;
-  topology: string;
+  topology: "direct" | "fronted";
   client_id: string;
   flow: string | null;
   endpoint: { host: string; port: number };
-  transport: { type: string; [key: string]: unknown };
-  security: { type: string; [key: string]: unknown };
+  transport: ConnectionTransport;
+  security: ConnectionSecurity;
   uri: string;
 }
 

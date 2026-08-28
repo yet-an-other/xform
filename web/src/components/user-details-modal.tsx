@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState, type ReactNode, type RefObject } from "react";
 
+import { ConnectionProfiles } from "@/components/connection-profile-card";
 import { Badge } from "@/components/ui/badge";
 import { Modal } from "@/components/ui/modal";
 import {
@@ -237,131 +238,6 @@ export function UserDetailsModal({
         {visibleDetail ? <span>Collected at {formatTime24(new Date(visibleDetail.collected_at * 1000))}</span> : null}
       </footer>
     </Modal>
-  );
-}
-
-function ConnectionProfiles({
-  profiles,
-  refreshFailed,
-}: {
-  profiles: UserDetail["connection_profiles"];
-  refreshFailed: boolean;
-}) {
-  return (
-    <section aria-labelledby="connection-profiles-heading" className="mt-6">
-      <div className="mb-2.5 flex items-baseline justify-between gap-3">
-        <h3 id="connection-profiles-heading" className="text-[13px] font-semibold">
-          Connection profiles
-        </h3>
-        <span
-          className={cn(
-            "text-[11px]",
-            profiles.stale ? "text-warning" : "text-muted-foreground",
-          )}
-        >
-          {refreshFailed
-            ? profiles.stale
-              ? "stale profile sources · refresh failed"
-              : "refresh failed · showing previous profiles"
-            : profiles.stale
-              ? "stale profile sources"
-              : profiles.loaded_at === null
-                ? "profile sources unavailable"
-                : "current profile sources"}
-        </span>
-      </div>
-
-      {profiles.errors.length > 0 ? (
-        <div role="alert" className="border-warning/35 bg-warning/10 text-warning mb-3 rounded-[10px] border px-3.5 py-3 text-xs">
-          <strong>Profile source warning</strong>
-          <ul className="mt-1.5 grid gap-1">
-            {profiles.errors.map((sourceError) => (
-              <li key={`${sourceError.source}:${sourceError.reason}`}>
-                <code>{sourceError.source}</code> · <code>{sourceError.reason}</code>: {sourceError.message}
-              </li>
-            ))}
-          </ul>
-        </div>
-      ) : null}
-
-      {profiles.state === "ready" ? (
-        profiles.items.length > 0 ? (
-          <div className="grid gap-3">
-            {profiles.items.map((profile, index) =>
-              profile.status === "available" ? (
-                <article
-                  key={`${profile.inbound_tag}:${index}`}
-                  aria-label={`${profile.name} Connection profile`}
-                  className="border-border-strong bg-card/70 overflow-hidden rounded-xl border"
-                >
-                  <header className="border-border flex flex-wrap items-center gap-2 border-b px-4 py-3">
-                    <h4 className="text-[13px] font-semibold">{profile.name}</h4>
-                    <code className="text-muted-foreground text-[10px]">{profile.inbound_tag}</code>
-                  </header>
-                  <div className="px-4 py-3">
-                    <p className="text-muted-foreground text-[10px] font-bold tracking-[0.08em] uppercase">
-                      Connection URI
-                    </p>
-                    <code className="mt-1.5 block [overflow-wrap:anywhere] text-[11px] leading-relaxed">
-                      {profile.uri}
-                    </code>
-                  </div>
-                </article>
-              ) : (
-                <article
-                  key={`${profile.inbound_tag ?? "unknown"}:${index}`}
-                  aria-label={`${profile.name ?? "Unknown"} unavailable Connection profile`}
-                  className="border-destructive/30 bg-destructive/10 rounded-xl border px-4 py-3"
-                >
-                  <div className="flex flex-wrap items-center gap-2">
-                    <h4 className="text-[13px] font-semibold">{profile.name ?? "Unknown profile"}</h4>
-                    {profile.inbound_tag !== null ? (
-                      <code className="text-muted-foreground text-[10px]">{profile.inbound_tag}</code>
-                    ) : null}
-                  </div>
-                  <p className="text-destructive-foreground mt-2 text-xs">
-                    <code>{profile.reason}</code>: {profile.message}
-                  </p>
-                </article>
-              ),
-            )}
-          </div>
-        ) : (
-          <ProfileState title="No profile results">
-            No matching profile result was returned for this User.
-          </ProfileState>
-        )
-      ) : profiles.state === "gone_user" ? (
-        <ProfileState title="No connection profiles">
-          Gone Users keep Traffic and presence history, but xform no longer has current credentials to expose.
-        </ProfileState>
-      ) : profiles.state === "no_matching_inbound" ? (
-        <ProfileState title="No matching inbound">
-          This User is not present in a current matching VLESS inbound.
-        </ProfileState>
-      ) : (
-        <ProfileState title="Profile source unavailable" error>
-          The xray config has never parsed successfully, so matching inbounds cannot be identified.
-        </ProfileState>
-      )}
-    </section>
-  );
-}
-
-function ProfileState({
-  title,
-  error = false,
-  children,
-}: {
-  title: string;
-  error?: boolean;
-  children: ReactNode;
-}) {
-  return (
-    <div className={cn("rounded-[10px] border border-dashed px-4 py-4 text-center text-sm", error ? "border-destructive/40 text-destructive-foreground" : "border-border-strong text-muted-foreground")}>
-      <strong className="text-foreground block">{title}</strong>
-      <span>{children}</span>
-    </div>
   );
 }
 

@@ -1,6 +1,7 @@
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
+import { decodeQr, modulesFromPathData } from "@/test/qr-decode";
 import { Dashboard } from "./dashboard";
 
 const stats = {
@@ -52,6 +53,7 @@ afterEach(() => {
   cleanup();
   vi.unstubAllGlobals();
   vi.useRealTimers();
+  Reflect.deleteProperty(navigator, "clipboard");
 });
 
 // stubEndpoints routes fetches by URL, since each poll hits all endpoints.
@@ -1328,5 +1330,320 @@ describe("user details dialog", () => {
     expect(within(dialog).getByText("stale snapshot")).toBeInTheDocument();
     expect(within(dialog).getByText("stale")).toBeInTheDocument(); // speeds read stale
     expect(within(dialog).queryByText("↑ 500 KiB/s")).not.toBeInTheDocument();
+  });
+});
+
+// Two profiles for one User, as the profile module really emits them
+// (IN-DEV-SPEC §6.2): a REALITY inbound with an effective flow, then a
+// fronted WebSocket inbound with none.
+const realityKey = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA";
+const realityURI =
+  "vless://1d37a118-4f1b-4dc0-9e3c-3426b07518df@edge.example.com:443?" +
+  "type=tcp&encryption=none&flow=xtls-rprx-vision&security=reality&fp=chrome&" +
+  `sni=cover.example.com&pbk=${realityKey}&sid=0123` +
+  "#alice%40example.com%20%C2%B7%20Primary";
+const websocketURI =
+  "vless://1d37a118-4f1b-4dc0-9e3c-3426b07518df@edge.example.com:8443?" +
+  "type=ws&encryption=none&security=tls&path=%2Fsocket&host=origin.example.com&" +
+  "fp=chrome&sni=edge.example.com#alice%40example.com%20%C2%B7%20Fallback";
+
+const realityProfile = {
+  status: "available",
+  inbound_tag: "vless-reality-main",
+  name: "Primary",
+  topology: "direct",
+  client_id: "1d37a118-4f1b-4dc0-9e3c-3426b07518df",
+  flow: "xtls-rprx-vision",
+  endpoint: { host: "edge.example.com", port: 443 },
+  transport: { type: "tcp" },
+  security: {
+    type: "reality",
+    fingerprint: "chrome",
+    server_name: "cover.example.com",
+    public_key: realityKey,
+    short_id: "0123",
+  },
+  uri: realityURI,
+};
+
+const websocketProfile = {
+  status: "available",
+  inbound_tag: "vless-ws-fallback",
+  name: "Fallback",
+  topology: "fronted",
+  client_id: "1d37a118-4f1b-4dc0-9e3c-3426b07518df",
+  flow: null,
+  endpoint: { host: "edge.example.com", port: 8443 },
+  transport: { type: "ws", path: "/socket", host: "origin.example.com" },
+  security: { type: "tls", fingerprint: "chrome", server_name: "edge.example.com" },
+  uri: websocketURI,
+};
+
+describe("connection profile cards", () => {
+  function detailResponse(profiles: Record<string, unknown>) {
+    return json({
+      collected_at: usersSnapshot.collected_at,
+      stale: false,
+      user: usersSnapshot.users[0],
+      connection_profiles: {
+        state: "ready",
+        loaded_at: usersSnapshot.collected_at,
+        stale: false,
+        errors: [],
+        items: [],
+        ...profiles,
+      },
+    });
+  }
+
+  async function openProfiles(items: unknown[], profiles: Record<string, unknown> = {}) {
+    stubEndpoints({
+      server: () => json(stats),
+      xray: () => json(xrayRunning),
+      users: () => json(usersSnapshot),
+      details: () => detailResponse({ items, ...profiles }),
+    });
+
+    render(<Dashboard onUnauthenticated={() => {}} />);
+    await screen.findByRole("region", { name: "Users" });
+    fireEvent.click(screen.getByRole("button", { name: "Open alice@example.com details" }));
+    return screen.findByRole("dialog", { name: "alice@example.com details" });
+  }
+
+  // The clipboard API is a secure-context feature jsdom does not implement.
+  function stubClipboard() {
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    Object.defineProperty(navigator, "clipboard", { configurable: true, value: { writeText } });
+    return writeText;
+  }
+
+  it("expands every available profile in xray inbound order", async () => {
+    const dialog = await openProfiles([realityProfile, websocketProfile]);
+
+    const cards = await within(dialog).findAllByRole("article");
+    expect(cards.map((card) => card.getAttribute("aria-label"))).toEqual([
+      "Primary Connection profile",
+      "Fallback Connection profile",
+    ]);
+
+    // Every approved card field, from the same response the API returns.
+    const primary = cards[0];
+    expect(primary).toHaveTextContent("Primary");
+    expect(primary).toHaveTextContent("vless-reality-main");
+    expect(primary).toHaveTextContent("1d37a118-4f1b-4dc0-9e3c-3426b07518df");
+    expect(primary).toHaveTextContent("xtls-rprx-vision");
+    expect(primary).toHaveTextContent("edge.example.com:443");
+    expect(primary).toHaveTextContent("reality");
+    expect(primary).toHaveTextContent("cover.example.com"); // typed SNI
+    expect(primary).toHaveTextContent(realityKey); // typed public key
+    expect(primary).toHaveTextContent("0123"); // typed short ID
+    expect(within(primary).getByText(realityURI)).toBeInTheDocument();
+
+    // The second card carries its own typed transport values.
+    const fallback = cards[1];
+    expect(fallback).toHaveTextContent("vless-ws-fallback");
+    expect(fallback).toHaveTextContent("edge.example.com:8443");
+    expect(fallback).toHaveTextContent("/socket"); // typed WebSocket path
+    expect(fallback).toHaveTextContent("origin.example.com"); // typed WebSocket host
+    expect(within(fallback).getByText(websocketURI)).toBeInTheDocument();
+  });
+
+  it("displays a null flow as none", async () => {
+    const dialog = await openProfiles([websocketProfile]);
+
+    const card = await within(dialog).findByRole("article", { name: "Fallback Connection profile" });
+    // "none" is the Flow field's value, not a stray word elsewhere on the card.
+    expect(within(card).getByText("none").closest("div")).toHaveTextContent("Flow");
+    expect(card).not.toHaveTextContent("null");
+  });
+
+  it("copies the exact displayed Client ID and connection URI", async () => {
+    const writeText = stubClipboard();
+    const dialog = await openProfiles([realityProfile]);
+    const card = await within(dialog).findByRole("article", { name: "Primary Connection profile" });
+
+    fireEvent.click(within(card).getByRole("button", { name: "Copy Client ID for Primary" }));
+    await waitFor(() => expect(writeText).toHaveBeenCalledTimes(1));
+    // What was written is what the card shows — read back out of the DOM.
+    expect(writeText).toHaveBeenCalledWith(
+      within(card).getByText("1d37a118-4f1b-4dc0-9e3c-3426b07518df").textContent,
+    );
+
+    fireEvent.click(
+      within(card).getByRole("button", { name: "Copy connection URI for Primary" }),
+    );
+    await waitFor(() => expect(writeText).toHaveBeenCalledTimes(2));
+    expect(writeText).toHaveBeenLastCalledWith(within(card).getByText(realityURI).textContent);
+    expect(writeText).toHaveBeenLastCalledWith(realityURI);
+  });
+
+  it("confirms a copy and returns the action to its resting state", async () => {
+    stubClipboard();
+    const dialog = await openProfiles([realityProfile]);
+    const card = within(dialog).getByRole("article", { name: "Primary Connection profile" });
+    const copy = within(card).getByRole("button", { name: "Copy Client ID for Primary" });
+
+    // Fake timers only from here: the dialog is already open, so nothing
+    // waits on a real interval while the feedback window is driven forward.
+    vi.useFakeTimers();
+    fireEvent.click(copy);
+    await act(async () => {
+      await Promise.resolve();
+    });
+    expect(copy).toHaveTextContent("Copied");
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(2_000);
+    });
+    expect(copy).toHaveTextContent("Copy");
+    expect(copy).not.toHaveTextContent("Copied");
+  });
+
+  it("says so when the clipboard refuses the copy", async () => {
+    Object.defineProperty(navigator, "clipboard", {
+      configurable: true,
+      value: { writeText: vi.fn().mockRejectedValue(new Error("denied")) },
+    });
+    const dialog = await openProfiles([realityProfile]);
+    const card = within(dialog).getByRole("article", { name: "Primary Connection profile" });
+    const copy = within(card).getByRole("button", { name: "Copy Client ID for Primary" });
+
+    fireEvent.click(copy);
+
+    // No execCommand in jsdom either, so both routes fail.
+    await waitFor(() => expect(copy).toHaveTextContent(/failed/i));
+  });
+
+  it("renders a QR code carrying the exact bytes of the displayed URI", async () => {
+    const dialog = await openProfiles([realityProfile, websocketProfile]);
+    const cards = await within(dialog).findAllByRole("article");
+
+    for (const [card, uri] of [
+      [cards[0], realityURI],
+      [cards[1], websocketURI],
+    ] as const) {
+      const name = uri === realityURI ? "Primary" : "Fallback";
+      const qr = within(card).getByRole("img", { name: `Connection QR code for ${name}` });
+      // The quiet zone is part of the drawn viewBox, so the symbol keeps its
+      // scannable margin whatever sits behind the card.
+      const [left, top, width] = qr.getAttribute("viewBox")!.split(" ").map(Number);
+      expect([left, top]).toEqual([-4, -4]);
+      const path = qr.querySelector("path")!.getAttribute("d")!;
+
+      const decoded = decodeQr(modulesFromPathData(path, width - 8));
+      const displayed = within(card).getByText(uri).textContent!;
+      expect([...decoded]).toEqual([...new TextEncoder().encode(displayed)]);
+    }
+  });
+
+  it("keeps stale last-valid profiles visible, copyable, and flagged", async () => {
+    const writeText = stubClipboard();
+    stubEndpoints({
+      server: () => json(stats),
+      xray: () => json(xrayRunning),
+      users: () => json(usersSnapshot),
+      details: () =>
+        detailResponse({
+          stale: true,
+          loaded_at: usersSnapshot.collected_at - 3_600,
+          errors: [
+            {
+              source: "xray_config",
+              reason: "parse_failed",
+              message: "The configured xray file could not be parsed; profiles use the last valid parse.",
+            },
+          ],
+          items: [realityProfile],
+        }),
+    });
+
+    render(<Dashboard onUnauthenticated={() => {}} />);
+    await screen.findByRole("region", { name: "Users" });
+    fireEvent.click(screen.getByRole("button", { name: "Open alice@example.com details" }));
+    const dialog = await screen.findByRole("dialog", { name: "alice@example.com details" });
+
+    expect(within(dialog).getByText("stale profile sources")).toBeInTheDocument();
+    const warning = within(dialog).getByText("Profile source warning").closest("div");
+    expect(warning).toHaveTextContent("xray_config");
+    expect(warning).toHaveTextContent("parse_failed");
+    expect(warning).toHaveTextContent("could not be parsed");
+
+    // Stale is shown, never withheld: the card stays whole and copyable.
+    const card = within(dialog).getByRole("article", { name: "Primary Connection profile" });
+    expect(within(card).getByText(realityURI)).toBeInTheDocument();
+    expect(
+      within(card).getByRole("img", { name: "Connection QR code for Primary" }),
+    ).toBeInTheDocument();
+    fireEvent.click(
+      within(card).getByRole("button", { name: "Copy connection URI for Primary" }),
+    );
+    await waitFor(() => expect(writeText).toHaveBeenCalledWith(realityURI));
+  });
+
+  it("withholds every credential from an unavailable result", async () => {
+    const dialog = await openProfiles([
+      realityProfile,
+      {
+        status: "unavailable",
+        inbound_tag: "vless-ws-fallback",
+        name: "Fallback",
+        reason: "inbound_mismatch",
+        message: "The advertised transport does not match this direct inbound.",
+      },
+    ]);
+
+    const card = await within(dialog).findByRole("article", {
+      name: "Fallback unavailable Connection profile",
+    });
+    // Known identity, stable reason, readable message.
+    expect(card).toHaveTextContent("Fallback");
+    expect(card).toHaveTextContent("vless-ws-fallback");
+    expect(card).toHaveTextContent("inbound_mismatch");
+    expect(card).toHaveTextContent("The advertised transport does not match this direct inbound.");
+    // Nothing a client could connect with.
+    expect(card).not.toHaveTextContent("1d37a118");
+    expect(card).not.toHaveTextContent("vless://");
+    expect(within(card).queryByRole("button")).not.toBeInTheDocument();
+    expect(within(card).queryByRole("img")).not.toBeInTheDocument();
+  });
+
+  it("names an unavailable result whose identity is unknown", async () => {
+    const dialog = await openProfiles([
+      {
+        status: "unavailable",
+        inbound_tag: null,
+        name: null,
+        reason: "inbound_tag_missing",
+        message: "A matching VLESS inbound has no tag.",
+      },
+    ]);
+
+    const card = await within(dialog).findByRole("article", {
+      name: "Unknown unavailable Connection profile",
+    });
+    expect(card).toHaveTextContent("inbound_tag_missing");
+    expect(card).not.toHaveTextContent("null");
+  });
+
+  it("gives every card action an accessible name and keyboard focus", async () => {
+    const dialog = await openProfiles([realityProfile, websocketProfile]);
+    await within(dialog).findAllByRole("article");
+
+    // Names are unique per card, so a keyboard user is never offered two
+    // identical "Copy" targets.
+    const actions = [
+      "Copy Client ID for Primary",
+      "Copy connection URI for Primary",
+      "Copy Client ID for Fallback",
+      "Copy connection URI for Fallback",
+      "Close User details",
+    ];
+    for (const name of actions) {
+      const action = within(dialog).getByRole("button", { name });
+      action.focus();
+      expect(action).toHaveFocus();
+      expect(dialog.contains(document.activeElement)).toBe(true);
+    }
+    expect(within(dialog).getAllByRole("button")).toHaveLength(actions.length);
   });
 });

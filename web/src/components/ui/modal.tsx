@@ -29,7 +29,10 @@ export function Modal({ open, onOpenChange, opener, label, className, children }
           aria-label={label}
           finalFocus={opener}
           className={cn(
-            "bg-surface border-border-strong shadow-modal fixed top-1/2 left-1/2 z-50 flex max-h-[calc(100vh-48px)] w-[min(1040px,100%)] max-w-full -translate-x-1/2 -translate-y-1/2 flex-col overflow-hidden rounded-2xl border max-xs:max-h-screen max-xs:min-h-screen max-xs:w-screen max-xs:translate-x-0 max-xs:translate-y-0 max-xs:rounded-none max-xs:border-0",
+            // Centred by default; edge to edge at the approved narrow
+            // breakpoint, which needs the centring offsets dropped from both
+            // the position and the translate.
+            "bg-surface border-border-strong shadow-modal fixed top-1/2 left-1/2 z-50 flex max-h-[calc(100vh-48px)] w-[min(1040px,100%)] max-w-full -translate-x-1/2 -translate-y-1/2 flex-col overflow-hidden rounded-2xl border max-xs:top-0 max-xs:left-0 max-xs:max-h-screen max-xs:min-h-screen max-xs:w-screen max-xs:translate-x-0 max-xs:translate-y-0 max-xs:rounded-none max-xs:border-0",
             className,
           )}
         >

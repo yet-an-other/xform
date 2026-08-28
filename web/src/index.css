@@ -26,12 +26,20 @@
   --color-meter-start: #3fb98e;
   --color-meter-end: #6ee6b9;
 
+  /* A QR symbol is not themed: a scanner needs dark ink on a light ground
+     whatever the rest of the palette does. */
+  --color-qr-ink: #111111;
+  --color-qr-paper: #ffffff;
+  --color-qr-caption: #454545;
+
   --shadow-modal: 0 24px 80px rgba(0, 0, 0, 0.58);
 
   /* The approved dialog breakpoint (IN-DEV-SPEC §7.5): at 560 CSS pixels or
      less modals go full-screen and fixed-format content scrolls instead of
-     reflowing. */
-  --breakpoint-xs: 560px;
+     reflowing. The token sits one pixel above that, because `max-xs` means
+     "narrower than the token" — so 560 itself falls on the narrow side, as
+     the prototype's own `max-width: 560px` has it. */
+  --breakpoint-xs: 561px;
 
   --font-sans:
     Inter, ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
