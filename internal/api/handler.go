@@ -7,7 +7,9 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/yet-an-other/xform/internal/configsnapshot"
 	"github.com/yet-an-other/xform/internal/hoststats"
+	"github.com/yet-an-other/xform/internal/journal"
 	"github.com/yet-an-other/xform/internal/profiles"
 	"github.com/yet-an-other/xform/internal/session"
 	"github.com/yet-an-other/xform/internal/users"
@@ -34,6 +36,20 @@ type usersSnapshots interface {
 
 type connectionProfileSources interface {
 	Current() profiles.Sources
+}
+
+// logSnapshots is the Log snapshot module's one collection operation
+// (IN-DEV-SPEC §4.2). The handler's only choice is the fixed source, so no
+// unit, count, filter, cursor, or time range can reach journalctl through the
+// HTTP surface.
+type logSnapshots interface {
+	Collect(ctx context.Context, source journal.Source) (journal.Snapshot, error)
+}
+
+// configSnapshots is the Config snapshot module's one bounded read
+// (IN-DEV-SPEC §4.3).
+type configSnapshots interface {
+	Read(ctx context.Context) (configsnapshot.Snapshot, error)
 }
 
 const sessionCookieName = "xform_session"
@@ -78,7 +94,7 @@ type xrayResponse struct {
 // New returns the HTTP handler for the API and dashboard. Every /api/ route
 // except login and healthz requires a session (SPEC.md §5); the dashboard
 // itself loads openly and lets the SPA route to its login page on 401.
-func New(snapshots hostStatsSnapshots, xray xrayStatuses, usersSource usersSnapshots, profileSources connectionProfileSources, sessions sessionManager, dashboard http.Handler, panel PanelInfo) http.Handler {
+func New(snapshots hostStatsSnapshots, xray xrayStatuses, usersSource usersSnapshots, profileSources connectionProfileSources, operational OperationalSources, sessions sessionManager, dashboard http.Handler, panel PanelInfo) http.Handler {
 	noStore := func(next http.HandlerFunc) http.HandlerFunc {
 		return func(response http.ResponseWriter, request *http.Request) {
 			response.Header().Set("Cache-Control", "no-store")
@@ -197,6 +213,9 @@ func New(snapshots hostStatsSnapshots, xray xrayStatuses, usersSource usersSnaps
 		}
 		writeJSON(response, http.StatusNotFound, map[string]string{"error": "not_found"})
 	})))
+	mux.HandleFunc("GET /api/v1/logs/panel", noStore(requireSession(logSnapshotHandler(operational.Logs, journal.SourcePanel))))
+	mux.HandleFunc("GET /api/v1/logs/xray", noStore(requireSession(logSnapshotHandler(operational.Logs, journal.SourceXray))))
+	mux.HandleFunc("GET /api/v1/xray/config", noStore(requireSession(configSnapshotHandler(operational.Config))))
 	mux.Handle("/api/", requireSession(func(response http.ResponseWriter, _ *http.Request) {
 		writeJSON(response, http.StatusNotFound, map[string]string{"error": "not found"})
 	}))

@@ -15,6 +15,7 @@ import (
 	"github.com/yet-an-other/xform/internal/advertisements"
 	"github.com/yet-an-other/xform/internal/api"
 	"github.com/yet-an-other/xform/internal/config"
+	"github.com/yet-an-other/xform/internal/configsnapshot"
 	"github.com/yet-an-other/xform/internal/geoip"
 	"github.com/yet-an-other/xform/internal/hoststats"
 	"github.com/yet-an-other/xform/internal/journal"
@@ -93,6 +94,13 @@ func main() {
 			xrayStatus,
 			usersCache,
 			currentProfileSources{xray: configWatcher, advertisements: advertisementWatcher},
+			// Collected per request and never cached: a Log or Config snapshot
+			// is a point-in-time view the admin asked for, not an observation
+			// the Panel keeps refreshing (§3.3).
+			api.OperationalSources{
+				Logs:   journal.NewReader(cfg.JournalctlPath, journalUnit),
+				Config: configsnapshot.NewReader(cfg.XrayConfigPath),
+			},
 			sessions,
 			cfg,
 		),
@@ -156,9 +164,9 @@ func (s currentProfileSources) Current() profiles.Sources {
 	return profiles.SourcesFromSnapshots(s.xray.Snapshot(), s.advertisements.Snapshot())
 }
 
-func newHandler(snapshots *hoststats.Cache, statuses *xraystatus.Cache, usersCache *users.Cache, profileSources currentProfileSources, sessions *session.Manager, cfg config.Config) http.Handler {
+func newHandler(snapshots *hoststats.Cache, statuses *xraystatus.Cache, usersCache *users.Cache, profileSources currentProfileSources, operational api.OperationalSources, sessions *session.Manager, cfg config.Config) http.Handler {
 	panel := api.PanelInfo{Version: version, XrayAPIEndpoint: cfg.XrayAPIAddress, Uptime: api.UptimeSeconds(processStart, time.Now)}
-	return api.New(snapshots, statuses, usersCache, profileSources, sessions, newDashboardHandler(), panel)
+	return api.New(snapshots, statuses, usersCache, profileSources, operational, sessions, newDashboardHandler(), panel)
 }
 
 // loadGeoIP opens the geoip.dat behind the users table's country flags

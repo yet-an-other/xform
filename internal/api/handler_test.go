@@ -37,7 +37,7 @@ var testPanelInfo = api.PanelInfo{
 
 // newHandler wires the API with a real session manager against stub sources.
 func newHandler(snapshots hostStatsSnapshots) http.Handler {
-	return api.New(snapshots, fixedXrayStatus{}, fixedUsers{}, fixedProfileSources{}, session.NewManager(testPassword, time.Now), http.NotFoundHandler(), testPanelInfo)
+	return api.New(snapshots, fixedXrayStatus{}, fixedUsers{}, fixedProfileSources{}, api.OperationalSources{}, session.NewManager(testPassword, time.Now), http.NotFoundHandler(), testPanelInfo)
 }
 
 type hostStatsSnapshots interface {
@@ -271,7 +271,7 @@ func TestUsersEndpointReturnsContractPayload(t *testing.T) {
 			SpeedDownBps:   3_800_000,
 			LastSeen:       &lastSeen,
 		}},
-	}}, fixedProfileSources{}, session.NewManager(testPassword, time.Now), http.NotFoundHandler(), testPanelInfo)
+	}}, fixedProfileSources{}, api.OperationalSources{}, session.NewManager(testPassword, time.Now), http.NotFoundHandler(), testPanelInfo)
 
 	request := httptest.NewRequest(http.MethodGet, "/api/v1/users", nil)
 	request.AddCookie(login(t, handler, testPassword))
@@ -329,7 +329,7 @@ func TestUsersEndpointServesStaleSnapshot(t *testing.T) {
 		CollectedAt: 1_723_799_000,
 		Stale:       true,
 		Users:       []users.User{},
-	}}, fixedProfileSources{}, session.NewManager(testPassword, time.Now), http.NotFoundHandler(), testPanelInfo)
+	}}, fixedProfileSources{}, api.OperationalSources{}, session.NewManager(testPassword, time.Now), http.NotFoundHandler(), testPanelInfo)
 
 	request := httptest.NewRequest(http.MethodGet, "/api/v1/users", nil)
 	request.AddCookie(login(t, handler, testPassword))
@@ -371,7 +371,7 @@ func TestXrayEndpointReturnsStatusContract(t *testing.T) {
 		UsersOnline:     &usersOnline,
 		UniqueIPsOnline: &uniqueIPs,
 	}
-	handler := api.New(fixedHostStats{}, fixedXrayStatus{status: want}, fixedUsers{}, fixedProfileSources{}, session.NewManager(testPassword, time.Now), http.NotFoundHandler(), testPanelInfo)
+	handler := api.New(fixedHostStats{}, fixedXrayStatus{status: want}, fixedUsers{}, fixedProfileSources{}, api.OperationalSources{}, session.NewManager(testPassword, time.Now), http.NotFoundHandler(), testPanelInfo)
 	request := httptest.NewRequest(http.MethodGet, "/api/v1/xray", nil)
 	request.AddCookie(login(t, handler, testPassword))
 	response := httptest.NewRecorder()
@@ -412,7 +412,7 @@ func TestXrayEndpointReturnsStatusContract(t *testing.T) {
 	// A stopped xray reports a null version, not a 5xx (SPEC.md §5: 200 always).
 	stopped := api.New(fixedHostStats{}, fixedXrayStatus{status: xraystatus.Status{
 		CollectedAt: 1_723_800_000, Status: "stopped",
-	}}, fixedUsers{}, fixedProfileSources{}, session.NewManager(testPassword, time.Now), http.NotFoundHandler(), testPanelInfo)
+	}}, fixedUsers{}, fixedProfileSources{}, api.OperationalSources{}, session.NewManager(testPassword, time.Now), http.NotFoundHandler(), testPanelInfo)
 	request = httptest.NewRequest(http.MethodGet, "/api/v1/xray", nil)
 	request.AddCookie(login(t, stopped, testPassword))
 	response = httptest.NewRecorder()
@@ -428,7 +428,7 @@ func TestXrayEndpointReturnsStatusContract(t *testing.T) {
 }
 
 func TestXrayEndpointNamesTheConfiguredAPIEndpoint(t *testing.T) {
-	handler := api.New(fixedHostStats{}, fixedXrayStatus{}, fixedUsers{}, fixedProfileSources{}, session.NewManager(testPassword, time.Now), http.NotFoundHandler(), testPanelInfo)
+	handler := api.New(fixedHostStats{}, fixedXrayStatus{}, fixedUsers{}, fixedProfileSources{}, api.OperationalSources{}, session.NewManager(testPassword, time.Now), http.NotFoundHandler(), testPanelInfo)
 	request := httptest.NewRequest(http.MethodGet, "/api/v1/xray", nil)
 	request.AddCookie(login(t, handler, testPassword))
 	response := httptest.NewRecorder()
@@ -444,7 +444,7 @@ func TestXrayEndpointNamesTheConfiguredAPIEndpoint(t *testing.T) {
 // response: version plus current uptime, never cacheable (IN-DEV-SPEC §6:
 // every endpoint returns Cache-Control: no-store).
 func TestPanelEndpointReturnsTheReleaseVersion(t *testing.T) {
-	handler := api.New(fixedHostStats{}, fixedXrayStatus{}, fixedUsers{}, fixedProfileSources{}, session.NewManager(testPassword, time.Now), http.NotFoundHandler(), testPanelInfo)
+	handler := api.New(fixedHostStats{}, fixedXrayStatus{}, fixedUsers{}, fixedProfileSources{}, api.OperationalSources{}, session.NewManager(testPassword, time.Now), http.NotFoundHandler(), testPanelInfo)
 	request := httptest.NewRequest(http.MethodGet, "/api/v1/panel", nil)
 	request.AddCookie(login(t, handler, testPassword))
 	response := httptest.NewRecorder()
@@ -475,7 +475,7 @@ func TestPanelEndpointReportsCurrentUptime(t *testing.T) {
 	elapsed := 4_831
 	panel := testPanelInfo
 	panel.Uptime = func() int64 { return int64(elapsed) }
-	handler := api.New(fixedHostStats{}, fixedXrayStatus{}, fixedUsers{}, fixedProfileSources{}, session.NewManager(testPassword, time.Now), http.NotFoundHandler(), panel)
+	handler := api.New(fixedHostStats{}, fixedXrayStatus{}, fixedUsers{}, fixedProfileSources{}, api.OperationalSources{}, session.NewManager(testPassword, time.Now), http.NotFoundHandler(), panel)
 	cookie := login(t, handler, testPassword)
 
 	request := httptest.NewRequest(http.MethodGet, "/api/v1/panel", nil)
@@ -550,7 +550,7 @@ func (failingSessions) Validate(string) bool { return false }
 func (failingSessions) Logout(string)        {}
 
 func TestLoginFailureInSessionManagerIs500Not401(t *testing.T) {
-	handler := api.New(fixedHostStats{}, fixedXrayStatus{}, fixedUsers{}, fixedProfileSources{}, failingSessions{}, http.NotFoundHandler(), testPanelInfo)
+	handler := api.New(fixedHostStats{}, fixedXrayStatus{}, fixedUsers{}, fixedProfileSources{}, api.OperationalSources{}, failingSessions{}, http.NotFoundHandler(), testPanelInfo)
 	request := httptest.NewRequest(http.MethodPost, "/api/v1/login",
 		strings.NewReader(`{"password": "anything"}`))
 	response := httptest.NewRecorder()
