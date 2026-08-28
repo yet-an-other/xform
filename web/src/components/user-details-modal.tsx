@@ -2,7 +2,7 @@ import { useEffect, useRef, useState, type ReactNode, type RefObject } from "rea
 
 import { ConnectionProfiles } from "@/components/connection-profile-card";
 import { Badge } from "@/components/ui/badge";
-import { Modal } from "@/components/ui/modal";
+import { Modal, ModalClose, ModalFooter } from "@/components/ui/modal";
 import {
   flagEmoji,
   formatAgo,
@@ -19,7 +19,6 @@ import { cn } from "@/lib/utils";
 
 interface UserDetailsModalProps {
   email: string;
-  open: boolean;
   opener: RefObject<HTMLElement | null>;
   onClose: () => void;
   onUnauthenticated: () => void;
@@ -29,7 +28,6 @@ const DETAIL_POLL_INTERVAL_MS = 5_000;
 
 export function UserDetailsModal({
   email,
-  open,
   opener,
   onClose,
   onUnauthenticated,
@@ -87,7 +85,7 @@ export function UserDetailsModal({
   const refreshFailed = error !== null && visibleDetail !== null;
 
   return (
-    <Modal label={`${email} details`} open={open} opener={opener} onOpenChange={onClose}>
+    <Modal label={`${email} details`} open opener={opener} onOpenChange={onClose}>
       <header className="flex items-start gap-4 border-b px-5 py-4">
         <div className="min-w-0">
           <p className="text-muted-foreground text-[10px] font-bold tracking-[0.13em] uppercase">
@@ -128,14 +126,9 @@ export function UserDetailsModal({
             </div>
           ) : null}
         </div>
-        <button
-          type="button"
-          aria-label="Close User details"
-          onClick={onClose}
-          className="border-border text-muted-foreground hover:text-foreground ml-auto grid size-[34px] shrink-0 place-items-center rounded-lg border text-xl leading-none"
-        >
-          ×
-        </button>
+        <span className="ml-auto">
+          <ModalClose label="Close User details" onClose={onClose} />
+        </span>
       </header>
       <div className="min-h-0 overflow-auto px-5 py-5">
         {error ? (
@@ -233,10 +226,10 @@ export function UserDetailsModal({
           <p role="status" className="text-muted-foreground text-sm">Loading User details…</p>
         ) : null}
       </div>
-      <footer className="text-muted-foreground flex flex-wrap gap-x-3.5 gap-y-2 border-t px-5 py-2.5 text-[10px]">
+      <ModalFooter>
         <span>Read-only</span>
         {visibleDetail ? <span>Collected at {formatTime24(new Date(visibleDetail.collected_at * 1000))}</span> : null}
-      </footer>
+      </ModalFooter>
     </Modal>
   );
 }

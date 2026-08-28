@@ -229,3 +229,104 @@ export async function login(password: string): Promise<boolean> {
 export async function logout(): Promise<void> {
   await fetch("api/v1/logout", { method: "POST" });
 }
+
+// LogEntry is one normalized journal record (IN-DEV-SPEC §6.4). identifier,
+// pid, priority, message, and message_encoding are null where the record
+// carried no usable value; message_truncated marks journalctl's own
+// oversized-field elision, where the message is null because it never
+// travelled, not because it was empty.
+export interface LogEntry {
+  cursor: string;
+  timestamp_us: number;
+  unit: string;
+  identifier: string | null;
+  pid: number | null;
+  priority: number | null;
+  message: string | null;
+  message_encoding: string | null;
+  message_truncated: boolean;
+}
+
+// LogSnapshot is GET /api/v1/logs/{source}: one bounded, newest-first,
+// point-in-time read — never a live stream. entry_count is what was actually
+// collected; limit is the ceiling it was collected under.
+export interface LogSnapshot {
+  captured_at: number;
+  source: LogSource;
+  unit: string;
+  limit: number;
+  entry_count: number;
+  entries: LogEntry[];
+}
+
+export type LogSource = "panel" | "xray";
+
+// ConfigSnapshot is GET /api/v1/xray/config: the exact text observed during
+// one bounded read, never parsed or reformatted. path is the configured path
+// string, not a resolved symlink target.
+export interface ConfigSnapshot {
+  captured_at: number;
+  path: string;
+  size_bytes: number;
+  text: string;
+}
+
+// SnapshotUnavailableError carries the stable reason the API reported, which
+// is the only failure detail the viewers show: journalctl's stderr, journal
+// messages, and file content are the data these snapshots exist to bound.
+export class SnapshotUnavailableError extends Error {
+  readonly reason: string;
+
+  constructor(reason: string) {
+    super(reason);
+    this.name = "SnapshotUnavailableError";
+    this.reason = reason;
+  }
+}
+
+// snapshotFailureReason is the only failure detail the viewers show: the
+// API's own stable reason. journalctl's stderr, journal messages, and file
+// content are the data these snapshots exist to bound, and none of them
+// reaches the browser to be shown.
+export function snapshotFailureReason(cause: unknown): string {
+  if (cause instanceof SnapshotUnavailableError) {
+    return cause.reason;
+  }
+  return cause instanceof Error ? cause.message : "unavailable";
+}
+
+// getSnapshot is getJSON plus the stable-reason failure body §6.4 and §6.5
+// define. A body without one still fails — with the status, so the dialog
+// says something true rather than inventing a reason.
+async function getSnapshot<T>(path: string, signal?: AbortSignal): Promise<T> {
+  const response = await fetch(path, {
+    cache: "no-store",
+    headers: { Accept: "application/json" },
+    signal,
+  });
+  if (response.status === 401) {
+    throw new UnauthenticatedError();
+  }
+  if (!response.ok) {
+    const reason = await response
+      .json()
+      .then((body: unknown) =>
+        typeof body === "object" && body !== null && typeof (body as { reason?: unknown }).reason === "string"
+          ? (body as { reason: string }).reason
+          : null,
+      )
+      .catch(() => null);
+    throw reason !== null
+      ? new SnapshotUnavailableError(reason)
+      : new Error(`panel returned ${response.status}`);
+  }
+  return (await response.json()) as T;
+}
+
+export function fetchLogSnapshot(source: LogSource, signal?: AbortSignal): Promise<LogSnapshot> {
+  return getSnapshot<LogSnapshot>(`api/v1/logs/${source}`, signal);
+}
+
+export function fetchConfigSnapshot(signal?: AbortSignal): Promise<ConfigSnapshot> {
+  return getSnapshot<ConfigSnapshot>("api/v1/xray/config", signal);
+}

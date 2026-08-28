@@ -42,3 +42,29 @@ export function Modal({ open, onOpenChange, opener, label, className, children }
     </Dialog.Root>
   );
 }
+
+// ModalClose is the dismiss action every dialog carries in its header. It is
+// shared rather than repeated because its accessible name is the only part
+// that differs between dialogs (ADR-0002: extract as the UI demands it).
+export function ModalClose({ label, onClose }: { label: string; onClose: () => void }) {
+  return (
+    <button
+      type="button"
+      aria-label={label}
+      onClick={onClose}
+      className="border-border text-muted-foreground hover:text-foreground grid size-[34px] shrink-0 place-items-center rounded-lg border text-xl leading-none"
+    >
+      ×
+    </button>
+  );
+}
+
+// ModalFooter is the standing-notes strip: what the dialog does not do, said
+// once per dialog and never varying in shape.
+export function ModalFooter({ children }: { children: ReactNode }) {
+  return (
+    <footer className="text-muted-foreground flex flex-wrap gap-x-3.5 gap-y-2 border-t px-5 py-2.5 text-[10px]">
+      {children}
+    </footer>
+  );
+}

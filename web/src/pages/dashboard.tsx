@@ -4,6 +4,8 @@ import { MetricCard } from "@/components/metric-card";
 import { Badge } from "@/components/ui/badge";
 import { Card } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
+import { ConfigSnapshotModal } from "@/components/config-snapshot-modal";
+import { LogSnapshotModal } from "@/components/log-snapshot-modal";
 import { UserDetailsModal } from "@/components/user-details-modal";
 import {
   Table,
@@ -21,10 +23,12 @@ import {
   logout,
   UnauthenticatedError,
   type HostStats,
+  type LogSource,
   type PanelInfo,
   type UsersSnapshot,
   type XrayStatus,
 } from "@/lib/api";
+import { cn } from "@/lib/utils";
 import {
   formatBytes,
   formatAgo,
@@ -37,6 +41,14 @@ import {
 } from "@/lib/format";
 
 const POLL_INTERVAL_MS = 5_000;
+
+// OpenDialog is the one dialog the Dashboard has open, if any. A single slot
+// is what enforces "only one modal at a time" (IN-DEV-SPEC §7.4).
+type OpenDialog =
+  | { kind: "details"; email: string }
+  | { kind: "logs"; source: LogSource }
+  | { kind: "config" }
+  | null;
 
 // XrayCard is one tile of the xray row (SPEC §6): a labeled big readout
 // with a sub-line, the same visual language as the server MetricCards but
@@ -77,6 +89,64 @@ function EyeIcon() {
       <path d="M2.5 12s3.5-6 9.5-6 9.5 6 9.5 6-3.5 6-9.5 6-9.5-6-9.5-6Z" />
       <circle cx="12" cy="12" r="2.5" />
     </svg>
+  );
+}
+
+// LogsIcon and ConfigIcon are the approved viewer glyphs (operational-viewers
+// prototype): stacked lines for a journal, a document for the configured file.
+function LogsIcon() {
+  return (
+    <svg
+      aria-hidden="true"
+      viewBox="0 0 24 24"
+      className="size-4 fill-none stroke-current stroke-[1.8] [stroke-linecap:round] [stroke-linejoin:round]"
+    >
+      <path d="M4 5h16M4 12h16M4 19h10" />
+    </svg>
+  );
+}
+
+function ConfigIcon() {
+  return (
+    <svg
+      aria-hidden="true"
+      viewBox="0 0 24 24"
+      className="size-4 fill-none stroke-current stroke-[1.8] [stroke-linecap:round] [stroke-linejoin:round]"
+    >
+      <path d="M7 3h7l4 4v14H7zM14 3v5h4M10 13h5M10 17h5" />
+    </svg>
+  );
+}
+
+// IconAction is one icon-only control — a header snapshot action, a table
+// row's details action. It always carries an accessible name and a visible
+// title, because an icon alone names nothing (§7.1, §7.2).
+function IconAction({
+  label,
+  title,
+  onOpen,
+  className,
+  children,
+}: {
+  label: string;
+  title: string;
+  onOpen: (opener: HTMLButtonElement) => void;
+  className?: string;
+  children: ReactNode;
+}) {
+  return (
+    <button
+      type="button"
+      aria-label={label}
+      title={title ?? label}
+      onClick={(event) => onOpen(event.currentTarget)}
+      className={cn(
+        "border-border hover:border-primary hover:text-primary hover:bg-accent inline-grid size-[30px] place-items-center rounded-lg border",
+        className,
+      )}
+    >
+      {children}
+    </button>
   );
 }
 
@@ -216,15 +286,14 @@ function UsersTable({
                   )}
                 </TableCell>
                 <TableCell className="py-1.5 pr-5 text-right align-middle">
-                  <button
-                    type="button"
-                    aria-label={`Open ${user.email} details`}
+                  <IconAction
+                    label={`Open ${user.email} details`}
                     title={`Open ${user.email} details`}
-                    onClick={(event) => onOpenDetails(user.email, event.currentTarget)}
-                    className="border-border text-primary hover:border-primary hover:bg-accent inline-grid size-[30px] place-items-center rounded-lg border"
+                    onOpen={(opener) => onOpenDetails(user.email, opener)}
+                    className="text-primary"
                   >
                     <EyeIcon />
-                  </button>
+                  </IconAction>
                 </TableCell>
               </TableRow>
             ))
@@ -250,35 +319,52 @@ function Interpunct() {
 }
 
 // XrayIdentity is the xray identity group (IN-DEV-SPEC §7.1): the status
-// indicator immediately before the service name, then version and uptime.
-// The log and config viewer actions join this group in a later slice and
-// are deliberately absent — no dead controls.
-function XrayIdentity({ xray }: { xray: XrayStatus }) {
+// indicator immediately before the service name, then version, uptime, and
+// the two xray-scoped viewer actions. Those actions stay enabled whatever
+// xray's status is — each viewer reports its own collection result, and a
+// stopped xray still has a journal and a configured file (§7.5).
+function XrayIdentity({
+  xray,
+  onOpenLogs,
+  onOpenConfig,
+}: {
+  xray: XrayStatus | null;
+  onOpenLogs: (opener: HTMLButtonElement) => void;
+  onOpenConfig: (opener: HTMLButtonElement) => void;
+}) {
   const dotClass =
-    xray.status === "running"
-      ? "bg-primary shadow-primary/10"
-      : xray.status === "stopped"
-        ? "bg-destructive shadow-destructive/10"
-        : "bg-warning shadow-warning/10";
+    xray === null
+      ? "bg-muted"
+      : xray.status === "running"
+        ? "bg-primary shadow-primary/10"
+        : xray.status === "stopped"
+          ? "bg-destructive shadow-destructive/10"
+          : "bg-warning shadow-warning/10";
 
   return (
     <span className="ml-4 flex flex-wrap items-center gap-x-2.5 gap-y-2">
       <span className="inline-flex items-center gap-1.5 text-lg font-semibold tracking-tight">
         <span
           role="img"
-          aria-label={xray.status}
-          title={xray.status}
+          aria-label={xray?.status ?? "unknown"}
+          title={xray?.status ?? "unknown"}
           className={`size-[7px] rounded-full shadow-[0_0_0_3px] ${dotClass}`}
         />
         xray
       </span>
-      {xray.version ? <HeaderMeta>v{xray.version}</HeaderMeta> : null}
-      {xray.status === "running" ? (
+      {xray?.version ? <HeaderMeta>v{xray.version}</HeaderMeta> : null}
+      {xray?.status === "running" ? (
         <>
           <Interpunct />
           <HeaderMeta>up {formatUptimeShort(xray.uptime_seconds)}</HeaderMeta>
         </>
       ) : null}
+      <IconAction label="View xray logs" title="xray logs" onOpen={onOpenLogs}>
+        <LogsIcon />
+      </IconAction>
+      <IconAction label="View xray config" title="xray config" onOpen={onOpenConfig}>
+        <ConfigIcon />
+      </IconAction>
     </span>
   );
 }
@@ -348,17 +434,19 @@ export function Dashboard({ onUnauthenticated }: { onUnauthenticated: () => void
   const [panel, setPanel] = useState<PanelInfo | null>(null);
   const [updatedAt, setUpdatedAt] = useState<Date | null>(null);
   const [error, setError] = useState<string | null>(null);
-  // The open User dialog's exact email — one slot, so at most one modal is
-  // ever mounted — and the row action that opened it, for focus restore.
-  const [detailsEmail, setDetailsEmail] = useState<string | null>(null);
-  const detailsOpener = useRef<HTMLButtonElement | null>(null);
+  // One slot for every dialog, so at most one modal is ever mounted (§7.4) —
+  // and the action that opened it, for focus restore.
+  const [dialog, setDialog] = useState<OpenDialog>(null);
+  const dialogOpener = useRef<HTMLButtonElement | null>(null);
 
-  function openDetails(email: string, opener: HTMLButtonElement) {
-    detailsOpener.current = opener;
-    setDetailsEmail(email);
+  function openDialog(next: NonNullable<OpenDialog>, opener: HTMLButtonElement) {
+    dialogOpener.current = opener;
+    setDialog(next);
   }
 
-  const closeDetails = useCallback(() => setDetailsEmail(null), []);
+  // Closing unmounts the dialog, which is what discards its browser-local
+  // snapshot: reopening always starts with an initial load (§7.4).
+  const closeDialog = useCallback(() => setDialog(null), []);
 
   useEffect(() => {
     const controller = new AbortController();
@@ -424,7 +512,21 @@ export function Dashboard({ onUnauthenticated }: { onUnauthenticated: () => void
             <HeaderMeta>up {formatUptimeShort(panel.uptime_seconds)}</HeaderMeta>
           </>
         ) : null}
-        {xray ? <XrayIdentity xray={xray} /> : null}
+          <IconAction
+          label="View Panel logs"
+          title="Panel logs"
+          onOpen={(opener) => openDialog({ kind: "logs", source: "panel" }, opener)}
+        >
+          <LogsIcon />
+        </IconAction>
+        {/* The xray group renders whether or not the observation landed: a
+            failed xray poll must not take the Log and Config snapshot actions
+            with it, because neither reads xray to answer (§7.5). */}
+        <XrayIdentity
+          xray={xray}
+          onOpenLogs={(opener) => openDialog({ kind: "logs", source: "xray" }, opener)}
+          onOpenConfig={(opener) => openDialog({ kind: "config" }, opener)}
+        />
         <span className="flex-1" />
         <HeaderMeta>
           refreshing every 5s{updatedAt ? ` · updated ${formatTime24(updatedAt)}` : ""}
@@ -501,16 +603,32 @@ export function Dashboard({ onUnauthenticated }: { onUnauthenticated: () => void
       {users ? (
         <UsersTable
           snapshot={users}
-          onOpenDetails={(email, opener) => openDetails(email, opener)}
+          onOpenDetails={(email, opener) => openDialog({ kind: "details", email }, opener)}
         />
       ) : null}
 
-      {detailsEmail !== null ? (
+      {dialog?.kind === "details" ? (
         <UserDetailsModal
-          email={detailsEmail}
-          open
-          opener={detailsOpener}
-          onClose={closeDetails}
+          email={dialog.email}
+          opener={dialogOpener}
+          onClose={closeDialog}
+          onUnauthenticated={onUnauthenticated}
+        />
+      ) : null}
+
+      {dialog?.kind === "logs" ? (
+        <LogSnapshotModal
+          source={dialog.source}
+          opener={dialogOpener}
+          onClose={closeDialog}
+          onUnauthenticated={onUnauthenticated}
+        />
+      ) : null}
+
+      {dialog?.kind === "config" ? (
+        <ConfigSnapshotModal
+          opener={dialogOpener}
+          onClose={closeDialog}
           onUnauthenticated={onUnauthenticated}
         />
       ) : null}
