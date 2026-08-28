@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"os"
@@ -16,6 +17,7 @@ import (
 	"github.com/yet-an-other/xform/internal/config"
 	"github.com/yet-an-other/xform/internal/geoip"
 	"github.com/yet-an-other/xform/internal/hoststats"
+	"github.com/yet-an-other/xform/internal/journal"
 	"github.com/yet-an-other/xform/internal/profiles"
 	"github.com/yet-an-other/xform/internal/session"
 	"github.com/yet-an-other/xform/internal/users"
@@ -42,6 +44,12 @@ func main() {
 
 	shutdownSignal, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
+
+	journalUnit, err := journalXrayUnit(shutdownSignal, cfg, xraystatus.SystemdUnit{})
+	if err != nil {
+		slog.Error("validate journal access", "error", err)
+		os.Exit(1)
+	}
 
 	store, err := users.Open(cfg.DBPath)
 	if err != nil {
@@ -108,6 +116,7 @@ func main() {
 		"xray_config", cfg.XrayConfigPath,
 		"db", cfg.DBPath,
 		"xray_unit", cfg.XrayUnitName,
+		"journal_xray_unit", journalUnit,
 		"password_set", cfg.Password != "",
 	)
 	if err := server.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
@@ -115,6 +124,28 @@ func main() {
 		os.Exit(1)
 	}
 }
+
+// journalXrayUnit runs the Log snapshot startup gate (IN-DEV-SPEC §5.5): the
+// journalctl path must be safe to execute, and the configured xray unit must
+// resolve through systemd to one canonical service identity. Both are
+// configuration errors rather than degraded modes — a Panel that would run
+// the wrong executable, or read a unit it cannot name exactly, should say so
+// at deploy time rather than at the first log request.
+//
+// Failures *after* this gate are a different matter: a journalctl that later
+// disappears costs the Panel its Log snapshots, never its monitoring.
+func journalXrayUnit(ctx context.Context, cfg config.Config, systemd journal.UnitQuerier) (string, error) {
+	if err := journal.ValidateExecutable(cfg.JournalctlPath); err != nil {
+		return "", fmt.Errorf("XFORM_JOURNALCTL: %w", err)
+	}
+	resolveCtx, cancel := context.WithTimeout(ctx, unitResolveTimeout)
+	defer cancel()
+	return journal.ResolveXrayUnit(resolveCtx, cfg.XrayUnitName, systemd)
+}
+
+// unitResolveTimeout bounds the startup D-Bus round trip, so an unresponsive
+// systemd delays the gate rather than hanging the Panel before it listens.
+const unitResolveTimeout = 5 * time.Second
 
 type currentProfileSources struct {
 	xray           *xrayconfig.Watcher

@@ -125,3 +125,41 @@ func TestPropertyReadFailureDoesNotTriggerFallback(t *testing.T) {
 		t.Error("connection not closed after the failed query")
 	}
 }
+
+func TestCanonicalIDReadsSystemdsOwnIdentity(t *testing.T) {
+	// An alias is why the identity comes from systemd rather than from the
+	// configured string.
+	conn := &fakeConn{unitProps: map[string]any{"Id": "xray.service"}}
+	unit := xraystatus.SystemdUnit{DialSystem: dialTo(conn, nil)}
+
+	id, err := unit.CanonicalID(context.Background(), "xray-vless.service")
+
+	if err != nil {
+		t.Fatalf("CanonicalID() error = %v, want nil", err)
+	}
+	if id != "xray.service" {
+		t.Errorf("id = %q, want xray.service", id)
+	}
+	if !conn.closed {
+		t.Error("connection not closed after the query")
+	}
+}
+
+func TestCanonicalIDReportsAnUnresolvableUnit(t *testing.T) {
+	tests := []struct {
+		name string
+		conn *fakeConn
+	}{
+		{name: "systemd cannot answer", conn: &fakeConn{propsErr: errors.New("no such unit")}},
+		{name: "no identity in the answer", conn: &fakeConn{unitProps: map[string]any{}}},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			unit := xraystatus.SystemdUnit{DialSystem: dialTo(test.conn, nil)}
+
+			if _, err := unit.CanonicalID(context.Background(), "xray.service"); err == nil {
+				t.Error("CanonicalID() error = nil, want a failure")
+			}
+		})
+	}
+}

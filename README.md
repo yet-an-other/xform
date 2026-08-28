@@ -44,6 +44,14 @@ All runtime settings are environment variables (defaults from SPEC.md §7):
 | `XFORM_XRAY_CONFIG` | `/usr/local/etc/xray/config.json` | xray config file (user roster) |
 | `XFORM_DB` | `/var/lib/xform/xform.db` | SQLite database file |
 | `XFORM_XRAY_UNIT` | `xray.service` | systemd unit of the xray service |
+| `XFORM_JOURNALCTL` | `/usr/bin/journalctl` | journalctl executable the Log snapshot reader runs |
+
+Both `XFORM_XRAY_UNIT` and `XFORM_JOURNALCTL` are checked at startup and the
+panel refuses to start when either is unusable: the journalctl path must be
+absolute and resolve to a regular file this user can execute, and the xray unit
+must resolve through systemd to one canonical `.service` identity — shorthand,
+globs, and templates without an instance are rejected. A journalctl that later
+disappears costs the panel its log snapshots only; monitoring keeps running.
 
 ## Deployment shapes
 

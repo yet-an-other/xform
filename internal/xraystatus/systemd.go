@@ -48,6 +48,27 @@ func (s SystemdUnit) QueryUnit(ctx context.Context, name string) (UnitInfo, erro
 	return UnitInfoFromProperties(props, svc), nil
 }
 
+// CanonicalID returns systemd's own Id for a unit name — the identity the
+// journal reader passes to journalctl rather than the administrator's
+// spelling, so an alias resolves to what it points at (IN-DEV-SPEC §5.5).
+func (s SystemdUnit) CanonicalID(ctx context.Context, name string) (string, error) {
+	conn, err := s.dial(ctx)
+	if err != nil {
+		return "", err
+	}
+	defer conn.Close()
+
+	props, err := conn.GetUnitPropertiesContext(ctx, name)
+	if err != nil {
+		return "", fmt.Errorf("query unit %s: %w", name, err)
+	}
+	id, _ := props["Id"].(string)
+	if id == "" {
+		return "", fmt.Errorf("systemd reported no Id for %s", name)
+	}
+	return id, nil
+}
+
 // dial prefers the system bus because the panel deploys as an unprivileged
 // user: PID 1 creates /run/systemd/private root-only (0700), so a private
 // connection fails with EPERM for anyone but root. The private socket stays
