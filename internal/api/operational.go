@@ -8,8 +8,10 @@ import (
 	"github.com/yet-an-other/xform/internal/journal"
 )
 
-// OperationalSources are the two point-in-time viewers behind IN-DEV-SPEC
-// §6.4 and §6.5.
+// OperationalSources are the two sources behind the Viewers (CONTEXT.md) —
+// the server half only: the browser owns the dialogs, and the pair is what
+// the glossary calls a Viewer.
+//
 // They are grouped because they share one property the rest of the API does
 // not have: each is collected per request and never cached, and a failure in
 // either changes no other source's status (§3.4).
