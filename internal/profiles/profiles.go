@@ -15,6 +15,7 @@ import (
 	"github.com/gowebpki/jcs"
 	"github.com/xtls/xray-core/common/uuid"
 	"github.com/yet-an-other/xform/internal/advertisements"
+	"github.com/yet-an-other/xform/internal/filesource"
 	"github.com/yet-an-other/xform/internal/xrayconfig"
 	"golang.org/x/net/idna"
 )
@@ -78,22 +79,23 @@ type Sources struct {
 	XrayAvailable bool
 	XrayLoadedAt  time.Time
 	XrayStale     bool
-	XrayError     *xrayconfig.SourceError
+	XrayError     *filesource.SourceError
 
 	AdvertisementsView       advertisements.View
 	AdvertisementsConfigured bool
 	AdvertisementsAvailable  bool
 	AdvertisementsLoadedAt   time.Time
 	AdvertisementsStale      bool
-	AdvertisementsError      *advertisements.SourceError
+	AdvertisementsError      *filesource.SourceError
 }
 
-// SourcesFromSnapshots adapts the two watcher snapshots into evaluator input.
+// SourcesFromSnapshots adapts the two watched-source snapshots into evaluator
+// input.
 func SourcesFromSnapshots(xray xrayconfig.Snapshot, advertised advertisements.Snapshot) Sources {
 	return Sources{
-		XrayView: xray.View, XrayAvailable: xray.Available(), XrayLoadedAt: xray.LoadedAt,
+		XrayView: xray.Value.View, XrayAvailable: xray.Available(), XrayLoadedAt: xray.LoadedAt,
 		XrayStale: xray.Stale, XrayError: xray.Error,
-		AdvertisementsView: advertised.View, AdvertisementsConfigured: advertised.Configured(),
+		AdvertisementsView: advertised.Value, AdvertisementsConfigured: advertised.Configured(),
 		AdvertisementsAvailable: advertised.Available(), AdvertisementsLoadedAt: advertised.LoadedAt,
 		AdvertisementsStale: advertised.Stale, AdvertisementsError: advertised.Error,
 	}

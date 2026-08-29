@@ -1,52 +1,68 @@
 package xrayconfig
 
-import "time"
+import (
+	"maps"
+
+	"github.com/yet-an-other/xform/internal/filesource"
+)
 
 // ErrorReason is a stable xray-config source failure reason.
-type ErrorReason string
+type ErrorReason = filesource.Reason
 
 const (
-	ReadFailed  ErrorReason = "read_failed"
+	// ReadFailed is named by the watched source itself.
+	ReadFailed = filesource.ReadFailed
+	// ParseFailed is this source's own: the file was read but is not an xray
+	// config the panel can parse.
 	ParseFailed ErrorReason = "parse_failed"
 )
 
 // SourceError is safe to expose to profile consumers. It never includes a
 // filesystem error, malformed config text, or server secret.
-type SourceError struct {
-	Reason  ErrorReason
-	Message string
+type SourceError = filesource.SourceError
+
+// Snapshot is the current parsed-xray source state. Its Value and LoadedAt
+// remain the last successful ones after a reload failure.
+type Snapshot = filesource.Snapshot[Parsed]
+
+// Parsed is one successful parse of the xray config: the Roster, the version
+// that Roster is at, and the immutable inbound View behind Connection
+// profiles.
+//
+// Version bumps only when the Roster actually changes, so a profile-only
+// config edit does not re-sync every user. 0 means no config has ever parsed
+// successfully — a missing or broken config must not mark anybody gone.
+type Parsed struct {
+	// Roster is shared with every caller; none of them may mutate it.
+	Roster  map[string]User
+	Version uint64
+	View    View
 }
 
-// Snapshot is the current parsed-xray source state. View and LoadedAt remain
-// the last successful values after a reload failure.
-type Snapshot struct {
-	View     View
-	LoadedAt time.Time
-	Stale    bool
-	Error    *SourceError
-
-	available bool
+// messages is this source's failure vocabulary, worded for the Dashboard.
+var messages = filesource.Messages{
+	ReadFailed: {
+		Fresh: "The configured xray file could not be read.",
+		Stale: "The configured xray file could not be read; profiles use the last valid parse.",
+	},
+	ParseFailed: {
+		Fresh: "The configured xray file could not be parsed.",
+		Stale: "The configured xray file could not be parsed; profiles use the last valid parse.",
+	},
 }
 
-// Available reports whether the source has parsed successfully at least once.
-// An available stale Snapshot still carries its last valid View.
-func (s Snapshot) Available() bool {
-	return s.available
-}
-
-func safeSourceError(reason ErrorReason, stale bool) SourceError {
-	var message string
-	switch reason {
-	case ReadFailed:
-		message = "The configured xray file could not be read."
-		if stale {
-			message = "The configured xray file could not be read; profiles use the last valid parse."
-		}
-	case ParseFailed:
-		message = "The configured xray file could not be parsed."
-		if stale {
-			message = "The configured xray file could not be parsed; profiles use the last valid parse."
-		}
+// parseSource is the watched source's parse. It carries the roster version
+// forward from the previous parse, bumping it only on a real roster change —
+// the version has to move in the same step as the swap, which is why the
+// previous parse is an input rather than watcher state.
+func parseSource(previous Parsed, document []byte) (Parsed, ErrorReason, error) {
+	roster, view, err := parse(document)
+	if err != nil {
+		return Parsed{}, ParseFailed, err
 	}
-	return SourceError{Reason: reason, Message: message}
+	next := Parsed{Roster: roster, Version: previous.Version, View: view}
+	if previous.Roster == nil || !maps.Equal(previous.Roster, roster) {
+		next.Version = previous.Version + 1
+	}
+	return next, "", nil
 }

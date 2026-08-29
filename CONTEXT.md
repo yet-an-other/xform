@@ -50,6 +50,18 @@ _Avoid_: deleted user, removed user, inactive user
 The set of users the xray config currently defines, parsed from the config file and re-read when it changes. The roster supplies the protocol · security labels and decides who is — or becomes — a gone user.
 _Avoid_: config users, client list
 
+**Observation**:
+Data the Panel gathers on its own schedule and holds onto — host stats, xray status, and each User's traffic and presence. When a fresh gather fails, the last good one is served and marked stale.
+_Avoid_: poll, sample, reading
+
+**Operational snapshot**:
+A Log snapshot or Config snapshot: gathered only when an admin asks for it, held no longer than the Viewer showing it, and never part of the Panel's own history (ADR-0006). The counterpart to an Observation.
+_Avoid_: operational view, viewer data, log dump
+
+**Watched source**:
+A file on the Host that the Panel re-reads whenever it changes and keeps the last valid parse of — the xray config and the Advertised connection settings. A failed re-read never empties a watched source: it keeps the last valid value and marks it stale.
+_Avoid_: config watcher, file loader, reloader
+
 **Config snapshot**:
 The exact text of the configured xray file read when requested. It is distinct from the parsed Roster.
 _Avoid_: parsed config, formatted config, config export
@@ -57,6 +69,10 @@ _Avoid_: parsed config, formatted config, config export
 **Log snapshot**:
 The latest bounded set of journal entries for the Panel or xray, collected when requested. It is a point-in-time view, never a live stream.
 _Avoid_: live logs, log stream, log tail
+
+**Viewer**:
+One operational snapshot together with the dialog that asks for it and shows it: Panel logs, xray logs, or xray config. Each viewer reports only its own result — a failed viewer says so on its own, without making any other viewer or the Dashboard look broken.
+_Avoid_: modal (that is its presentation), log window
 
 **Release**:
 A published, versioned build of the panel, cut from a git tag. The updater consumes releases, never arbitrary commits.
