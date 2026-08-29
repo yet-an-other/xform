@@ -448,6 +448,14 @@ export function Dashboard({ onUnauthenticated }: { onUnauthenticated: () => void
   // snapshot: reopening always starts with an initial load (§7.4).
   const closeDialog = useCallback(() => setDialog(null), []);
 
+  // An expired Session is the Dashboard's business, not a dialog's: whichever
+  // dialog's Collection meets a 401 hands it back here, and the pairing —
+  // close, then return to login (§7.5) — is written once.
+  const sessionExpired = useCallback(() => {
+    setDialog(null);
+    onUnauthenticated();
+  }, [onUnauthenticated]);
+
   useEffect(() => {
     const controller = new AbortController();
 
@@ -612,7 +620,7 @@ export function Dashboard({ onUnauthenticated }: { onUnauthenticated: () => void
           email={dialog.email}
           opener={dialogOpener}
           onClose={closeDialog}
-          onUnauthenticated={onUnauthenticated}
+          onExpired={sessionExpired}
         />
       ) : null}
 
@@ -621,7 +629,7 @@ export function Dashboard({ onUnauthenticated }: { onUnauthenticated: () => void
           source={dialog.source}
           opener={dialogOpener}
           onClose={closeDialog}
-          onUnauthenticated={onUnauthenticated}
+          onExpired={sessionExpired}
         />
       ) : null}
 
@@ -629,7 +637,7 @@ export function Dashboard({ onUnauthenticated }: { onUnauthenticated: () => void
         <ConfigSnapshotModal
           opener={dialogOpener}
           onClose={closeDialog}
-          onUnauthenticated={onUnauthenticated}
+          onExpired={sessionExpired}
         />
       ) : null}
     </main>
