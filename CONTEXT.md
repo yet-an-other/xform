@@ -74,6 +74,10 @@ _Avoid_: live logs, log stream, log tail
 One operational snapshot together with the dialog that asks for it and shows it: Panel logs, xray logs, or xray config. Each viewer reports only its own result — a failed viewer says so on its own, without making any other viewer or the Dashboard look broken.
 _Avoid_: modal (that is its presentation), log window
 
+**Collection**:
+One request for data a dialog shows, plus what the browser keeps of it while that dialog is open — the last value, whether a refresh failed, and nothing at all once it closes. Spans both shapes: a Viewer collects an operational snapshot once, the User details dialog collects Observations on a cadence.
+_Avoid_: fetch, loader, query
+
 **Release**:
 A published, versioned build of the panel, cut from a git tag. The updater consumes releases, never arbitrary commits.
 _Avoid_: build, version (alone)

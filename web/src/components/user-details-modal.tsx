@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type ReactNode, type RefObject } from "react";
+import { useCallback, type ReactNode, type RefObject } from "react";
 
 import { ConnectionProfiles } from "@/components/connection-profile-card";
 import { Badge } from "@/components/ui/badge";
@@ -10,18 +10,15 @@ import {
   formatSpeed,
   formatTime24,
 } from "@/lib/format";
-import {
-  fetchUserDetail,
-  UnauthenticatedError,
-  type UserDetail,
-} from "@/lib/api";
+import { fetchUserDetail } from "@/lib/api";
+import { useCollection } from "@/lib/collection";
 import { cn } from "@/lib/utils";
 
 interface UserDetailsModalProps {
   email: string;
   opener: RefObject<HTMLElement | null>;
   onClose: () => void;
-  onUnauthenticated: () => void;
+  onExpired: () => void;
 }
 
 const DETAIL_POLL_INTERVAL_MS = 5_000;
@@ -30,59 +27,18 @@ export function UserDetailsModal({
   email,
   opener,
   onClose,
-  onUnauthenticated,
+  onExpired,
 }: UserDetailsModalProps) {
-  const [detail, setDetail] = useState<UserDetail | null>(null);
-  const [error, setError] = useState<string | null>(null);
-  const opening = useRef(0);
-
-  useEffect(() => {
-    const openingID = ++opening.current;
-    const controller = new AbortController();
-    let active = true;
-    let inFlight = false;
-    let interval: number | null = null;
-
-    function stop() {
-      active = false;
-      if (interval !== null) window.clearInterval(interval);
-      controller.abort();
-    }
-
-    async function refresh() {
-      if (inFlight) return;
-      inFlight = true;
-      try {
-        const next = await fetchUserDetail(email, controller.signal);
-        if (active && opening.current === openingID) {
-          setDetail(next);
-          setError(null);
-        }
-      } catch (cause) {
-        if (cause instanceof UnauthenticatedError && active) {
-          stop();
-          onClose();
-          onUnauthenticated();
-          return;
-        }
-        if (active && !controller.signal.aborted) {
-          setError(cause instanceof Error ? cause.message : "User detail unavailable");
-        }
-      } finally {
-        inFlight = false;
-      }
-    }
-
-    setDetail(null);
-    setError(null);
-    void refresh();
-    interval = window.setInterval(() => void refresh(), DETAIL_POLL_INTERVAL_MS);
-    return stop;
-  }, [email, onClose, onUnauthenticated]);
-
-  const visibleDetail = detail?.user.email === email ? detail : null;
-  const user = visibleDetail?.user ?? null;
-  const refreshFailed = error !== null && visibleDetail !== null;
+  // A User's Observations keep moving while the dialog is open, so this
+  // Collection carries a cadence. Its value always belongs to the email it was
+  // collected for: a different one is a different Collection.
+  const collect = useCallback((signal: AbortSignal) => fetchUserDetail(email, signal), [email]);
+  const {
+    data: detail,
+    error,
+    refreshFailed,
+  } = useCollection(collect, { onExpired, intervalMs: DETAIL_POLL_INTERVAL_MS });
+  const user = detail?.user ?? null;
 
   return (
     <Modal label={`${email} details`} open opener={opener} onOpenChange={onClose}>
@@ -136,7 +92,7 @@ export function UserDetailsModal({
             Unable to refresh User details: {error}
           </p>
         ) : null}
-        {user ? (
+        {user && detail ? (
           <>
             <div className="mb-2.5 flex items-baseline justify-between gap-3">
               <h3 className="text-[13px] font-semibold">Current observations</h3>
@@ -144,14 +100,14 @@ export function UserDetailsModal({
                 {refreshFailed
                   ? user.gone
                     ? "historical observations · refresh failed"
-                    : visibleDetail.stale
+                    : detail.stale
                       ? "stale snapshot · refresh failed"
                       : "refresh failed · showing previous observations"
                   : user.gone
-                    ? visibleDetail?.stale
+                    ? detail.stale
                       ? "historical observations · stale snapshot"
                       : "historical observations"
-                    : visibleDetail?.stale
+                    : detail.stale
                       ? "stale snapshot"
                       : "live snapshot"}
               </span>
@@ -169,7 +125,7 @@ export function UserDetailsModal({
                 </span>
               </Observation>
               <Observation label="Speed now">
-                {visibleDetail?.stale ? (
+                {detail.stale ? (
                   <span className="text-muted-foreground">stale</span>
                 ) : user.speed_up_bps > 0 || user.speed_down_bps > 0 ? (
                   <span className="grid gap-0.5">
@@ -218,7 +174,7 @@ export function UserDetailsModal({
               )}
             </div>
             <ConnectionProfiles
-              profiles={visibleDetail!.connection_profiles}
+              profiles={detail.connection_profiles}
               refreshFailed={refreshFailed}
             />
           </>
@@ -228,7 +184,7 @@ export function UserDetailsModal({
       </div>
       <ModalFooter>
         <span>Read-only</span>
-        {visibleDetail ? <span>Collected at {formatTime24(new Date(visibleDetail.collected_at * 1000))}</span> : null}
+        {detail ? <span>Collected at {formatTime24(new Date(detail.collected_at * 1000))}</span> : null}
       </ModalFooter>
     </Modal>
   );

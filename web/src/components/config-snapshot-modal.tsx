@@ -1,50 +1,25 @@
-import { useEffect, useState, type RefObject } from "react";
+import { useCallback, type RefObject } from "react";
 
 import { CopyButton } from "@/components/copy-button";
 import { Modal, ModalClose, ModalFooter } from "@/components/ui/modal";
-import {
-  fetchConfigSnapshot,
-  snapshotFailureReason,
-  UnauthenticatedError,
-  type ConfigSnapshot,
-} from "@/lib/api";
+import { fetchConfigSnapshot } from "@/lib/api";
+import { useCollection } from "@/lib/collection";
 
 interface ConfigSnapshotModalProps {
   opener: RefObject<HTMLElement | null>;
   onClose: () => void;
-  onUnauthenticated: () => void;
+  onExpired: () => void;
 }
 
 // ConfigSnapshotModal shows the exact text of the configured xray file
 // (IN-DEV-SPEC §7.4): one fresh bounded read on open, no Refresh — the file is
 // what it is at the moment it was asked for, and a second read is a second
 // opening. Nothing is parsed, formatted, or reflowed on the way to the screen.
-export function ConfigSnapshotModal({ opener, onClose, onUnauthenticated }: ConfigSnapshotModalProps) {
-  const [snapshot, setSnapshot] = useState<ConfigSnapshot | null>(null);
-  const [error, setError] = useState<string | null>(null);
-
-  useEffect(() => {
-    const current = new AbortController();
-
-    void (async () => {
-      try {
-        const next = await fetchConfigSnapshot(current.signal);
-        if (current.signal.aborted) return;
-        setSnapshot(next);
-      } catch (cause) {
-        if (current.signal.aborted) return;
-        if (cause instanceof UnauthenticatedError) {
-          onClose();
-          onUnauthenticated();
-          return;
-        }
-        setError(snapshotFailureReason(cause));
-      }
-    })();
-
-    // Closing aborts the read and discards the snapshot with the component.
-    return () => current.abort();
-  }, [onClose, onUnauthenticated]);
+export function ConfigSnapshotModal({ opener, onClose, onExpired }: ConfigSnapshotModalProps) {
+  // No cadence and no Refresh: this Collection is collected once, and closing
+  // aborts the read and discards it with the component.
+  const collect = useCallback((signal: AbortSignal) => fetchConfigSnapshot(signal), []);
+  const { data: snapshot, error } = useCollection(collect, { onExpired });
 
   return (
     <Modal label="xray config" open opener={opener} onOpenChange={onClose}>
