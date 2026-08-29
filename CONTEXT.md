@@ -58,6 +58,10 @@ _Avoid_: poll, sample, reading
 A Log snapshot or Config snapshot: gathered only when an admin asks for it, held no longer than the Viewer showing it, and never part of the Panel's own history (ADR-0006). The counterpart to an Observation.
 _Avoid_: operational view, viewer data, log dump
 
+**Watched source**:
+A file on the Host that the Panel re-reads whenever it changes and keeps the last valid parse of — the xray config and the Advertised connection settings. A failed re-read never empties a watched source: it keeps the last valid value and marks it stale.
+_Avoid_: config watcher, file loader, reloader
+
 **Config snapshot**:
 The exact text of the configured xray file read when requested. It is distinct from the parsed Roster.
 _Avoid_: parsed config, formatted config, config export
