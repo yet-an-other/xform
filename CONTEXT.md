@@ -1,13 +1,13 @@
 # xform
 
-xform is a read-only monitoring panel for a single xray-core proxy server. It observes the host machine, the xray service, and each of the proxy's users, and presents their current state and accumulated usage.
+xform is a monitoring panel for a single xray-core proxy server. It observes the host machine, the xray service, and each of the proxy's users, presents their current state and accumulated usage — and it manages the roster of users, with changes applied immediately.
 
 ## Language
 
 ### The system
 
 **Panel**:
-The xform application as a whole — the thing the admin opens in a browser. It observes; it never changes xray.
+The xform application as a whole — the thing the admin opens in a browser. It observes, and it manages the user roster.
 _Avoid_: dashboard (that's the page), manager, admin console
 
 **xray**:
@@ -15,7 +15,7 @@ The xray-core proxy server being monitored, running on the same host as the pane
 _Avoid_: the core, the proxy (alone), the backend
 
 **API**:
-The panel's JSON interface used by the dashboard. It exposes current observations and durable history; it never changes xray.
+The panel's JSON interface used by the dashboard. It exposes current observations and durable history, and the mutations that manage the roster.
 _Avoid_: REST service, backend, control API
 
 **Host**:
@@ -43,11 +43,11 @@ The public endpoint and client-side transport and security values needed for a C
 _Avoid_: overrides, profile config, connection metadata
 
 **Gone user**:
-A user who no longer exists in xray's configuration but whose history the panel retains. Gone users are hidden by default, never erased.
+A user removed from the Roster whose history the panel retains. Gone users are hidden by default, never erased.
 _Avoid_: deleted user, removed user, inactive user
 
 **Roster**:
-The set of users the xray config currently defines, parsed from the config file and re-read when it changes. The roster supplies the protocol · security labels and decides who is — or becomes — a gone user.
+The set of users the panel manages, held by the panel as the source of truth and applied to xray — rendered into the config file and pushed to the running server so both stay in step. Foreign clients found in the config are adopted into the Roster; Roster users missing from the config are re-applied. The Roster supplies the protocol · security labels and decides who is — or becomes — a gone user.
 _Avoid_: config users, client list
 
 **Observation**:
