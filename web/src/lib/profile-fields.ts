@@ -1,5 +1,5 @@
 // The typed public transport and security values behind a Connection profile
-// (IN-DEV-SPEC §6.2), turned into labelled pairs a card can print. They let an
+// (SPEC §7), turned into labelled pairs a card can print. They let an
 // admin read what a client will actually do without parsing the URI's query
 // string by eye.
 import type { ConnectionSecurity, ConnectionTransport } from "@/lib/api";
@@ -23,7 +23,7 @@ export function transportValues(transport: ConnectionTransport): TypedValue[] {
       ]);
     case "xhttp":
       // XHTTP `extra` is deliberately absent: the URI canonicalizes it with
-      // RFC 8785 (§6.3 rule 12), and a second serialization here could order
+      // RFC 8785 (SPEC §7), and a second serialization here could order
       // its keys differently from the `extra=` printed on the same card. The
       // URI stays the single source for that value.
       return defined([

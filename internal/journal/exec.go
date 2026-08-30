@@ -14,7 +14,7 @@ type childCommand struct {
 	Env  []string
 }
 
-// child is one running journalctl process — the internal seam (§4.2) between
+// child is one running journalctl process — the internal seam (SPEC §8) between
 // the production os/exec adapter and the fakes the collection tests run
 // against. It stays unexported so no caller can substitute its own process
 // execution for the fixed one.

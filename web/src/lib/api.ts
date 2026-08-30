@@ -114,7 +114,7 @@ export interface ConnectionProfileSourceError {
 }
 
 // The typed public transport and security values the URI was built from
-// (IN-DEV-SPEC §6.2). Every field beyond `type` is omitted when it does not
+// (SPEC §7). Every field beyond `type` is omitted when it does not
 // apply — except a REALITY short ID, which is present even when empty,
 // because an explicitly empty `sid` is meaningful to the client.
 export interface ConnectionTransport {
@@ -196,7 +196,7 @@ export function fetchUserDetail(email: string, signal?: AbortSignal): Promise<Us
   return getJSON<UserDetail>(`api/v1/users/${encodeURIComponent(email)}`, signal);
 }
 
-// PanelInfo is the panel's own identity (IN-DEV-SPEC §6.1): the release
+// PanelInfo is the panel's own identity (SPEC §5): the release
 // version stamped into the binary at build time plus the current process
 // uptime in whole seconds. Fetched every poll — the dashboard refreshes
 // uptime from the API in the five-second cycle instead of extrapolating it
@@ -230,7 +230,7 @@ export async function logout(): Promise<void> {
   await fetch("api/v1/logout", { method: "POST" });
 }
 
-// LogEntry is one normalized journal record (IN-DEV-SPEC §6.4). identifier,
+// LogEntry is one normalized journal record (SPEC §8). identifier,
 // pid, priority, message, and message_encoding are null where the record
 // carried no usable value; message_truncated marks journalctl's own
 // oversized-field elision, where the message is null because it never
@@ -295,8 +295,8 @@ export function snapshotFailureReason(cause: unknown): string {
   return cause instanceof Error ? cause.message : "unavailable";
 }
 
-// getSnapshot is getJSON plus the stable-reason failure body §6.4 and §6.5
-// define. A body without one still fails — with the status, so the dialog
+// getSnapshot is getJSON plus the stable-reason failure body of SPEC §8. A
+// body without one still fails — with the status, so the dialog
 // says something true rather than inventing a reason.
 async function getSnapshot<T>(path: string, signal?: AbortSignal): Promise<T> {
   const response = await fetch(path, {

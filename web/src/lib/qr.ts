@@ -1,7 +1,7 @@
 // QR Code generation (ISO/IEC 18004), byte mode, error-correction level M.
 //
 // The Panel encodes exactly one thing: the UTF-8 bytes of a Connection
-// profile's canonical VLESS URI (IN-DEV-SPEC §6.3). That is why this module
+// profile's canonical VLESS URI (SPEC §7). That is why this module
 // takes bytes rather than a string — there is no place to slip in an
 // alternate serialization, a wrapper, or trimmed whitespace between the URI
 // the card displays and the symbol a client scans.

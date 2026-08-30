@@ -25,7 +25,7 @@ function priorityTone(priority: number | null): string {
   return "text-muted-foreground border-border";
 }
 
-// LogSnapshotModal is one Log snapshot dialog (IN-DEV-SPEC §7.4): one fresh
+// LogSnapshotModal is one Log snapshot dialog (SPEC §6): one fresh
 // bounded snapshot on open, a manual Refresh, and nothing retained once it
 // closes — the Panel keeps no Log snapshot, and neither does the browser.
 export function LogSnapshotModal({
@@ -112,7 +112,7 @@ export function LogSnapshotModal({
           </p>
         ) : (
           // Fixed-format content scrolls horizontally at the narrow
-          // breakpoint rather than reflowing (§7.5).
+          // breakpoint rather than reflowing (SPEC §6).
           <div className="overflow-x-auto">
             <table className="w-full min-w-[700px] border-collapse text-left font-mono text-[11.5px]">
               <thead>

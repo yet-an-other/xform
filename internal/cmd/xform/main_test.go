@@ -46,7 +46,7 @@ func TestJournalXrayUnitPassesTheStartupGate(t *testing.T) {
 }
 
 func TestJournalXrayUnitStopsStartupOnAnUnusableConfiguration(t *testing.T) {
-	// §5.5: an unsafe reader path or a unit that cannot be resolved to one
+	// SPEC §8: an unsafe reader path or a unit that cannot be resolved to one
 	// canonical identity is a configuration error, caught before the Panel
 	// serves rather than at the first log request.
 	usable := executableFile(t)

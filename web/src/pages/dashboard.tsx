@@ -43,7 +43,7 @@ import {
 const POLL_INTERVAL_MS = 5_000;
 
 // OpenDialog is the one dialog the Dashboard has open, if any. A single slot
-// is what enforces "only one modal at a time" (IN-DEV-SPEC §7.4).
+// is what enforces "only one modal at a time" (SPEC §6).
 type OpenDialog =
   | { kind: "details"; email: string }
   | { kind: "logs"; source: LogSource }
@@ -120,7 +120,7 @@ function ConfigIcon() {
 
 // IconAction is one icon-only control — a header snapshot action, a table
 // row's details action. It always carries an accessible name and a visible
-// title, because an icon alone names nothing (§7.1, §7.2).
+// title, because an icon alone names nothing (SPEC §6).
 function IconAction({
   label,
   title,
@@ -153,7 +153,7 @@ function IconAction({
 // UsersTable is the per-user traffic table (SPEC §6): durable totals,
 // current speed, presence (online dot, IPs, last seen), and the config
 // labels (protocol · security) — plus the named icon-only details action
-// opening the User dialog (IN-DEV-SPEC §7.2). Uplink and Downlink share one
+// opening the User dialog (SPEC §6). Uplink and Downlink share one
 // Traffic column on two lines. Gone users — edited out of the xray config,
 // history retained — are hidden by default behind a toggle. Speeds read
 // "stale" on a stale snapshot — xray is unreachable and the totals are
@@ -185,7 +185,10 @@ function UsersTable({
           </button>
         ) : null}
       </div>
-      <Table className="table-fixed">
+      {/* Fixed columns keep their width past the container and the wrapper
+          scrolls horizontally at narrow widths; table-fixed alone would
+          compress every column into the viewport. */}
+      <Table className="min-w-[64rem] table-fixed">
         <TableHeader>
           <TableRow className="text-muted-foreground text-[0.7rem] font-bold tracking-[0.08em] uppercase hover:bg-transparent">
             <TableHead className="w-10 px-5" aria-label="Online" />
@@ -318,11 +321,11 @@ function Interpunct() {
   );
 }
 
-// XrayIdentity is the xray identity group (IN-DEV-SPEC §7.1): the status
+// XrayIdentity is the xray identity group (SPEC §6): the status
 // indicator immediately before the service name, then version, uptime, and
 // the two xray-scoped viewer actions. Those actions stay enabled whatever
 // xray's status is — each viewer reports its own collection result, and a
-// stopped xray still has a journal and a configured file (§7.5).
+// stopped xray still has a journal and a configured file (SPEC §6).
 function XrayIdentity({
   xray,
   onOpenLogs,
@@ -434,7 +437,7 @@ export function Dashboard({ onUnauthenticated }: { onUnauthenticated: () => void
   const [panel, setPanel] = useState<PanelInfo | null>(null);
   const [updatedAt, setUpdatedAt] = useState<Date | null>(null);
   const [error, setError] = useState<string | null>(null);
-  // One slot for every dialog, so at most one modal is ever mounted (§7.4) —
+  // One slot for every dialog, so at most one modal is ever mounted (SPEC §6) —
   // and the action that opened it, for focus restore.
   const [dialog, setDialog] = useState<OpenDialog>(null);
   const dialogOpener = useRef<HTMLButtonElement | null>(null);
@@ -445,12 +448,12 @@ export function Dashboard({ onUnauthenticated }: { onUnauthenticated: () => void
   }
 
   // Closing unmounts the dialog, which is what discards its browser-local
-  // snapshot: reopening always starts with an initial load (§7.4).
+  // snapshot: reopening always starts with an initial load (SPEC §6).
   const closeDialog = useCallback(() => setDialog(null), []);
 
   // An expired Session is the Dashboard's business, not a dialog's: whichever
   // dialog's Collection meets a 401 hands it back here, and the pairing —
-  // close, then return to login (§7.5) — is written once.
+  // close, then return to login (SPEC §6) — is written once.
   const sessionExpired = useCallback(() => {
     setDialog(null);
     onUnauthenticated();
@@ -529,7 +532,7 @@ export function Dashboard({ onUnauthenticated }: { onUnauthenticated: () => void
         </IconAction>
         {/* The xray group renders whether or not the observation landed: a
             failed xray poll must not take the Log and Config snapshot actions
-            with it, because neither reads xray to answer (§7.5). */}
+            with it, because neither reads xray to answer (SPEC §6). */}
         <XrayIdentity
           xray={xray}
           onOpenLogs={(opener) => openDialog({ kind: "logs", source: "xray" }, opener)}

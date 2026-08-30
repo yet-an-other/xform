@@ -96,7 +96,7 @@ func main() {
 			currentProfileSources{xray: configWatcher, advertisements: advertisementWatcher},
 			// Collected per request and never cached: a Log or Config snapshot
 			// is a point-in-time view the admin asked for, not an observation
-			// the Panel keeps refreshing (§3.3).
+			// the Panel keeps refreshing (SPEC §8).
 			api.OperationalSources{
 				Logs:   journal.NewReader(cfg.JournalctlPath, journalUnit),
 				Config: configsnapshot.NewReader(cfg.XrayConfigPath),
@@ -133,7 +133,7 @@ func main() {
 	}
 }
 
-// journalXrayUnit runs the Log snapshot startup gate (IN-DEV-SPEC §5.5): the
+// journalXrayUnit runs the Log snapshot startup gate (SPEC §8): the
 // journalctl path must be safe to execute, and the configured xray unit must
 // resolve through systemd to one canonical service identity. Both are
 // configuration errors rather than degraded modes — a Panel that would run

@@ -39,7 +39,7 @@ type connectionProfileSources interface {
 }
 
 // logSnapshots is the Log snapshot module's one collection operation
-// (IN-DEV-SPEC §4.2). The handler's only choice is the fixed source, so no
+// (SPEC §8). The handler's only choice is the fixed source, so no
 // unit, count, filter, cursor, or time range can reach journalctl through the
 // HTTP surface.
 type logSnapshots interface {
@@ -47,7 +47,7 @@ type logSnapshots interface {
 }
 
 // configSnapshots is the Config snapshot module's one bounded read
-// (IN-DEV-SPEC §4.3).
+// (SPEC §8).
 type configSnapshots interface {
 	Read(ctx context.Context) (configsnapshot.Snapshot, error)
 }

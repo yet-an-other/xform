@@ -1,4 +1,4 @@
-// Presentation rules for one journal record (IN-DEV-SPEC §7.4). The API
+// Presentation rules for one journal record (SPEC §6). The API
 // normalizes the journal; this module decides only how a normalized record
 // reads in the dialog.
 
@@ -14,7 +14,7 @@ export const TRUNCATED_MESSAGE = "[message exceeds journal field limit]";
 const SYSLOG_LABELS = ["emerg", "alert", "crit", "error", "warning", "notice", "info", "debug"];
 
 // logSource renders the source column: identifier[pid] when the record
-// carried both, and otherwise the unit (§7.4). A record with an identifier
+// carried both, and otherwise the unit (SPEC §6). A record with an identifier
 // but no pid falls back too — half an identity is not the identity the
 // column promises, and the unit is always known because the endpoint
 // collected one fixed unit.

@@ -1299,7 +1299,7 @@ describe("user details dialog", () => {
 });
 
 // Two profiles for one User, as the profile module really emits them
-// (IN-DEV-SPEC §6.2): a REALITY inbound with an effective flow, then a
+// (SPEC §7): a REALITY inbound with an effective flow, then a
 // fronted WebSocket inbound with none.
 const realityKey = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA";
 const realityURI =

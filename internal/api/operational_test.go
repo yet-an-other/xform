@@ -58,7 +58,7 @@ func newOperationalHandler(operational api.OperationalSources) http.Handler {
 		operational, session.NewManager(testPassword, time.Now), http.NotFoundHandler(), testPanelInfo)
 }
 
-// operationalPaths are the three endpoints §6.4 and §6.5 add.
+// operationalPaths are the three endpoints SPEC §8 adds.
 var operationalPaths = []string{"/api/v1/logs/panel", "/api/v1/logs/xray", "/api/v1/xray/config"}
 
 func TestOperationalEndpointsRequireSession(t *testing.T) {
@@ -297,7 +297,7 @@ func TestLogSnapshotEndpointsCollectTheirOwnFixedSource(t *testing.T) {
 
 func TestLogSnapshotKeepsNullFieldsAndAlwaysWritesMessageKeys(t *testing.T) {
 	// journalctl's own oversized-field elision: no message at all, which the
-	// entry still reports rather than omitting (§6.4).
+	// entry still reports rather than omitting (SPEC §8).
 	logs := &stubLogs{snapshot: journal.Snapshot{
 		Unit: "xform.service", Limit: 500,
 		Entries: []journal.Entry{{
@@ -414,7 +414,7 @@ func TestConcurrentCollectionIsRejectedWithoutStartingAnother(t *testing.T) {
 
 func TestClientDisconnectNeedsNoResponseBody(t *testing.T) {
 	// A disconnect cancels collection; the module's own kill-and-reap is what
-	// matters, and there is nobody left to answer (§6.4).
+	// matters, and there is nobody left to answer (SPEC §8).
 	logs := &stubLogs{err: context.Canceled}
 	config := &stubConfig{err: context.Canceled}
 	handler := newOperationalHandler(api.OperationalSources{Logs: logs, Config: config})
@@ -440,7 +440,7 @@ func TestClientDisconnectNeedsNoResponseBody(t *testing.T) {
 }
 
 func TestOperationalFailuresLeaveOtherEndpointsAlone(t *testing.T) {
-	// Independent freshness (§3.4): a viewer's failure is not another source's
+	// Independent freshness (SPEC §8): a viewer's failure is not another source's
 	// status.
 	handler := newOperationalHandler(api.OperationalSources{
 		Logs:   &stubLogs{err: &journal.Error{Reason: journal.ReasonAccessDenied}},

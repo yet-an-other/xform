@@ -12,7 +12,7 @@ interface ConfigSnapshotModalProps {
 }
 
 // ConfigSnapshotModal shows the exact text of the configured xray file
-// (IN-DEV-SPEC §7.4): one fresh bounded read on open, no Refresh — the file is
+// (SPEC §6): one fresh bounded read on open, no Refresh — the file is
 // what it is at the moment it was asked for, and a second read is a second
 // opening. Nothing is parsed, formatted, or reflowed on the way to the screen.
 export function ConfigSnapshotModal({ opener, onClose, onExpired }: ConfigSnapshotModalProps) {

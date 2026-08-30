@@ -50,7 +50,7 @@ func (s SystemdUnit) QueryUnit(ctx context.Context, name string) (UnitInfo, erro
 
 // CanonicalID returns systemd's own Id for a unit name — the identity the
 // journal reader passes to journalctl rather than the administrator's
-// spelling, so an alias resolves to what it points at (IN-DEV-SPEC §5.5).
+// spelling, so an alias resolves to what it points at (SPEC §8).
 func (s SystemdUnit) CanonicalID(ctx context.Context, name string) (string, error) {
 	conn, err := s.dial(ctx)
 	if err != nil {
@@ -73,7 +73,7 @@ func (s SystemdUnit) CanonicalID(ctx context.Context, name string) (string, erro
 // user: PID 1 creates /run/systemd/private root-only (0700), so a private
 // connection fails with EPERM for anyone but root. The private socket stays
 // as a fallback for root-run hosts without a dbus daemon. Property reads on
-// either bus need no elevated privileges (§4).
+// either bus need no elevated privileges (SPEC §2).
 //
 // Only dial errors trigger the fallback: a successful dial whose property
 // reads then fail is returned as-is — that failure is post-connect and would

@@ -10,7 +10,7 @@ import (
 )
 
 // unitFields are the trusted fields journald attaches, in the precedence
-// §6.4 fixes. A client cannot forge them, which is why the `unit` column
+// SPEC §8 fixes. A client cannot forge them, which is why the `unit` column
 // reads from these and never from a user field.
 var unitFields = []string{"_SYSTEMD_UNIT", "UNIT", "OBJECT_SYSTEMD_UNIT", "COREDUMP_UNIT"}
 
@@ -22,7 +22,7 @@ const (
 // normalize turns one journalctl JSON object into an Entry, or reports that
 // the whole snapshot is malformed. Individual records are never skipped: a
 // snapshot missing entries it did not mention would be a lie about what the
-// journal holds (§6.4).
+// journal holds (SPEC §8).
 func normalize(record map[string]json.RawMessage, fallbackUnit string) (Entry, error) {
 	cursor, ok := scalarString(record["__CURSOR"])
 	if !ok || cursor == "" {
@@ -58,7 +58,7 @@ func normalize(record map[string]json.RawMessage, fallbackUnit string) (Entry, e
 func unitOf(record map[string]json.RawMessage, fallbackUnit string) (string, error) {
 	for _, field := range unitFields {
 		raw, present := record[field]
-		// §6.4 makes an array, object, or number malformed; null is none of
+		// SPEC §8 makes an array, object, or number malformed; null is none of
 		// those, and journald writes it for a field it elided, so it reads as
 		// absent and the next candidate is tried.
 		if !present || isNull(raw) {

@@ -5,7 +5,7 @@ import { cn } from "@/lib/utils";
 
 interface QrCodeProps {
   // value is encoded as its own UTF-8 bytes — for a Connection profile, the
-  // canonical URI exactly as displayed and copied (IN-DEV-SPEC §6.3). There
+  // canonical URI exactly as displayed and copied (SPEC §7). There
   // is no wrapper, no re-serialization, and no trimming between the two.
   value: string;
   label: string;

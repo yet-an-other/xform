@@ -21,7 +21,7 @@ export interface Collection<T> {
 
 export interface CollectionOptions {
   // onExpired is called instead of surfacing a 401 as an error: an expired
-  // Session is the Dashboard's business, not a dialog's (§7.5). The collection
+  // Session is the Dashboard's business, not a dialog's (SPEC §6). The collection
   // stops for good — no error, no retry, no further ticks.
   onExpired: () => void;
   // intervalMs re-collects on a cadence, for data that keeps moving while the

@@ -72,7 +72,7 @@ func TestReadReturnsTheExactTextOfARegularFile(t *testing.T) {
 
 func TestReadFollowsARootConfiguredSymlinkAndReportsTheConfiguredPath(t *testing.T) {
 	// The deployment may point XFORM_XRAY_CONFIG at a symlink; the admin asked
-	// about that path, so the snapshot names it rather than its target (§6.5).
+	// about that path, so the snapshot names it rather than its target (SPEC §8).
 	const content = "{\"inbounds\":[]}\n"
 	realFile := writeFile(t, "config.real.json", content)
 	link := filepath.Join(filepath.Dir(realFile), "config.json")
@@ -179,7 +179,7 @@ func TestReadRejectsInvalidUTF8(t *testing.T) {
 
 func TestReadConsultsTheClockOnlyAfterEveryValidationSucceeds(t *testing.T) {
 	// captured_at timestamps a snapshot, so a read that never produced one
-	// must not reach the clock at all (§6.5).
+	// must not reach the clock at all (SPEC §8).
 	tests := []struct {
 		name  string
 		path  string
@@ -271,7 +271,7 @@ func TestReadDoesNotLeakFileContentIntoTheFailureDetail(t *testing.T) {
 
 func TestReadPreservesReadableFilesByteForByte(t *testing.T) {
 	// The snapshot is the exact text, not a parse: malformed JSON succeeds,
-	// and nothing is trimmed, reflowed, or re-encoded (§3.3, OP-5).
+	// and nothing is trimmed, reflowed, or re-encoded (SPEC §8).
 	tests := []struct {
 		name    string
 		content string
@@ -307,7 +307,7 @@ func TestReadPreservesReadableFilesByteForByte(t *testing.T) {
 
 func TestReadObservesTheFileAsItIsNow(t *testing.T) {
 	// Nothing is retained between reads: the Reader holds no copy of a
-	// snapshot, so a second read sees the file that exists now (§3.3).
+	// snapshot, so a second read sees the file that exists now (SPEC §8).
 	path := writeFile(t, "config.json", "{\"first\":true}\n")
 	reader := newReader(t, path)
 	if _, err := reader.Read(context.Background()); err != nil {
@@ -329,7 +329,7 @@ func TestReadObservesTheFileAsItIsNow(t *testing.T) {
 }
 
 func TestReadDoesNotTouchTheFilesystemForACancelledCaller(t *testing.T) {
-	// Closing the dialog aborts its request (§7.4); a caller already gone gets
+	// Closing the dialog aborts its request (SPEC §6); a caller already gone gets
 	// their own cancellation back, and the file is never opened.
 	reader := newReader(t, "/configured/config.json")
 	reader.open = func(string) (target, error) {

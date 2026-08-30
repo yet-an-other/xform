@@ -1,10 +1,10 @@
 // Package configsnapshot reads one exact, bounded Config snapshot from the
-// configured xray path (IN-DEV-SPEC §4.3, §6.5).
+// configured xray path (SPEC §8).
 //
 // A Config snapshot is the exact UTF-8 text observed during one bounded read.
 // It is separate from the parsed Roster in internal/xrayconfig: this package
 // never parses, formats, or reflows what it reads, so a snapshot may show
-// malformed JSON while the Roster keeps serving its last valid parse (§3.3).
+// malformed JSON while the Roster keeps serving its last valid parse (SPEC §8).
 package configsnapshot
 
 import (
@@ -15,7 +15,7 @@ import (
 	"unicode/utf8"
 )
 
-// Reason is a stable read failure, safe to expose to the Dashboard (§6.5).
+// Reason is a stable read failure, safe to expose to the Dashboard (SPEC §8).
 type Reason string
 
 const (
@@ -51,7 +51,7 @@ type Snapshot struct {
 	// timestamps a snapshot that exists rather than a read that was attempted.
 	CapturedAt time.Time
 	// Path is the configured path string, never the resolved symlink target:
-	// the admin asked about the file they configured (§6.5).
+	// the admin asked about the file they configured (SPEC §8).
 	Path string
 	// SizeBytes is the number of bytes actually read.
 	SizeBytes int64
@@ -60,7 +60,7 @@ type Snapshot struct {
 	Text string
 }
 
-// maxBytes is the read bound §6.5 fixes: 4 MiB.
+// maxBytes is the read bound SPEC §8 fixes: 4 MiB.
 const maxBytes int64 = 4 << 20
 
 // Reader reads Config snapshots from one configured path.
@@ -83,9 +83,9 @@ func NewReader(path string) *Reader {
 }
 
 // Read collects one bounded snapshot. Nothing it reads is kept: the text
-// belongs to the caller, and the Reader retains no copy (§3.3).
+// belongs to the caller, and the Reader retains no copy (SPEC §8).
 func (r *Reader) Read(ctx context.Context) (Snapshot, error) {
-	// A caller who has gone away — a closed dialog aborts its request (§7.4) —
+	// A caller who has gone away — a closed dialog aborts its request (SPEC §6) —
 	// gets their own cancellation back rather than a read failure: no snapshot
 	// was attempted, so no stable reason describes one.
 	if err := ctx.Err(); err != nil {

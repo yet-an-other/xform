@@ -1,6 +1,6 @@
 // Package journal collects bounded, point-in-time Log snapshots for the two
 // fixed units the Panel is allowed to read: its own service and the
-// configured xray service (IN-DEV-SPEC §4.2, §6.4).
+// configured xray service (SPEC §8).
 //
 // The only choice a caller has is which of those two sources to read. Unit
 // names, counts, filters, cursors, time ranges, and raw journalctl arguments
@@ -33,7 +33,7 @@ const (
 const PanelUnit = "xform.service"
 
 // namespace is the dedicated journal namespace the deployment grants the
-// Panel read ACLs on, and the only one it ever reads (§5.4).
+// Panel read ACLs on, and the only one it ever reads (SPEC §9).
 const namespace = "xform"
 
 // outputFields is journalctl's JSON allowlist: the trusted unit fields behind
@@ -58,7 +58,7 @@ const (
 // Detail is a bounded summary for the Panel's own logs. It never contains
 // journalctl's stderr or a journal message: those are the very data the
 // snapshot exists to bound, and a diagnostic is not a place to leak them
-// (§6.4).
+// (SPEC §8).
 type Error struct {
 	Reason Reason
 	Detail string
@@ -78,7 +78,7 @@ func failure(reason Reason, format string, args ...any) *Error {
 // Entry is one normalized journal record. Identifier, PID, Priority,
 // Message, and MessageEncoding are nil where the record did not carry a
 // usable value; MessageTruncated marks journalctl's own oversized-field
-// elision (§6.4).
+// elision (SPEC §8).
 type Entry struct {
 	Cursor           string
 	TimestampUS      uint64
@@ -101,7 +101,7 @@ type Snapshot struct {
 	Entries    []Entry
 }
 
-// limits are the bounds §6.4 fixes. They are not configurable: a caller that
+// limits are the bounds SPEC §8 fixes. They are not configurable: a caller that
 // could raise the entry count would also be rewriting journalctl's --lines.
 type limits struct {
 	timeout     time.Duration
@@ -142,7 +142,7 @@ type Reader struct {
 }
 
 // NewReader returns a Reader over an already-validated journalctl path and
-// canonical xray unit (§5.5 does that validation at startup).
+// canonical xray unit (SPEC §8 does that validation at startup).
 func NewReader(executable, xrayUnit string) *Reader {
 	return &Reader{
 		executable: executable,
@@ -167,7 +167,7 @@ func (r *Reader) Collect(ctx context.Context, source Source) (Snapshot, error) {
 	}
 
 	// Re-checked every time: a package upgrade or a tampered path between
-	// startup and now must degrade this one feature, not the Panel (§5.5).
+	// startup and now must degrade this one feature, not the Panel (SPEC §8).
 	if err := ValidateExecutable(r.executable); err != nil {
 		return Snapshot{}, failure(ReasonJournalctlUnavailable, "journalctl is no longer usable: %s", err)
 	}
@@ -186,7 +186,7 @@ func (r *Reader) Collect(ctx context.Context, source Source) (Snapshot, error) {
 
 	// The module owns the deadline rather than leaning on the adapter's own
 	// context handling: a child that stops producing output must be ended by
-	// the reader itself, whoever started it (§4.2). Kill tolerates arriving
+	// the reader itself, whoever started it (SPEC §8). Kill tolerates arriving
 	// after Wait, which is what makes the closing race harmless.
 	watching := make(chan struct{})
 	go func() {
@@ -234,7 +234,7 @@ func (r *Reader) awaitStderr(runCtx context.Context, process *runningChild) stde
 
 // unitFor maps a source to its fixed unit. An unrecognized source is a
 // programming error rather than a collection failure, so it carries no stable
-// reason: §6.4's reasons all describe an attempt that actually reached
+// reason: SPEC §8's reasons all describe an attempt that actually reached
 // journalctl, and this one never does.
 func (r *Reader) unitFor(source Source) (string, error) {
 	switch source {
@@ -281,7 +281,7 @@ func (r *Reader) startChild(ctx context.Context, command childCommand) (*running
 
 // read decodes the child's stdout as a stream of JSON objects. It never
 // buffers the whole output: the byte cap rides on the reader itself, and the
-// decoder consumes one object at a time (§6.4).
+// decoder consumes one object at a time (SPEC §8).
 func (r *Reader) read(process *runningChild, unit string) ([]Entry, error) {
 	// One byte past the cap, so a breach is detectable rather than silently
 	// truncating the stream into something that parses.
@@ -331,7 +331,7 @@ func (r *Reader) stdoutOverflowError(counter *countingReader) error {
 	return nil
 }
 
-// classify picks the one reason to report, in the precedence §6.4 fixes:
+// classify picks the one reason to report, in the precedence SPEC §8 fixes:
 // caller cancellation, then denial, timeout, byte caps, malformed output, and
 // finally any other non-zero exit.
 func classify(callerCtx, runCtx context.Context, collectErr, waitErr error, stderr stderrRead) error {
@@ -341,7 +341,7 @@ func classify(callerCtx, runCtx context.Context, collectErr, waitErr error, stde
 		return callerErr
 	}
 	// A clean run is a clean run. journalctl may warn about a file it could
-	// not open while still returning a complete snapshot, and §6.4 scopes
+	// not open while still returning a complete snapshot, and SPEC §8 scopes
 	// access_denied to a child that failed, not to one that succeeded.
 	if collectErr == nil && waitErr == nil && runCtx.Err() == nil && !stderr.oversized {
 		return nil

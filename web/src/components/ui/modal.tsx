@@ -7,7 +7,7 @@ interface ModalProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   // opener receives focus back when the modal closes — typically the button
-  // that opened it (IN-DEV-SPEC §7.5).
+  // that opened it (SPEC §6).
   opener: RefObject<HTMLElement | null>;
   // label names the dialog for assistive technology ("Open alice@… details").
   label: string;

@@ -11,7 +11,7 @@ import (
 
 // ValidateExecutable reports whether a configured journalctl path is safe to
 // run: absolute, resolvable, a regular file, and executable by the Panel
-// user (§5.5).
+// user (SPEC §8).
 //
 // A root-configured symlink is followed deliberately — distributions ship
 // /usr/bin/journalctl as one — but what it resolves to must still be a

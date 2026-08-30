@@ -5,7 +5,7 @@ How the Panel gets to read logs, and how to prove it reads only what it should.
 The Panel shows Log snapshots for exactly two units: itself and the configured
 xray service. It reads them by exec'ing `journalctl`, as its own unprivileged
 `xform` user, with no journal-group membership at all. What bounds that access
-is a dedicated journal namespace named `xform` (IN-DEV-SPEC §5.4): both units
+is a dedicated journal namespace named `xform` (SPEC §9): both units
 log into it, and the `xform` user holds read ACLs on that namespace's
 directories and nothing else.
 
@@ -132,7 +132,7 @@ while every other Panel feature keeps working.
 
 Root-run, on a **disposable Host** — several checks restart services, rotate
 journals, and reboot. Each check states what proves it. This is the procedure
-IN-DEV-SPEC §9.2 requires; it is deliberately separate from the Go test suite,
+SPEC §9 requires; it is deliberately separate from the Go test suite,
 which never touches real journal authority.
 
 Set up once — and again after the reboot in check 6, since the shell does not

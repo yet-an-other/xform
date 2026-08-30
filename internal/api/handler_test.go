@@ -441,7 +441,7 @@ func TestXrayEndpointNamesTheConfiguredAPIEndpoint(t *testing.T) {
 }
 
 // TestPanelEndpointReturnsTheReleaseVersion proves the panel identity
-// response: version plus current uptime, never cacheable (IN-DEV-SPEC §6:
+// response: version plus current uptime, never cacheable (SPEC §5:
 // every endpoint returns Cache-Control: no-store).
 func TestPanelEndpointReturnsTheReleaseVersion(t *testing.T) {
 	handler := api.New(fixedHostStats{}, fixedXrayStatus{}, fixedUsers{}, fixedProfileSources{}, api.OperationalSources{}, session.NewManager(testPassword, time.Now), http.NotFoundHandler(), testPanelInfo)
@@ -469,7 +469,7 @@ func TestPanelEndpointReturnsTheReleaseVersion(t *testing.T) {
 }
 
 // TestPanelEndpointReportsCurrentUptime proves the endpoint evaluates the
-// uptime source per request (IN-DEV-SPEC §6.1): the dashboard polls it every
+// uptime source per request (SPEC §5): the dashboard polls it every
 // five seconds, so each response carries the value at request time.
 func TestPanelEndpointReportsCurrentUptime(t *testing.T) {
 	elapsed := 4_831

@@ -19,7 +19,7 @@ const maxUnitNameLength = 255
 const serviceSuffix = ".service"
 
 // ResolveXrayUnit turns the administrator's configured xray unit into the one
-// canonical service identity the reader may pass to journalctl (§5.5).
+// canonical service identity the reader may pass to journalctl (SPEC §8).
 //
 // The configured string is checked before systemd is asked, because
 // journalctl's --unit= takes glob patterns and would happily widen the read

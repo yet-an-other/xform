@@ -7,7 +7,7 @@ import (
 )
 
 // target is what the configured path landed on: its content stream, plus the
-// one property the reader judges it by (§6.5 requires the opened target to be
+// one property the reader judges it by (SPEC §8 requires the opened target to be
 // a regular file).
 type target struct {
 	content io.ReadCloser
@@ -17,7 +17,7 @@ type target struct {
 	regular bool
 }
 
-// openFile is the filesystem seam (§4.3) between the production os adapter
+// openFile is the filesystem seam (SPEC §8) between the production os adapter
 // and the fakes the byte-bound and failure tests run against. It stays
 // unexported so no caller can substitute its own filesystem for the real one.
 type openFile func(path string) (target, error)

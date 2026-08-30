@@ -14,19 +14,19 @@ import (
 //
 // They are grouped because they share one property the rest of the API does
 // not have: each is collected per request and never cached, and a failure in
-// either changes no other source's status (§3.4).
+// either changes no other source's status (SPEC §8).
 type OperationalSources struct {
 	Logs   logSnapshots
 	Config configSnapshots
 }
 
-// The two failure messages §6.4 and §6.5 fix, paired with a stable reason.
+// The two failure messages SPEC §8 fixes, paired with a stable reason.
 const (
 	logSnapshotUnavailable    = "log snapshot unavailable"
 	configSnapshotUnavailable = "config snapshot unavailable"
 )
 
-// logSnapshotResponse is GET /api/v1/logs/{source} (§6.4).
+// logSnapshotResponse is GET /api/v1/logs/{source} (SPEC §8).
 type logSnapshotResponse struct {
 	CapturedAt int64          `json:"captured_at"`
 	Source     journal.Source `json:"source"`
@@ -38,7 +38,7 @@ type logSnapshotResponse struct {
 
 // logEntry is one normalized record. message, message_encoding, and
 // message_truncated are always present keys, nullable where the record
-// carried no usable value (§6.4).
+// carried no usable value (SPEC §8).
 type logEntry struct {
 	Cursor           string  `json:"cursor"`
 	TimestampUS      uint64  `json:"timestamp_us"`
@@ -51,7 +51,7 @@ type logEntry struct {
 	MessageTruncated bool    `json:"message_truncated"`
 }
 
-// configSnapshotResponse is GET /api/v1/xray/config (§6.5).
+// configSnapshotResponse is GET /api/v1/xray/config (SPEC §8).
 type configSnapshotResponse struct {
 	CapturedAt int64  `json:"captured_at"`
 	Path       string `json:"path"`
@@ -96,7 +96,7 @@ func configSnapshotJSON(snapshot configsnapshot.Snapshot) configSnapshotResponse
 }
 
 // logSnapshotHandler serves one fixed source. The source is bound here at
-// route registration, never read from the request: §6.4's endpoints are the
+// route registration, never read from the request: SPEC §8's endpoints are the
 // whole vocabulary.
 func logSnapshotHandler(logs logSnapshots, source journal.Source) http.HandlerFunc {
 	return func(response http.ResponseWriter, request *http.Request) {
@@ -127,7 +127,7 @@ func configSnapshotHandler(config configSnapshots) http.HandlerFunc {
 }
 
 // rejectedQuery reports whether the request carried a query parameter, which
-// these endpoints accept none of (§6.4, §6.5): a parameter is a caller trying
+// these endpoints accept none of (SPEC §8): a parameter is a caller trying
 // to widen a deliberately fixed collection, not a filter to ignore.
 // A bare "?" carries no parameter and is therefore not one: the rule is about
 // what a caller passed, not about the punctuation they left behind.
@@ -174,7 +174,7 @@ func writeConfigFailure(response http.ResponseWriter, request *http.Request, err
 }
 
 // abandoned reports whether the caller went away mid-collection. A client
-// disconnect has no required response body (§6.4); the module's own cleanup
+// disconnect has no required response body (SPEC §8); the module's own cleanup
 // is what matters, and writing to a gone connection would say nothing.
 func abandoned(request *http.Request) bool {
 	return request.Context().Err() != nil

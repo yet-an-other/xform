@@ -34,7 +34,7 @@
 
   --shadow-modal: 0 24px 80px rgba(0, 0, 0, 0.58);
 
-  /* The approved dialog breakpoint (IN-DEV-SPEC §7.5): at 560 CSS pixels or
+  /* The approved dialog breakpoint (SPEC §6): at 560 CSS pixels or
      less modals go full-screen and fixed-format content scrolls instead of
      reflowing. The token sits one pixel above that, because `max-xs` means
      "narrower than the token" — so 560 itself falls on the narrow side, as

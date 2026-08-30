@@ -156,7 +156,7 @@ func (c *Collector) Collect(ctx context.Context) (Status, error) {
 	}
 
 	// An active unit whose stats API does not answer is unreachable (SPEC.md
-	// §3 degraded mode) — the speeds zero out and the process/online fields
+	// SPEC §3 degraded mode) — the speeds zero out and the process/online fields
 	// drop to null, while version, uptime, and the durable totals stay live.
 	runtime, err := c.stats.QueryRuntime(ctx)
 	if err != nil {

@@ -3,8 +3,8 @@ import { describe, expect, it } from "vitest";
 import { encodeQr, qrPathData } from "./qr";
 import { decodeQr, modulesFromPathData } from "@/test/qr-decode";
 
-// A canonical VLESS URI the profile module really produces (IN-DEV-SPEC
-// §6.3): the longest supported shape, XHTTP over REALITY.
+// A canonical VLESS URI the profile module really produces (SPEC
+// §7): the longest supported shape, XHTTP over REALITY.
 const canonicalURI =
   "vless://1d37a118-4f1b-4dc0-9e3c-3426b07518df@edge.example.com:443?" +
   "type=xhttp&encryption=none&flow=xtls-rprx-vision&security=reality&" +

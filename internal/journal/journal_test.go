@@ -570,7 +570,7 @@ func TestCollectReportsAnUnusableExecutable(t *testing.T) {
 }
 
 func TestCollectFollowsTheReasonPrecedence(t *testing.T) {
-	// Several conditions can hold at once; §6.4 fixes which one is reported.
+	// Several conditions can hold at once; SPEC §8 fixes which one is reported.
 	tests := []struct {
 		name    string
 		stdout  string
@@ -704,7 +704,7 @@ func TestCollectRejectsAnUnknownSourceWithoutAStableReason(t *testing.T) {
 	if err == nil {
 		t.Fatal("Collect() with an unknown source = nil error, want a failure")
 	}
-	// Every §6.4 reason describes an attempt that reached journalctl; this one
+	// Every SPEC §8 reason describes an attempt that reached journalctl; this one
 	// never does, so it deliberately carries none.
 	var collectionError *Error
 	if errors.As(err, &collectionError) {

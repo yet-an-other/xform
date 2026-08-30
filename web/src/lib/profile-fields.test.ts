@@ -3,7 +3,7 @@ import { describe, expect, it } from "vitest";
 import { securityValues, transportValues } from "./profile-fields";
 import type { ConnectionSecurity, ConnectionTransport } from "./api";
 
-// One case per supported transport and security shape (IN-DEV-SPEC §6.2), so
+// One case per supported transport and security shape (SPEC §7), so
 // every branch a card can print is exercised rather than only the two shapes
 // the dialog tests happen to use.
 describe("transportValues", () => {
@@ -64,7 +64,7 @@ describe("transportValues", () => {
       extra: { headers: { "X-Trace": "1" }, scMaxEachPostBytes: 1_000_000 },
     });
 
-    // The URI canonicalizes extra with RFC 8785 (§6.3 rule 12); re-serializing
+    // The URI canonicalizes extra with RFC 8785 (SPEC §7); re-serializing
     // it here could disagree with the `extra=` shown on the same card.
     expect(values.map(([label]) => label)).not.toContain("extra");
     expect(JSON.stringify(values)).not.toContain("X-Trace");

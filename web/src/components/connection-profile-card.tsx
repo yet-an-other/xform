@@ -10,8 +10,8 @@ import type {
 import { securityValues, transportValues, type TypedValue } from "@/lib/profile-fields";
 import { cn } from "@/lib/utils";
 
-// The Connection profiles section of the User details dialog (IN-DEV-SPEC
-// §7.3): one card per matching VLESS inbound, in xray inbound order, with
+// The Connection profiles section of the User details dialog (SPEC
+// §6): one card per matching VLESS inbound, in xray inbound order, with
 // profile freshness reported separately from observation freshness.
 export function ConnectionProfiles({
   profiles,
@@ -182,7 +182,7 @@ function AvailableProfileCard({
 
 // UnavailableProfileCard names the inbound that failed and why. It carries no
 // Client ID action, no partial URI, and no QR: a half-built profile would be
-// worse than none (IN-DEV-SPEC §7.3).
+// worse than none (SPEC §6).
 function UnavailableProfileCard({
   profile,
   position,

@@ -337,7 +337,7 @@ describe("operational dialog behaviour", () => {
     await within(dialog).findByRole("alert");
 
     // The dashboard behind the modal is untouched: no degraded banner, no
-    // "unable to refresh" strip (§7.5).
+    // "unable to refresh" strip (SPEC §6).
     expect(screen.queryByText(/unable to refresh/i)).not.toBeInTheDocument();
     expect(screen.queryByText(/xray-core is/i)).not.toBeInTheDocument();
     expect(screen.getByText("23.4%")).toBeInTheDocument();
@@ -404,7 +404,7 @@ describe("operational dialog behaviour", () => {
     expect(signals[0].aborted).toBe(true);
 
     // Reopening always performs an initial load rather than showing what the
-    // last opening collected (§7.4).
+    // last opening collected (SPEC §6).
     const reopened = await openDialog("View Panel logs");
     expect(within(reopened).getByRole("status")).toHaveTextContent(/collecting/i);
     // Nothing from the previous opening survived the close.
@@ -426,7 +426,7 @@ describe("operational dialog behaviour", () => {
     const table = within(logs).getByRole("table");
     // jsdom applies no CSS and measures nothing, so this asserts the
     // structural contract the stylesheet relies on — the scrolling itself is
-    // the manual viewport check (§9.3), not something this suite can prove.
+    // the manual viewport check, not something this suite can prove.
     expect(table.parentElement?.className).toContain("overflow-x-auto");
     expect(table.className).toContain("min-w-[700px]");
 
