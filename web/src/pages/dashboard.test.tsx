@@ -366,6 +366,8 @@ const usersSnapshot = {
       email: "alice@example.com",
       protocol: null,
       security: null,
+      client_id: "1e7f6c2a-9b3d-4f8a-9c1e-2d5a7b8c9d0e",
+      inbounds: ["vless-vision", "vless-xhttp"],
       up_bytes_total: 12_400_000_000,
       down_bytes_total: 148_200_000_000,
       online: true,
@@ -380,6 +382,8 @@ const usersSnapshot = {
       email: "bob@example.com",
       protocol: null,
       security: null,
+      client_id: null,
+      inbounds: null,
       up_bytes_total: 3_100_000_000,
       down_bytes_total: 41_700_000_000,
       online: false,
@@ -561,6 +565,91 @@ describe("users table", () => {
     expect(aliceRow).toHaveTextContent("203.0.113.10");
     expect(aliceRow).toHaveTextContent("2m ago");
     expect(aliceRow).toHaveTextContent("stale");
+  });
+});
+
+describe("edit user dialog", () => {
+  it("opens a read-only edit dialog with the user's real inbound selection and Client ID", async () => {
+    stubEndpoints({
+      server: () => json(stats),
+      xray: () => json(xrayRunning),
+      users: () => json(usersSnapshot),
+    });
+
+    render(<Dashboard onUnauthenticated={() => {}} />);
+
+    const table = await screen.findByRole("region", { name: "Users" });
+    fireEvent.click(within(table).getByRole("button", { name: "Edit alice@example.com" }));
+
+    const dialog = await screen.findByRole("dialog", { name: "Edit alice@example.com" });
+    // alice's real roster record: both inbound attachments, checked and
+    // untouchable, and her adopted Client ID.
+    for (const tag of ["vless-vision", "vless-xhttp"]) {
+      const attachment = within(dialog).getByRole("checkbox", { name: tag });
+      expect(attachment).toBeChecked();
+      expect(attachment).toBeDisabled();
+    }
+    expect(
+      within(dialog).getByDisplayValue("1e7f6c2a-9b3d-4f8a-9c1e-2d5a7b8c9d0e"),
+    ).toBeInTheDocument();
+    // Nothing mutates yet: Save and Generate stay disabled.
+    expect(within(dialog).getByRole("button", { name: "Save" })).toBeDisabled();
+    expect(within(dialog).getByRole("button", { name: /generate/i })).toBeDisabled();
+
+    // Cancel dismisses without a trace.
+    fireEvent.click(within(dialog).getByRole("button", { name: "Cancel" }));
+    await waitFor(() => {
+      expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+    });
+  });
+
+  it("shows no roster data for a user the config never adopted", async () => {
+    stubEndpoints({
+      server: () => json(stats),
+      xray: () => json(xrayRunning),
+      users: () => json(usersSnapshot),
+    });
+
+    render(<Dashboard onUnauthenticated={() => {}} />);
+
+    const table = await screen.findByRole("region", { name: "Users" });
+    fireEvent.click(within(table).getByRole("button", { name: "Edit bob@example.com" }));
+
+    const dialog = await screen.findByRole("dialog", { name: "Edit bob@example.com" });
+    expect(within(dialog).queryByRole("checkbox")).not.toBeInTheDocument();
+    expect(
+      within(dialog).queryByDisplayValue("1e7f6c2a-9b3d-4f8a-9c1e-2d5a7b8c9d0e"),
+    ).not.toBeInTheDocument();
+    expect(within(dialog).getByRole("button", { name: "Save" })).toBeDisabled();
+  });
+
+  it("offers no edit action for gone users", async () => {
+    stubEndpoints({
+      server: () => json(stats),
+      xray: () => json(xrayRunning),
+      users: () =>
+        json({
+          ...usersSnapshot,
+          users: [usersSnapshot.users[0], { ...usersSnapshot.users[1], gone: true }],
+        }),
+    });
+
+    render(<Dashboard onUnauthenticated={() => {}} />);
+
+    const table = await screen.findByRole("region", { name: "Users" });
+    expect(
+      within(table).getByRole("button", { name: "Edit alice@example.com" }),
+    ).toBeInTheDocument();
+
+    // Even revealed, gone bob carries no edit action — only details.
+    fireEvent.click(within(table).getByRole("button", { name: /show gone/i }));
+    const bobRow = within(table).getByRole("row", { name: /bob@example\.com/ });
+    expect(
+      within(bobRow).queryByRole("button", { name: "Edit bob@example.com" }),
+    ).not.toBeInTheDocument();
+    expect(
+      within(bobRow).getByRole("button", { name: "Open bob@example.com details" }),
+    ).toBeInTheDocument();
   });
 });
 

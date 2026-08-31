@@ -5,6 +5,7 @@ import { Badge } from "@/components/ui/badge";
 import { Card } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
 import { ConfigSnapshotModal } from "@/components/config-snapshot-modal";
+import { EditUserModal } from "@/components/edit-user-modal";
 import { LogSnapshotModal } from "@/components/log-snapshot-modal";
 import { UserDetailsModal } from "@/components/user-details-modal";
 import {
@@ -46,6 +47,7 @@ const POLL_INTERVAL_MS = 5_000;
 // is what enforces "only one modal at a time" (SPEC §6).
 type OpenDialog =
   | { kind: "details"; email: string }
+  | { kind: "edit"; email: string }
   | { kind: "logs"; source: LogSource }
   | { kind: "config" }
   | null;
@@ -88,6 +90,20 @@ function EyeIcon() {
     >
       <path d="M2.5 12s3.5-6 9.5-6 9.5 6 9.5 6-3.5 6-9.5 6-9.5-6-9.5-6Z" />
       <circle cx="12" cy="12" r="2.5" />
+    </svg>
+  );
+}
+
+// EditIcon is the row-level edit glyph (user-management prototype): a
+// pencil, opening the User's edit dialog.
+function EditIcon() {
+  return (
+    <svg
+      aria-hidden="true"
+      viewBox="0 0 24 24"
+      className="size-4 fill-none stroke-current stroke-[1.8] [stroke-linecap:round] [stroke-linejoin:round]"
+    >
+      <path d="M16.5 4.5l3 3L8 19l-4 1 1-4L16.5 4.5z" />
     </svg>
   );
 }
@@ -161,9 +177,11 @@ function IconAction({
 function UsersTable({
   snapshot,
   onOpenDetails,
+  onOpenEdit,
 }: {
   snapshot: UsersSnapshot;
   onOpenDetails: (email: string, opener: HTMLButtonElement) => void;
+  onOpenEdit: (email: string, opener: HTMLButtonElement) => void;
 }) {
   const [showGone, setShowGone] = useState(false);
   const goneCount = snapshot.users.filter((user) => user.gone).length;
@@ -289,14 +307,26 @@ function UsersTable({
                   )}
                 </TableCell>
                 <TableCell className="py-1.5 pr-5 text-right align-middle">
-                  <IconAction
-                    label={`Open ${user.email} details`}
-                    title={`Open ${user.email} details`}
-                    onOpen={(opener) => onOpenDetails(user.email, opener)}
-                    className="text-primary"
-                  >
-                    <EyeIcon />
-                  </IconAction>
+                  <span className="inline-flex gap-1.5">
+                    <IconAction
+                      label={`Open ${user.email} details`}
+                      title={`Open ${user.email} details`}
+                      onOpen={(opener) => onOpenDetails(user.email, opener)}
+                      className="text-primary"
+                    >
+                      <EyeIcon />
+                    </IconAction>
+                    {/* Gone Users are history: inspectable, never editable. */}
+                    {user.gone ? null : (
+                      <IconAction
+                        label={`Edit ${user.email}`}
+                        title={`Edit ${user.email}`}
+                        onOpen={(opener) => onOpenEdit(user.email, opener)}
+                      >
+                        <EditIcon />
+                      </IconAction>
+                    )}
+                  </span>
                 </TableCell>
               </TableRow>
             ))
@@ -615,8 +645,20 @@ export function Dashboard({ onUnauthenticated }: { onUnauthenticated: () => void
         <UsersTable
           snapshot={users}
           onOpenDetails={(email, opener) => openDialog({ kind: "details", email }, opener)}
+          onOpenEdit={(email, opener) => openDialog({ kind: "edit", email }, opener)}
         />
       ) : null}
+
+      {dialog?.kind === "edit" && users
+        ? (() => {
+            // The row the dialog edits, re-read from the live snapshot on
+            // every poll so the dialog never shows a replaced record.
+            const user = users.users.find((candidate) => candidate.email === dialog.email);
+            return user ? (
+              <EditUserModal user={user} opener={dialogOpener} onClose={closeDialog} />
+            ) : null;
+          })()
+        : null}
 
       {dialog?.kind === "details" ? (
         <UserDetailsModal
