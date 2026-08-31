@@ -50,8 +50,10 @@ func TestParseCollectsVlessClientsForAdoption(t *testing.T) {
 	}
 }
 
-// A repeated email inside one inbound attaches the tag once; an untagged
-// inbound cannot be named in the roster, so it attaches nothing.
+// A repeated email inside one inbound attaches the tag once. A client whose
+// VLESS inbounds are all untagged is still adopted — with zero attachments,
+// a profile-less user (user-management spec §3): the roster store keeps
+// their Client ID even though no inbound can be named for them.
 func TestParseCollectsEachAttachmentOnce(t *testing.T) {
 	roster, _, err := parse([]byte(`{
 		"inbounds": [
@@ -69,7 +71,11 @@ func TestParseCollectsEachAttachmentOnce(t *testing.T) {
 	if !slices.Equal(alice.Inbounds, []string{"vless-vision"}) {
 		t.Errorf("alice inbounds = %v, want the tag once", alice.Inbounds)
 	}
-	if _, ok := roster.Clients["bob@example.com"]; ok {
-		t.Error("bob adopted from an untagged inbound — there is no tag to attach him to")
+	bob, ok := roster.Clients["bob@example.com"]
+	if !ok {
+		t.Fatal("bob not adopted — an untagged inbound still defines a roster user")
+	}
+	if bob.ClientID != "uuid-3" || len(bob.Inbounds) != 0 {
+		t.Errorf("bob = %+v, want his Client ID with zero attachments", bob)
 	}
 }

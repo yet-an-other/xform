@@ -135,7 +135,7 @@ func Parse(document []byte) (map[string]User, error) {
 	if err != nil {
 		return nil, err
 	}
-	return buildRoster(cfg), nil
+	return buildRosterParse(cfg).Labels, nil
 }
 
 // ParseView extracts the immutable, ordered inbound view used for Connection
@@ -163,11 +163,22 @@ func parse(document []byte) (RosterParse, View, error) {
 	if err != nil {
 		return RosterParse{}, View{}, err
 	}
-	return RosterParse{Labels: buildRoster(cfg), Clients: buildClients(cfg)}, buildView(cfg), nil
+	return buildRosterParse(cfg), buildView(cfg), nil
 }
 
-func buildRoster(cfg config) map[string]User {
-	roster := make(map[string]User)
+// buildRosterParse walks the inbounds once, building both halves of the
+// roster hand-off. The labels cover every protocol, and an email listed on
+// several inbounds keeps the first inbound's labels — config order decides,
+// so the table label is stable. The clients are the roster store's adoption
+// source and cover VLESS only, because VLESS is what the panel manages: the
+// first inbound's Client ID wins exactly as for labels, and every tagged
+// attachment is gathered in config order. A client whose VLESS inbounds are
+// all untagged is still adopted — with zero attachments, a profile-less user
+// (user-management spec §3). Clients without an email have no identity and
+// are skipped (CONTEXT.md: the email IS the identity).
+func buildRosterParse(cfg config) RosterParse {
+	labels := make(map[string]User)
+	clients := make(map[string]Client)
 	for _, inbound := range cfg.Inbounds {
 		if inbound.Protocol == "" {
 			continue
@@ -175,47 +186,28 @@ func buildRoster(cfg config) map[string]User {
 		protocol := strings.ToUpper(inbound.Protocol)
 		for _, client := range inbound.Settings.Clients {
 			if client.Email == "" {
-				continue // no email, no identity (CONTEXT.md: the email IS the identity)
-			}
-			if _, exists := roster[client.Email]; exists {
 				continue
 			}
-			roster[client.Email] = User{
-				Protocol: protocol,
-				Security: securityLabel(inbound.StreamSettings.Security, client.Flow),
+			if _, exists := labels[client.Email]; !exists {
+				labels[client.Email] = User{
+					Protocol: protocol,
+					Security: securityLabel(inbound.StreamSettings.Security, client.Flow),
+				}
 			}
-		}
-	}
-	return roster
-}
-
-// buildClients extracts the adoption source: every VLESS client, keyed by
-// email. A client listed on several VLESS inbounds keeps the first inbound's
-// Client ID — config order decides, exactly as for labels — and gathers
-// every attachment in config order. Clients without an email have no
-// identity, and untagged inbounds cannot be named in the roster, so neither
-// is collected.
-func buildClients(cfg config) map[string]Client {
-	clients := make(map[string]Client)
-	for _, inbound := range cfg.Inbounds {
-		if !strings.EqualFold(inbound.Protocol, "vless") || inbound.Tag == "" {
-			continue
-		}
-		for _, client := range inbound.Settings.Clients {
-			if client.Email == "" {
-				continue // no email, no identity (CONTEXT.md: the email IS the identity)
+			if protocol != "VLESS" {
+				continue
 			}
 			collected, exists := clients[client.Email]
 			if !exists {
 				collected.ClientID = client.ID
 			}
-			if !slices.Contains(collected.Inbounds, inbound.Tag) {
+			if inbound.Tag != "" && !slices.Contains(collected.Inbounds, inbound.Tag) {
 				collected.Inbounds = append(collected.Inbounds, inbound.Tag)
 			}
 			clients[client.Email] = collected
 		}
 	}
-	return clients
+	return RosterParse{Labels: labels, Clients: clients}
 }
 
 func buildView(cfg config) View {

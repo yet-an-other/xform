@@ -209,6 +209,12 @@ func syncLabels(ctx context.Context, tx *sql.Tx, roster map[string]RosterUser, n
 // store is the source of truth and the hand edit is drift. An unchanged
 // re-read writes nothing. Attachments not in the config are left alone:
 // re-applying them is convergence's job, not adoption's.
+//
+// The schema deliberately carries no uniqueness constraint on client_id and
+// no case folding on email: a misconfigured config (duplicate Client IDs,
+// case-variant emails) must never fail the poll transaction that carries
+// the traffic totals. Uniqueness is enforced where mutations enter — the
+// mutation API (user-management spec §5), not the observer.
 func adoptClients(ctx context.Context, tx *sql.Tx, clients map[string]RosterClient, now time.Time) error {
 	stored := map[string][]string{}
 	rows, err := tx.QueryContext(ctx, `SELECT email, inbounds FROM roster`)
