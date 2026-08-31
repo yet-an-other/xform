@@ -142,6 +142,10 @@ _Avoid_: country icon, geo label
 The panel's view of the xray service: running, stopped, or unreachable.
 _Avoid_: health, state (alone)
 
+**Roster sync**:
+The write-side state of the Roster: synced (store, config file, and running xray agree), pending (a change is stored but not yet applied), or failed (the last apply failed; retries continue on watch fires and xray status transitions). Shown on the Users section. Distinct from Stale, which marks read-side last-good data.
+_Avoid_: dirty, unsaved, out of sync
+
 **Stale**:
 The mark on observations or source-derived data served from the Panel's last-valid snapshot because the current query, read, or parse failed. User observations become stale when xray is unreachable; parsed xray config and Advertised connection settings become stale when a reload fails. Each source reports freshness independently. Stale data is shown, but always flagged.
 _Avoid_: cached, outdated, frozen
