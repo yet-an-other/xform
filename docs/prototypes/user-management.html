@@ -294,7 +294,7 @@ function renderModal() {
     <div class="field"><label>Inbounds</label>
       ${INBOUNDS.map(ib => `<label class="check-row"><input type="checkbox" data-tag="${ib.tag}" ${sel.includes(ib.tag) ? "checked" : ""}><span><span class="tag">${ib.tag}</span><br><span class="desc">${ib.desc}</span></span></label>`).join("")}
     </div>
-    ${isAdd ? "" : `<div class="field"><label>Client ID</label><div class="idrow"><code>${fmtId(u.clientId)}</code><button class="button" data-act="rotate" data-id="${u.id}">⟳ Rotate</button></div></div>`}
+    ${isAdd ? "" : `<div class="field"><label>Client ID</label><div class="idrow"><input id="f-clientid" type="text" value="${u.clientId}" spellcheck="false" style="flex:1;padding:8px 10px;border:1px solid var(--border);border-radius:8px;background:var(--background);color:var(--foreground);font:12px var(--mono)"><button class="button" data-act="generate-id" title="Generate a fresh random Client ID">⟳ Generate</button></div></div>`}
     <div class="foot"><button class="button" data-act="close-modal">Cancel</button><button class="button primary" data-act="${isAdd ? "confirm-add" : "confirm-edit"}" ${isAdd ? "" : `data-id="${u.id}"`}>${isAdd ? "Add user" : "Save"}</button></div>
   </div></div>`;
 }
@@ -463,7 +463,7 @@ app.addEventListener("click", (e) => {
   const checkedTags = (root) => [...root.querySelectorAll("input[type=checkbox]:checked")].map(c => c.dataset.tag);
   switch (act) {
     case "toggle-gone": showGone = !showGone; break;
-    case "rotate": { const u = users.find(x => x.id === id); u.clientId = crypto.randomUUID(); break; }
+    case "generate-id": document.getElementById("f-clientid").value = crypto.randomUUID(); return;
     // variant A
     case "add": modal = { kind: "add", inbounds: INBOUNDS.map(i => i.tag) }; break;
     case "edit": modal = { kind: "edit", user: id }; break;
@@ -473,7 +473,7 @@ app.addEventListener("click", (e) => {
       const em = document.getElementById("f-email").value.trim(); if (!em) return;
       users.push(mkUser(em, checkedTags(app), { lastSeen: "—" })); modal = null; break;
     }
-    case "confirm-edit": { const u = users.find(x => x.id === id); u.inbounds = checkedTags(app); modal = null; break; }
+    case "confirm-edit": { const u = users.find(x => x.id === id); u.inbounds = checkedTags(app); u.clientId = document.getElementById("f-clientid").value.trim() || u.clientId; modal = null; break; }
     case "confirm-remove": { const u = users.find(x => x.id === id); u.gone = true; modal = null; break; }
     // variant B
     case "b-add": draft = { inbounds: [...INBOUNDS.map(i=>i.tag)] }; editing = removing = null; break;
