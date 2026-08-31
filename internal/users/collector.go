@@ -14,7 +14,7 @@ import (
 // wrappers in tests.
 type persistence interface {
 	ExistingEmails(ctx context.Context) (map[string]bool, error)
-	ApplyPoll(ctx context.Context, deltas []Delta, presence []Presence, roster map[string]RosterUser, now time.Time) error
+	ApplyPoll(ctx context.Context, deltas []Delta, presence []Presence, roster *RosterParse, now time.Time) error
 	Users(ctx context.Context) ([]User, error)
 }
 
@@ -36,9 +36,11 @@ type pendingDelta struct {
 // deltas stay pending, so durable totals never silently drop bytes.
 //
 // The config roster (WithRoster) syncs in the same transaction when it
-// changes: protocol · security labels, new users, gone flags. A roster that
-// cannot be persisted stays pending like the deltas, and flushes on its own
-// while xray is unreachable, so config edits never wait on a recovery.
+// changes: protocol · security labels, new users, gone flags, and the
+// adopted VLESS clients (Client ID + attachments) in the roster store. A
+// roster that cannot be persisted stays pending like the deltas, and
+// flushes on its own while xray is unreachable, so config edits never wait
+// on a recovery.
 type Collector struct {
 	traffic  TrafficQuerier
 	presence PresenceQuerier
@@ -52,7 +54,7 @@ type Collector struct {
 	down                 map[string]*reconcile.Tracker
 	seeded               map[string]bool          // emails whose baseline this process established
 	pending              map[string]*pendingDelta // unapplied traffic, by email
-	pendingRoster        map[string]RosterUser    // unapplied roster (nil once persisted)
+	pendingRoster        *RosterParse             // unapplied roster (nil once persisted)
 	pendingRosterVersion uint64                   // version pendingRoster holds
 	rosterVersion        uint64                   // last persisted roster version
 	lastPoll             time.Time                // last sampled poll (drives speed windows)
@@ -87,7 +89,8 @@ func (c *Collector) WithClock(now func() time.Time) *Collector {
 }
 
 // WithRoster syncs the user roster from the xray config (SPEC.md §3 step 4)
-// into the poll transaction whenever the source's version moves.
+// — labels, gone flags, and client adoption — into the poll transaction
+// whenever the source's version moves.
 func (c *Collector) WithRoster(roster RosterSource) *Collector {
 	c.roster = roster
 	return c
@@ -229,15 +232,15 @@ func (c *Collector) sampleRoster() {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if version > 0 && version != c.rosterVersion && version != c.pendingRosterVersion {
-		c.pendingRoster = latest
+		c.pendingRoster = &latest
 		c.pendingRosterVersion = version
 	}
 }
 
 // flushRoster persists a pending roster on its own — the degraded path,
 // where there is no poll transaction to carry it. Applying a roster is
-// idempotent (upsert + gone flags), so a retry or a racing flush can only
-// write the same state twice.
+// idempotent (upsert + gone flags + additive adoption), so a retry or a
+// racing flush can only write the same state twice.
 func (c *Collector) flushRoster(ctx context.Context) {
 	c.mu.Lock()
 	roster := c.pendingRoster

@@ -257,12 +257,15 @@ func TestLogoutRevokesAndClears(t *testing.T) {
 func TestUsersEndpointReturnsContractPayload(t *testing.T) {
 	lastSeen := int64(1_723_799_995)
 	protocol, security := "VLESS", "XTLS-Reality"
+	clientID := "1e7f6c2a-9b3d-4f8a-9c1e-2d5a7b8c9d0e"
 	handler := api.New(fixedHostStats{}, fixedXrayStatus{}, fixedUsers{snapshot: users.Snapshot{
 		CollectedAt: 1_723_800_000,
 		Users: []users.User{{
 			Email:          "alice@example.com",
 			Protocol:       &protocol,
 			Security:       &security,
+			ClientID:       &clientID,
+			Inbounds:       []string{"vless-vision", "vless-xhttp"},
 			UpBytesTotal:   12_400_000_000,
 			DownBytesTotal: 148_200_000_000,
 			Online:         true,
@@ -289,6 +292,8 @@ func TestUsersEndpointReturnsContractPayload(t *testing.T) {
 			Email          string   `json:"email"`
 			Protocol       *string  `json:"protocol"`
 			Security       *string  `json:"security"`
+			ClientID       *string  `json:"client_id"`
+			Inbounds       []string `json:"inbounds"`
 			UpBytesTotal   uint64   `json:"up_bytes_total"`
 			DownBytesTotal uint64   `json:"down_bytes_total"`
 			Online         bool     `json:"online"`
@@ -317,6 +322,12 @@ func TestUsersEndpointReturnsContractPayload(t *testing.T) {
 	}
 	if alice.Protocol == nil || *alice.Protocol != "VLESS" || alice.Security == nil || *alice.Security != "XTLS-Reality" {
 		t.Errorf("alice protocol/security = %v/%v", alice.Protocol, alice.Security)
+	}
+	if alice.ClientID == nil || *alice.ClientID != clientID {
+		t.Errorf("alice client_id = %v, want the roster store's %s", alice.ClientID, clientID)
+	}
+	if len(alice.Inbounds) != 2 || alice.Inbounds[0] != "vless-vision" || alice.Inbounds[1] != "vless-xhttp" {
+		t.Errorf("alice inbounds = %v, want her two adopted attachments", alice.Inbounds)
 	}
 	if !alice.Online || len(alice.IPs) != 1 || alice.LastSeen == nil || *alice.LastSeen != 1_723_799_995 || alice.Gone {
 		t.Errorf("alice presence = online %v, ips %v, last_seen %v, gone %v", alice.Online, alice.IPs, alice.LastSeen, alice.Gone)

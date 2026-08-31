@@ -2,6 +2,7 @@ package xrayconfig
 
 import (
 	"maps"
+	"slices"
 
 	"github.com/yet-an-other/xform/internal/filesource"
 )
@@ -25,16 +26,17 @@ type SourceError = filesource.SourceError
 // remain the last successful ones after a reload failure.
 type Snapshot = filesource.Snapshot[Parsed]
 
-// Parsed is one successful parse of the xray config: the Roster, the version
-// that Roster is at, and the immutable inbound View behind Connection
-// profiles.
+// Parsed is one successful parse of the xray config: the Roster parse, the
+// version that Roster is at, and the immutable inbound View behind
+// Connection profiles.
 //
-// Version bumps only when the Roster actually changes, so a profile-only
-// config edit does not re-sync every user. 0 means no config has ever parsed
-// successfully — a missing or broken config must not mark anybody gone.
+// Version bumps only when the Roster actually changes — a label, a Client
+// ID, or an attachment — so a profile-only config edit does not re-sync
+// every user. 0 means no config has ever parsed successfully — a missing or
+// broken config must not mark anybody gone.
 type Parsed struct {
 	// Roster is shared with every caller; none of them may mutate it.
-	Roster  map[string]User
+	Roster  RosterParse
 	Version uint64
 	View    View
 }
@@ -61,8 +63,17 @@ func parseSource(previous Parsed, document []byte) (Parsed, ErrorReason, error) 
 		return Parsed{}, ParseFailed, err
 	}
 	next := Parsed{Roster: roster, Version: previous.Version, View: view}
-	if previous.Roster == nil || !maps.Equal(previous.Roster, roster) {
+	if previous.Roster.Labels == nil || !sameRoster(previous.Roster, roster) {
 		next.Version = previous.Version + 1
 	}
 	return next, "", nil
+}
+
+// sameRoster reports whether two parses hand off the same roster: identical
+// labels and identical clients (Client ID and ordered attachments).
+func sameRoster(a, b RosterParse) bool {
+	return maps.Equal(a.Labels, b.Labels) &&
+		maps.EqualFunc(a.Clients, b.Clients, func(x, y Client) bool {
+			return x.ClientID == y.ClientID && slices.Equal(x.Inbounds, y.Inbounds)
+		})
 }

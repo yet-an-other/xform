@@ -7,6 +7,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"slices"
 	"strings"
 	"unicode"
 )
@@ -15,6 +16,22 @@ import (
 type User struct {
 	Protocol string // inbound protocol, e.g. VLESS
 	Security string // stream security (+ flow), e.g. XTLS-Reality
+}
+
+// Client is one config-defined VLESS client: the credential and the tags of
+// the VLESS inbounds the user is attached to, in config order. These are the
+// clients the panel's roster store adopts (user-management spec §4); only
+// VLESS inbounds feed it, because VLESS is what the panel manages.
+type Client struct {
+	ClientID string
+	Inbounds []string
+}
+
+// RosterParse is one config parse's roster hand-off: per-user table labels,
+// plus the VLESS clients awaiting adoption into the panel-held Roster.
+type RosterParse struct {
+	Labels  map[string]User
+	Clients map[string]Client
 }
 
 // config mirrors only the xray inbound fields used by the Roster and profile
@@ -141,12 +158,12 @@ func decode(document []byte) (config, error) {
 	return cfg, nil
 }
 
-func parse(document []byte) (map[string]User, View, error) {
+func parse(document []byte) (RosterParse, View, error) {
 	cfg, err := decode(document)
 	if err != nil {
-		return nil, View{}, err
+		return RosterParse{}, View{}, err
 	}
-	return buildRoster(cfg), buildView(cfg), nil
+	return RosterParse{Labels: buildRoster(cfg), Clients: buildClients(cfg)}, buildView(cfg), nil
 }
 
 func buildRoster(cfg config) map[string]User {
@@ -170,6 +187,35 @@ func buildRoster(cfg config) map[string]User {
 		}
 	}
 	return roster
+}
+
+// buildClients extracts the adoption source: every VLESS client, keyed by
+// email. A client listed on several VLESS inbounds keeps the first inbound's
+// Client ID — config order decides, exactly as for labels — and gathers
+// every attachment in config order. Clients without an email have no
+// identity, and untagged inbounds cannot be named in the roster, so neither
+// is collected.
+func buildClients(cfg config) map[string]Client {
+	clients := make(map[string]Client)
+	for _, inbound := range cfg.Inbounds {
+		if !strings.EqualFold(inbound.Protocol, "vless") || inbound.Tag == "" {
+			continue
+		}
+		for _, client := range inbound.Settings.Clients {
+			if client.Email == "" {
+				continue // no email, no identity (CONTEXT.md: the email IS the identity)
+			}
+			collected, exists := clients[client.Email]
+			if !exists {
+				collected.ClientID = client.ID
+			}
+			if !slices.Contains(collected.Inbounds, inbound.Tag) {
+				collected.Inbounds = append(collected.Inbounds, inbound.Tag)
+			}
+			clients[client.Email] = collected
+		}
+	}
+	return clients
 }
 
 func buildView(cfg config) View {

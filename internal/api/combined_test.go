@@ -256,8 +256,8 @@ func TestMalformedCurrentConfigFileKeepsLastValidParsedState(t *testing.T) {
 		t.Errorf("stale profiles = %q/stale %t/%v, want ready, stale, the last-valid advertisement_missing", state, stale, reasons)
 	}
 	roster, _ := watcher.Roster()
-	if _, ok := roster["alice@example.com"]; !ok {
-		t.Errorf("roster = %v, want alice retained from the last valid parse", roster)
+	if _, ok := roster.Labels["alice@example.com"]; !ok {
+		t.Errorf("roster = %v, want alice retained from the last valid parse", roster.Labels)
 	}
 
 	// The file heals: the source turns current again, and the Config snapshot

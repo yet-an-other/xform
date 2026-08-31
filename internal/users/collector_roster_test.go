@@ -11,15 +11,15 @@ import (
 // fakeRoster plays back scripted config parses; the version bumps whenever
 // the roster changes, mirroring the xrayconfig watcher.
 type fakeRoster struct {
-	roster  map[string]users.RosterUser
+	roster  users.RosterParse
 	version uint64
 }
 
-func (f *fakeRoster) Roster() (map[string]users.RosterUser, uint64) {
+func (f *fakeRoster) Roster() (users.RosterParse, uint64) {
 	return f.roster, f.version
 }
 
-func (f *fakeRoster) update(roster map[string]users.RosterUser) {
+func (f *fakeRoster) update(roster users.RosterParse) {
 	f.roster = roster
 	f.version++
 }
@@ -36,10 +36,10 @@ func TestCollectorSyncsTheConfigRoster(t *testing.T) {
 			{Email: "erin@example.com", UpBytes: 100, DownBytes: 900}, // in xray, not in the config
 		},
 	}}
-	roster := &fakeRoster{version: 1, roster: map[string]users.RosterUser{
+	roster := &fakeRoster{version: 1, roster: users.RosterParse{Labels: map[string]users.RosterUser{
 		"alice@example.com": {Protocol: "VLESS", Security: "XTLS-Reality"},
 		"bob@example.com":   {Protocol: "TROJAN", Security: "TLS"},
-	}}
+	}}}
 	collector := users.NewCollector(traffic, unsupportedPresence, openMemoryStore(t)).
 		WithClock(func() time.Time { return now }).
 		WithRoster(roster)
@@ -73,10 +73,10 @@ func TestCollectorSyncsTheConfigRoster(t *testing.T) {
 
 	// A config edit is picked up on the next poll: erin returns, alice's
 	// security changed.
-	roster.update(map[string]users.RosterUser{
+	roster.update(users.RosterParse{Labels: map[string]users.RosterUser{
 		"alice@example.com": {Protocol: "VLESS", Security: "Reality"},
 		"erin@example.com":  {Protocol: "VLESS", Security: "Reality"},
-	})
+	}})
 	snapshot, err = collector.Collect(context.Background())
 	if err != nil {
 		t.Fatalf("collect: %v", err)
@@ -125,9 +125,9 @@ func TestCollectorCarriesRosterAcrossStoreFailures(t *testing.T) {
 	traffic := &fakeTraffic{pages: [][]users.RawTraffic{
 		{{Email: "alice@example.com", UpBytes: 5_000, DownBytes: 50_000}},
 	}}
-	roster := &fakeRoster{version: 1, roster: map[string]users.RosterUser{
+	roster := &fakeRoster{version: 1, roster: users.RosterParse{Labels: map[string]users.RosterUser{
 		"alice@example.com": {Protocol: "VLESS", Security: "Reality"},
-	}}
+	}}}
 	collector := users.NewCollector(traffic, unsupportedPresence, store).
 		WithClock(func() time.Time { return now }).
 		WithRoster(roster)
@@ -155,9 +155,9 @@ func TestCollectorFlushesRosterWhileStale(t *testing.T) {
 	traffic := &fakeTraffic{pages: [][]users.RawTraffic{
 		{{Email: "alice@example.com", UpBytes: 5_000, DownBytes: 50_000}},
 	}}
-	roster := &fakeRoster{version: 1, roster: map[string]users.RosterUser{
+	roster := &fakeRoster{version: 1, roster: users.RosterParse{Labels: map[string]users.RosterUser{
 		"alice@example.com": {Protocol: "VLESS", Security: "Reality"},
-	}}
+	}}}
 	collector := users.NewCollector(traffic, unsupportedPresence, openMemoryStore(t)).
 		WithClock(func() time.Time { return now }).
 		WithRoster(roster)
@@ -167,7 +167,7 @@ func TestCollectorFlushesRosterWhileStale(t *testing.T) {
 	}
 
 	traffic.err = context.DeadlineExceeded
-	roster.update(map[string]users.RosterUser{}) // alice edited out mid-outage
+	roster.update(users.RosterParse{Labels: map[string]users.RosterUser{}}) // alice edited out mid-outage
 	snapshot, err := collector.Collect(context.Background())
 	if err != nil {
 		t.Fatalf("collect returned an error; the 200-always contract serves stale data: %v", err)
@@ -188,5 +188,60 @@ func TestCollectorFlushesRosterWhileStale(t *testing.T) {
 	}
 	if alice := snapshot.Users[0]; !alice.Gone {
 		t.Error("alice gone = false after recovery, want true — the roster stays applied")
+	}
+}
+
+// Hand-adding a client to the config lands in the roster store on the next
+// poll, without a panel restart: the users table shows the new user with
+// their adopted Client ID and inbound attachments.
+func TestCollectorAdoptsConfigClients(t *testing.T) {
+	now := time.Unix(1_780_000_000, 0)
+	traffic := &fakeTraffic{pages: [][]users.RawTraffic{{}}}
+	roster := &fakeRoster{version: 1, roster: users.RosterParse{
+		Labels:  map[string]users.RosterUser{"alice@example.com": {Protocol: "VLESS", Security: "XTLS-Reality"}},
+		Clients: map[string]users.RosterClient{"alice@example.com": {ClientID: "alice-uuid", Inbounds: []string{"vless-vision"}}},
+	}}
+	collector := users.NewCollector(traffic, unsupportedPresence, openMemoryStore(t)).
+		WithClock(func() time.Time { return now }).
+		WithRoster(roster)
+
+	snapshot, err := collector.Collect(context.Background())
+	if err != nil {
+		t.Fatalf("collect: %v", err)
+	}
+	alice := snapshot.Users[0]
+	if alice.ClientID == nil || *alice.ClientID != "alice-uuid" {
+		t.Errorf("alice Client ID = %v, want the adopted alice-uuid", alice.ClientID)
+	}
+	if len(alice.Inbounds) != 1 || alice.Inbounds[0] != "vless-vision" {
+		t.Errorf("alice inbounds = %v, want [vless-vision]", alice.Inbounds)
+	}
+
+	// A hand edit attaches alice to a second inbound and adds bob.
+	roster.update(users.RosterParse{
+		Labels: map[string]users.RosterUser{
+			"alice@example.com": {Protocol: "VLESS", Security: "XTLS-Reality"},
+			"bob@example.com":   {Protocol: "VLESS", Security: "Reality"},
+		},
+		Clients: map[string]users.RosterClient{
+			"alice@example.com": {ClientID: "alice-uuid", Inbounds: []string{"vless-vision", "vless-xhttp"}},
+			"bob@example.com":   {ClientID: "bob-uuid", Inbounds: []string{"vless-xhttp"}},
+		},
+	})
+	snapshot, err = collector.Collect(context.Background())
+	if err != nil {
+		t.Fatalf("collect: %v", err)
+	}
+	got := byEmail(snapshot.Users)
+	alice = got["alice@example.com"]
+	if len(alice.Inbounds) != 2 || alice.Inbounds[0] != "vless-vision" || alice.Inbounds[1] != "vless-xhttp" {
+		t.Errorf("alice inbounds = %v, want the union [vless-vision vless-xhttp]", alice.Inbounds)
+	}
+	bob := got["bob@example.com"]
+	if bob.ClientID == nil || *bob.ClientID != "bob-uuid" {
+		t.Errorf("bob Client ID = %v, want the adopted bob-uuid", bob.ClientID)
+	}
+	if len(bob.Inbounds) != 1 || bob.Inbounds[0] != "vless-xhttp" || bob.Gone || bob.UpBytesTotal != 0 {
+		t.Errorf("bob = %+v, want [vless-xhttp], not gone, zero totals", bob)
 	}
 }

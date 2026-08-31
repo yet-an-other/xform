@@ -34,9 +34,9 @@ func (w *Watcher) Start(ctx context.Context) {
 	go w.logRosterChanges(ctx, loads)
 }
 
-// Roster returns the last good roster parse and its version. The map is
-// shared; callers must not mutate it.
-func (w *Watcher) Roster() (map[string]User, uint64) {
+// Roster returns the last good roster parse and its version. The maps are
+// shared; callers must not mutate them.
+func (w *Watcher) Roster() (RosterParse, uint64) {
 	parsed := w.source.Snapshot().Value
 	return parsed.Roster, parsed.Version
 }
@@ -69,7 +69,7 @@ func (w *Watcher) logRosterChanges(ctx context.Context, loads <-chan struct{}) {
 				continue // a profile-only edit: the roster did not move
 			}
 			reported = parsed.Version
-			slog.Info("xray config roster updated", "path", w.path, "users", len(parsed.Roster))
+			slog.Info("xray config roster updated", "path", w.path, "users", len(parsed.Roster.Labels))
 		}
 	}
 }

@@ -17,13 +17,13 @@ import (
 
 const oneUserConfig = `{
 	"inbounds": [
-		{"protocol": "vless", "settings": {"clients": [{"email": "alice@example.com"}]}, "streamSettings": {"security": "reality"}}
+		{"tag": "vless-reality", "protocol": "vless", "settings": {"clients": [{"email": "alice@example.com", "id": "alice-uuid"}]}, "streamSettings": {"security": "reality"}}
 	]
 }`
 
 const twoUserConfig = `{
 	"inbounds": [
-		{"protocol": "vless", "settings": {"clients": [{"email": "alice@example.com"}, {"email": "bob@example.com"}]}, "streamSettings": {"security": "reality"}}
+		{"tag": "vless-reality", "protocol": "vless", "settings": {"clients": [{"email": "alice@example.com", "id": "alice-uuid"}, {"email": "bob@example.com", "id": "bob-uuid"}]}, "streamSettings": {"security": "reality"}}
 	]
 }`
 
@@ -44,8 +44,12 @@ func TestWatcherLoadsRosterAndPicksUpEdits(t *testing.T) {
 	watcher.Start(ctx)
 
 	roster, version := watcher.Roster()
-	if version == 0 || len(roster) != 1 {
-		t.Fatalf("initial roster = %d users (version %d), want 1 user", len(roster), version)
+	if version == 0 || len(roster.Labels) != 1 {
+		t.Fatalf("initial roster = %d users (version %d), want 1 user", len(roster.Labels), version)
+	}
+	alice := roster.Clients["alice@example.com"]
+	if alice.ClientID != "alice-uuid" || len(alice.Inbounds) != 1 || alice.Inbounds[0] != "vless-reality" {
+		t.Fatalf("initial clients = %v, want alice's Client ID and attachment", roster.Clients)
 	}
 	if got := watcher.Snapshot().Value.View.Inbounds(); len(got) != 1 {
 		t.Fatalf("initial view = %+v, want alice's inbound", got)
@@ -55,15 +59,19 @@ func TestWatcherLoadsRosterAndPicksUpEdits(t *testing.T) {
 	writeConfig(t, path, twoUserConfig)
 	deadline := time.Now().Add(5 * time.Second)
 	for time.Now().Before(deadline) {
-		if roster, version = watcher.Roster(); len(roster) == 2 && version > 1 {
+		if roster, version = watcher.Roster(); len(roster.Labels) == 2 && version > 1 {
 			break
 		}
 		time.Sleep(20 * time.Millisecond)
 	}
-	if len(roster) != 2 {
-		t.Fatalf("edited roster = %d users (version %d), want 2", len(roster), version)
+	if len(roster.Labels) != 2 {
+		t.Fatalf("edited roster = %d users (version %d), want 2", len(roster.Labels), version)
 	}
-	if _, ok := roster["bob@example.com"]; !ok {
-		t.Errorf("edited roster = %v, want bob@example.com present", roster)
+	if _, ok := roster.Labels["bob@example.com"]; !ok {
+		t.Errorf("edited roster = %v, want bob@example.com present", roster.Labels)
+	}
+	bob := roster.Clients["bob@example.com"]
+	if bob.ClientID != "bob-uuid" || len(bob.Inbounds) != 1 || bob.Inbounds[0] != "vless-reality" {
+		t.Errorf("edited clients = %v, want bob's Client ID and attachment", roster.Clients)
 	}
 }

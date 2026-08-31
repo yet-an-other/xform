@@ -14,11 +14,14 @@ import (
 // GET /api/v1/users (SPEC.md §5). Presence fields (online, ips, last_seen)
 // are live from the online RPCs, degraded on old servers (SPEC.md §3);
 // config fields (protocol, security, gone) come from the config roster sync
-// and stay zero until the xray config parses.
+// and stay zero until the xray config parses. Client ID and inbounds are
+// the roster store's adopted record (null until adoption).
 type User struct {
 	Email          string   `json:"email"`
 	Protocol       *string  `json:"protocol"`
 	Security       *string  `json:"security"`
+	ClientID       *string  `json:"client_id"`
+	Inbounds       []string `json:"inbounds"`
 	UpBytesTotal   uint64   `json:"up_bytes_total"`
 	DownBytesTotal uint64   `json:"down_bytes_total"`
 	Online         bool     `json:"online"`
@@ -71,12 +74,22 @@ type PresenceQuerier interface {
 // collector and store read in panel vocabulary.
 type RosterUser = xrayconfig.User
 
+// RosterClient is one config-defined VLESS client: the Client ID and inbound
+// attachments the roster store adopts. The type lives with the config
+// parser; aliased here so the collector and store read in panel vocabulary.
+type RosterClient = xrayconfig.Client
+
+// RosterParse is one config parse's roster hand-off: the table labels plus
+// the VLESS clients awaiting adoption. The type lives with the config
+// parser; aliased here so the collector and store read in panel vocabulary.
+type RosterParse = xrayconfig.RosterParse
+
 // RosterSource supplies the user roster parsed from the xray config — the
 // seam for fakes. The version bumps whenever the roster changes; 0 means no
 // config was ever parsed, so a missing or broken config never syncs (it
 // must not mark everyone gone).
 type RosterSource interface {
-	Roster() (users map[string]RosterUser, version uint64)
+	Roster() (parsed RosterParse, version uint64)
 }
 
 // GeoResolver maps an IP to its ISO country code ("" when private or
