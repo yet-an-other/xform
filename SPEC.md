@@ -67,7 +67,7 @@ Loop every **5 seconds**:
 1. **xray gRPC** (`grpc.NewClient` to `127.0.0.1:8080`, insecure creds): `GetUsersStats` / `QueryStats` (traffic), online IP lists (`last_seen` per IP), `GetSysStats` (uptime, goroutines, memory). Version: read from the xray binary (`xray version`) or sysstats when available.
 2. **systemd** (`coreos/go-systemd/v22/dbus`): `ActiveState`, `SubState`, `ActiveEnterTimestamp` for the xray unit → status + service uptime.
 3. **Host stats** (`shirou/gopsutil/v4`): `cpu.Percent`, `mem.VirtualMemory`, `disk.Usage("/")`, `host.Uptime`, load average.
-4. **xray config parse** (fsnotify-triggered re-read): user roster (emails), per-user `protocol` / `security`, and the parsed inbound view behind connection profiles (§7).
+4. **xray config parse** (fsnotify-triggered re-read): user roster (emails), per-user `protocol` / `security`, VLESS client attachments (Client ID + inbound tags) adopted into the roster store (§4), and the parsed inbound view behind connection profiles (§7).
 
 ### Watched sources
 
@@ -110,6 +110,20 @@ CREATE TABLE users (
 ```
 
 Users disappearing from the config get `gone = 1` — never auto-deleted; hidden by default in the UI.
+
+The roster store holds one row per adopted user — the panel-held source of truth behind user management:
+
+```sql
+CREATE TABLE roster (
+  email      TEXT PRIMARY KEY,        -- identity; email change = new row
+  client_id  TEXT NOT NULL,           -- UUID credential
+  inbounds   TEXT NOT NULL,           -- JSON array of VLESS inbound tags
+  created_at INTEGER NOT NULL,
+  updated_at INTEGER NOT NULL
+);
+```
+
+On startup and whenever the config changes, VLESS clients found in the config are adopted into the roster, additively and idempotently: a new email lands with its config Client ID and attachments, a known email only gains attachments it did not have (a stored Client ID is never rewritten by a config edit), and an unchanged re-read writes nothing.
 
 Connection profiles and operational snapshots are never persisted (§7, §8).
 
@@ -160,6 +174,7 @@ GET /api/v1/users
 { "collected_at": 1723800000, "stale": false,
   "users": [ { "email": "alice@example.com",
                "protocol": "VLESS", "security": "XTLS-Reality",  // from the config parse; null until the config first parses
+               "client_id": "1e7f6c2a-9b3d-4f8a-9c1e-2d5a7b8c9d0e", "inbounds": ["vless-reality"],  // the roster store's adopted record; null until adoption
                "up_bytes_total": 12400000000, "down_bytes_total": 148200000000,
                "online": true, "ips": ["203.0.113.10"],          // false/null on xray predating the online RPCs
                "ip_countries": {"203.0.113.10": "NL"},          // ADR-0005; omitted when geoip.dat is unavailable, absent keys = private/unknown
@@ -206,7 +221,7 @@ React + TS (Vite), single page per the approved prototypes in `docs/prototypes/`
 - **Header**: two identity groups. Panel group: `xform` wordmark, version, panel uptime, panel-logs icon action. xray group: status indicator immediately before `xray`, version, service uptime, xray-logs icon action, xray-config icon action. Then the refresh note (cadence + last-successful-poll time, 24h clock) and Log out. Every icon-only action has an accessible name and a visible tooltip or title. Degraded banner when `status != "running"` — full copy naming what went stale and that host stats stay live.
 - **Server row**: four cards — CPU / RAM / storage with bars, plus a host-uptime card with load average as its sub-line.
 - **Xray row**: four cards — speed now (↑ green / ↓ blue, stacked big lines), total traffic (up + down), users online (`n / total` + unique IPs), xray process memory/goroutines.
-- **Users table**: online dot, email, protocol · security, Traffic (up/down stacked on two lines), speed now, online IPs (one per line, country flag beside each — ADR-0005), last seen (relative; literal `now` while online), and an icon-only details action per user with an accessible name. Compact row density. `gone` users hidden behind a toggle. At narrow widths the table keeps its fixed columns and scrolls horizontally.
+- **Users table**: online dot, email, protocol · security, Traffic (up/down stacked on two lines), speed now, online IPs (one per line, country flag beside each — ADR-0005), last seen (relative; literal `now` while online), and per-user icon-only actions with accessible names: details, and — for users who are not gone — edit. The edit action opens a read-only dialog with the user's email, real inbound selection, and Client ID from the roster store; its Save action stays disabled while the apply path does not exist. Compact row density. `gone` users hidden behind a toggle. At narrow widths the table keeps its fixed columns and scrolls horizontally.
 
 Polls all three observation endpoints every 5s; freshness is the header refresh note, not per-card; shows "stale" speeds when `stale: true`. Login page posting to `/api/v1/login`.
 
@@ -423,4 +438,4 @@ Existing monitoring continues when `XFORM_CONNECTIONS_CONFIG` is unset or the jo
 
 ## 10. Non-goals
 
-Historical traffic graphs & long retention · user management / config editing · subscription URLs · client-specific profile formats or import guarantees · non-VLESS profiles · per-user advertised connection settings · profiles for gone users · profile/credential persistence, masking, or audit trails · multi-server · Prometheus/Grafana export · alerting/quotas/CSV · cross-origin or CDN-hosted UI (same-origin only, ADR-0001) · live log following, pagination, search, filtering, or downloads · caller-selected units, counts, cursors, time ranges, fields, or journal expressions · log clearing or service controls · xray-managed log-file reading · Config snapshot editing, validation, formatting, download, or reload controls · historical Log/Config snapshot storage · migration of old default-journal records · broad default-journal access or a privileged journal broker · non-systemd hosts or systemd older than 245 · automatic installation of root-owned migration files by the binary updater · multiple simultaneous modals · changes to the five-second observation cadence · a new frontend framework, HTTP router, database, or persistent store.
+Historical traffic graphs & long retention · user-management mutations (add/edit/remove applied to xray) · free-form config editing · subscription URLs · client-specific profile formats or import guarantees · non-VLESS profiles · per-user advertised connection settings · profiles for gone users · profile/credential persistence, masking, or audit trails · multi-server · Prometheus/Grafana export · alerting/quotas/CSV · cross-origin or CDN-hosted UI (same-origin only, ADR-0001) · live log following, pagination, search, filtering, or downloads · caller-selected units, counts, cursors, time ranges, fields, or journal expressions · log clearing or service controls · xray-managed log-file reading · Config snapshot editing, validation, formatting, download, or reload controls · historical Log/Config snapshot storage · migration of old default-journal records · broad default-journal access or a privileged journal broker · non-systemd hosts or systemd older than 245 · automatic installation of root-owned migration files by the binary updater · multiple simultaneous modals · changes to the five-second observation cadence · a new frontend framework, HTTP router, database, or persistent store.
