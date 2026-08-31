@@ -80,16 +80,17 @@ function PresenceDot({ online }: { online: boolean }) {
   );
 }
 
-// EyeIcon is the approved details entry point glyph (user-details prototype).
-function EyeIcon() {
+// InfoIcon is the details entry point glyph (user-management prototype):
+// a circled i.
+function InfoIcon() {
   return (
     <svg
       aria-hidden="true"
       viewBox="0 0 24 24"
       className="size-4 fill-none stroke-current stroke-[1.8] [stroke-linecap:round] [stroke-linejoin:round]"
     >
-      <path d="M2.5 12s3.5-6 9.5-6 9.5 6 9.5 6-3.5 6-9.5 6-9.5-6-9.5-6Z" />
-      <circle cx="12" cy="12" r="2.5" />
+      <circle cx="12" cy="12" r="9" />
+      <path d="M12 11v5M12 7.8h.01" />
     </svg>
   );
 }
@@ -168,9 +169,9 @@ function IconAction({
 
 // UsersTable is the per-user traffic table (SPEC §6): durable totals,
 // current speed, presence (online dot, IPs, last seen), and the config
-// labels (protocol · security) — plus the named icon-only details action
-// opening the User dialog (SPEC §6). Uplink and Downlink share one
-// Traffic column on two lines. Gone users — edited out of the xray config,
+// labels (protocol · security) — plus the named icon-only row actions
+// (details, edit) opening the User dialogs (SPEC §6). Uplink and Downlink
+// share one Traffic column on two lines. Gone users — edited out of the xray config,
 // history retained — are hidden by default behind a toggle. Speeds read
 // "stale" on a stale snapshot — xray is unreachable and the totals are
 // last-known.
@@ -205,8 +206,9 @@ function UsersTable({
       </div>
       {/* Fixed columns keep their width past the container and the wrapper
           scrolls horizontally at narrow widths; table-fixed alone would
-          compress every column into the viewport. */}
-      <Table className="min-w-[64rem] table-fixed">
+          compress every column into the viewport. The actions column fits
+          both row actions (2 × 30px + gap + padding) without overflow. */}
+      <Table className="min-w-[66rem] table-fixed">
         <TableHeader>
           <TableRow className="text-muted-foreground text-[0.7rem] font-bold tracking-[0.08em] uppercase hover:bg-transparent">
             <TableHead className="w-10 px-5" aria-label="Online" />
@@ -216,7 +218,7 @@ function UsersTable({
             <TableHead className="w-52">Speed now</TableHead>
             <TableHead className="w-40">Online IPs</TableHead>
             <TableHead className="w-24 text-right">Last seen</TableHead>
-            <TableHead className="w-14 pr-5" aria-label="Details" />
+            <TableHead className="w-[5.5rem] pr-5" aria-label="Actions" />
           </TableRow>
         </TableHeader>
         <TableBody>
@@ -312,9 +314,8 @@ function UsersTable({
                       label={`Open ${user.email} details`}
                       title={`Open ${user.email} details`}
                       onOpen={(opener) => onOpenDetails(user.email, opener)}
-                      className="text-primary"
                     >
-                      <EyeIcon />
+                      <InfoIcon />
                     </IconAction>
                     {/* Gone Users are history: inspectable, never editable. */}
                     {user.gone ? null : (
