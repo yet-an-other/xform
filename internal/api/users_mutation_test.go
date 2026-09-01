@@ -139,15 +139,22 @@ func TestAddUserRejectsCrossSiteRequests(t *testing.T) {
 		name      string
 		origin    string
 		fetchSite string
+		host      string // request Host; defaults to panel.example.com
 		want      int
 	}{
-		{"no headers (same-origin browser form, curl)", "", "", http.StatusCreated},
-		{"same-origin Origin", "http://panel.example.com", "", http.StatusCreated},
-		{"same-site fetch", "", "same-origin", http.StatusCreated},
-		{"cross-site Origin", "http://evil.example.com", "", http.StatusForbidden},
-		{"mismatched Origin port", "http://panel.example.com:9999", "", http.StatusForbidden},
-		{"null Origin", "null", "", http.StatusForbidden},
-		{"cross-site fetch", "", "cross-site", http.StatusForbidden},
+		{"no headers (same-origin browser form, curl)", "", "", "", http.StatusCreated},
+		{"same-origin Origin", "http://panel.example.com", "", "", http.StatusCreated},
+		{"same-site fetch", "", "same-origin", "", http.StatusCreated},
+		// A TLS proxy forwarding nginx's $host drops the public port while
+		// the browser's Origin keeps it — still the same origin, not a
+		// cross-site probe.
+		{"Origin keeps the public port, Host portless (nginx $host)", "https://panel.example.com:9443", "", "", http.StatusCreated},
+		{"Origin keeps the default port, Host portless", "https://panel.example.com:443", "", "", http.StatusCreated},
+		{"Origin portless, Host keeps the port", "https://panel.example.com", "", "panel.example.com:9443", http.StatusCreated},
+		{"cross-site Origin", "http://evil.example.com", "", "", http.StatusForbidden},
+		{"mismatched Origin port, both carry ports", "http://panel.example.com:9999", "", "panel.example.com:9443", http.StatusForbidden},
+		{"null Origin", "null", "", "", http.StatusForbidden},
+		{"cross-site fetch", "", "cross-site", "", http.StatusForbidden},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			rosterSource := &stubRoster{addResult: roster.AddResult{User: users.RosterRecord{Email: "a@b.c"}, Sync: roster.Synced}}
@@ -156,6 +163,9 @@ func TestAddUserRejectsCrossSiteRequests(t *testing.T) {
 
 			request := httptest.NewRequest(http.MethodPost, "/api/v1/users", strings.NewReader(`{"email": "a@b.c"}`))
 			request.Host = "panel.example.com"
+			if test.host != "" {
+				request.Host = test.host
+			}
 			request.AddCookie(cookie)
 			if test.origin != "" {
 				request.Header.Set("Origin", test.origin)

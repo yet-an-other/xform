@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"net"
 	"net/http"
 	"net/url"
 	"strings"
@@ -305,8 +306,7 @@ type addUserResponse struct {
 func sameSiteOnly(next http.HandlerFunc) http.HandlerFunc {
 	return func(response http.ResponseWriter, request *http.Request) {
 		if origin := request.Header.Get("Origin"); origin != "" {
-			parsed, err := url.Parse(origin)
-			if err != nil || !strings.EqualFold(parsed.Host, request.Host) {
+			if !originMatchesHost(origin, request.Host) {
 				writeJSON(response, http.StatusForbidden, map[string]string{"error": "forbidden"})
 				return
 			}
@@ -319,6 +319,35 @@ func sameSiteOnly(next http.HandlerFunc) http.HandlerFunc {
 		}
 		next(response, request)
 	}
+}
+
+// originMatchesHost reports whether Origin names the same host the request
+// was addressed to. Ports are compared only when both sides carry one: a
+// TLS proxy forwarding nginx's $host convention drops the public port while
+// the browser's Origin keeps it (panel.example.com:9443 vs panel.example.com
+// behind a proxy on a non-default port), which is still the same origin —
+// not a cross-site probe. Different ports on both sides stay a mismatch.
+func originMatchesHost(origin, host string) bool {
+	parsed, err := url.Parse(origin)
+	if err != nil {
+		return false
+	}
+	originHost, originPort := splitHostPort(parsed.Host)
+	requestHost, requestPort := splitHostPort(host)
+	if !strings.EqualFold(originHost, requestHost) {
+		return false
+	}
+	return originPort == "" || requestPort == "" || originPort == requestPort
+}
+
+// splitHostPort tolerates a host without a port (and keeps IPv6 literals
+// whole); net.SplitHostPort errors on both.
+func splitHostPort(hostPort string) (string, string) {
+	host, port, err := net.SplitHostPort(hostPort)
+	if err != nil {
+		return hostPort, ""
+	}
+	return host, port
 }
 
 // setSessionCookie issues the session cookie per SPEC.md §5: HttpOnly,

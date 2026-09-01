@@ -45,7 +45,7 @@ Validation: `email` non-empty and case-insensitively unique; `client_id` a valid
 
 Responses return the full stored roster record plus the current Roster sync state, so the dialog can show "stored, applying…" without a second fetch.
 
-**CSRF**: the session cookie is already `HttpOnly; Secure; SameSite=Lax` (cross-site POSTs don't carry it). Mutations additionally reject requests whose `Origin` / `Sec-Fetch-Site` indicates cross-site. No token ceremony.
+**CSRF**: the session cookie is already `HttpOnly; Secure; SameSite=Lax` (cross-site POSTs don't carry it). Mutations additionally reject requests whose `Origin` / `Sec-Fetch-Site` indicates cross-site. No token ceremony. Origin is matched on host name, with ports compared only when both `Origin` and `Host` carry one — a TLS proxy forwarding nginx's `$host` drops the public port while the browser's `Origin` keeps it (`panel.example.com:9443` vs `panel.example.com`), which is still same-origin, not cross-site.
 
 ## 6. UI
 
