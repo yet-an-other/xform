@@ -1,5 +1,6 @@
 import type { RefObject } from "react";
 
+import { ApplyFailedBanner } from "@/components/apply-failed-banner";
 import { Modal, ModalClose } from "@/components/ui/modal";
 import type { User } from "@/lib/api";
 
@@ -34,6 +35,9 @@ export function EditUserModal({ user, opener, onClose }: EditUserModalProps) {
         </span>
       </header>
       <div className="min-h-0 overflow-auto px-5 py-5">
+        {/* The write-side failure surface (user-management spec §6): the
+            change stays stored and retries — the banner says so. */}
+        {user.apply_state === "failed" ? <ApplyFailedBanner /> : null}
         <fieldset className="mb-4">
           <legend className="text-muted-foreground mb-2 px-0 text-[10px] font-bold tracking-[0.1em] uppercase">
             Inbounds

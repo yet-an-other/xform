@@ -5,6 +5,7 @@ import { Badge } from "@/components/ui/badge";
 import { Card } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
 import { ConfigSnapshotModal } from "@/components/config-snapshot-modal";
+import { AddUserModal } from "@/components/add-user-modal";
 import { EditUserModal } from "@/components/edit-user-modal";
 import { LogSnapshotModal } from "@/components/log-snapshot-modal";
 import { UserDetailsModal } from "@/components/user-details-modal";
@@ -48,6 +49,7 @@ const POLL_INTERVAL_MS = 5_000;
 type OpenDialog =
   | { kind: "details"; email: string }
   | { kind: "edit"; email: string }
+  | { kind: "add" }
   | { kind: "logs"; source: LogSource }
   | { kind: "config" }
   | null;
@@ -179,10 +181,12 @@ function UsersTable({
   snapshot,
   onOpenDetails,
   onOpenEdit,
+  onOpenAdd,
 }: {
   snapshot: UsersSnapshot;
   onOpenDetails: (email: string, opener: HTMLButtonElement) => void;
   onOpenEdit: (email: string, opener: HTMLButtonElement) => void;
+  onOpenAdd: (opener: HTMLButtonElement) => void;
 }) {
   const [showGone, setShowGone] = useState(false);
   const goneCount = snapshot.users.filter((user) => user.gone).length;
@@ -193,16 +197,43 @@ function UsersTable({
       <div className="flex items-center justify-between gap-4 px-5 pt-4 pb-2">
         <h2 className="text-muted-foreground text-xs font-bold tracking-[0.13em] uppercase">
           Users
+          {/* The Roster sync state, shown only while not synced
+              (user-management spec §6) — separate from the stale flag,
+              which marks read-side last-good data. */}
+          {snapshot.roster_sync === "failed" ? (
+            <Badge
+              variant="destructive"
+              className="ml-2 px-1.5 py-0.5 align-middle text-[0.65rem] tracking-[0.08em] uppercase"
+            >
+              apply failed
+            </Badge>
+          ) : snapshot.roster_sync === "pending" ? (
+            <Badge
+              variant="outline"
+              className="text-muted-foreground ml-2 px-1.5 py-0.5 align-middle text-[0.65rem] tracking-[0.08em] uppercase"
+            >
+              applying…
+            </Badge>
+          ) : null}
         </h2>
-        {goneCount > 0 ? (
+        <span className="flex items-center gap-2">
+          {goneCount > 0 ? (
+            <button
+              type="button"
+              onClick={() => setShowGone((shown) => !shown)}
+              className="border-border text-muted-foreground hover:text-foreground rounded-lg border px-2.5 py-1 text-[0.7rem] font-bold tracking-[0.08em] uppercase"
+            >
+              {showGone ? "Hide gone" : `Show gone (${goneCount})`}
+            </button>
+          ) : null}
           <button
             type="button"
-            onClick={() => setShowGone((shown) => !shown)}
-            className="border-border text-muted-foreground hover:text-foreground rounded-lg border px-2.5 py-1 text-[0.7rem] font-bold tracking-[0.08em] uppercase"
+            onClick={(event) => onOpenAdd(event.currentTarget)}
+            className="bg-primary text-primary-foreground rounded-lg px-2.5 py-1 text-[0.7rem] font-bold tracking-[0.08em] uppercase"
           >
-            {showGone ? "Hide gone" : `Show gone (${goneCount})`}
+            + Add user
           </button>
-        ) : null}
+        </span>
       </div>
       {/* Fixed columns keep their width past the container and the wrapper
           scrolls horizontally at narrow widths; table-fixed alone would
@@ -244,6 +275,14 @@ function UsersTable({
                       variant="outline"
                     >
                       gone
+                    </Badge>
+                  ) : null}
+                  {user.apply_state === "failed" ? (
+                    <Badge
+                      className="ml-2 px-1.5 py-0.5 align-middle text-[0.65rem] tracking-[0.08em] uppercase"
+                      variant="destructive"
+                    >
+                      apply failed
                     </Badge>
                   ) : null}
                 </TableCell>
@@ -647,6 +686,16 @@ export function Dashboard({ onUnauthenticated }: { onUnauthenticated: () => void
           snapshot={users}
           onOpenDetails={(email, opener) => openDialog({ kind: "details", email }, opener)}
           onOpenEdit={(email, opener) => openDialog({ kind: "edit", email }, opener)}
+          onOpenAdd={(opener) => openDialog({ kind: "add" }, opener)}
+        />
+      ) : null}
+
+      {dialog?.kind === "add" && users ? (
+        <AddUserModal
+          inbounds={users.inbounds}
+          opener={dialogOpener}
+          onClose={closeDialog}
+          onExpired={sessionExpired}
         />
       ) : null}
 

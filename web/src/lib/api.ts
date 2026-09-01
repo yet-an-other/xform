@@ -73,12 +73,16 @@ export function fetchXrayStatus(signal?: AbortSignal): Promise<XrayStatus> {
 // predating them; config fields (protocol, security, gone) come from the
 // config roster sync and stay zero until the xray config parses. Client ID
 // and inbounds are the roster store's adopted record — null until adoption.
+// apply_state is the write-side mark (user-management spec §6): pending
+// while a change applies, failed when the last apply failed; absent once
+// applied.
 export interface User {
   email: string;
   protocol: string | null;
   security: string | null;
   client_id: string | null;
   inbounds: string[] | null;
+  apply_state?: ApplyState;
   up_bytes_total: number;
   down_bytes_total: number;
   online: boolean;
@@ -92,16 +96,94 @@ export interface User {
   gone: boolean;
 }
 
+// RosterSync is the write-side state of the roster (CONTEXT.md): synced when
+// store, config file, and running xray agree; pending while a stored change
+// applies; failed when the last apply failed (retries continue).
+export type RosterSync = "synced" | "pending" | "failed";
+
+// ApplyState is one user's write-side mark.
+export type ApplyState = "pending" | "failed";
+
+// InboundOption is one attachable inbound in the add dialog's multi-select:
+// the tag, plus the protocol · security · transport :port label.
+export interface InboundOption {
+  tag: string;
+  label: string;
+}
+
 // UsersSnapshot is GET /api/v1/users: durable per-user traffic plus a stale
-// flag — true when xray is unreachable and the data is last-known.
+// flag — true when xray is unreachable and the data is last-known — and the
+// roster write side: the sync state and the add dialog's inbound options.
 export interface UsersSnapshot {
   collected_at: number;
   stale: boolean;
   users: User[];
+  roster_sync: RosterSync;
+  inbounds: InboundOption[];
 }
 
 export function fetchUsers(signal?: AbortSignal): Promise<UsersSnapshot> {
   return getJSON<UsersSnapshot>("api/v1/users", signal);
+}
+
+// RosterUser is the stored roster record a mutation returns.
+export interface RosterUser {
+  email: string;
+  client_id: string;
+  inbounds: string[];
+  created_at: number;
+  updated_at: number;
+}
+
+// AddUserResult is POST /api/v1/users: the stored record plus the Roster
+// sync state once the first apply settled (or the settle window elapsed).
+export interface AddUserResult {
+  user: RosterUser;
+  roster_sync: RosterSync;
+}
+
+// ConflictError is a rejected mutation carrying the API's machine-readable
+// reason (email_taken / client_id_taken / unknown_inbound / *_invalid).
+export class ConflictError extends Error {
+  readonly reason: string;
+
+  constructor(reason: string) {
+    super(reason);
+    this.name = "ConflictError";
+    this.reason = reason;
+  }
+}
+
+// addUser stores a new roster user; apply proceeds from there and the
+// returned sync state says how the first apply went.
+export async function addUser(
+  email: string,
+  clientId: string,
+  inbounds: string[],
+): Promise<AddUserResult> {
+  const response = await fetch("api/v1/users", {
+    method: "POST",
+    headers: { "Content-Type": "application/json", Accept: "application/json" },
+    body: JSON.stringify({ email, client_id: clientId, inbounds }),
+  });
+  if (response.status === 401) {
+    throw new UnauthenticatedError();
+  }
+  if (response.status === 409) {
+    const reason = await response
+      .json()
+      .then((body: unknown) =>
+        typeof body === "object" && body !== null && typeof (body as { error?: unknown }).error === "string"
+          ? (body as { error: string }).error
+          : null,
+      )
+      .catch(() => null);
+    throw new ConflictError(reason ?? "conflict");
+  }
+  if (!response.ok) {
+    throw new Error(`panel returned ${response.status}`);
+  }
+  return (await response.json()) as AddUserResult;
 }
 
 export type ConnectionProfileState =

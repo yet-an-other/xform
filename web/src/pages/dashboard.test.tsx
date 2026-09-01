@@ -33,6 +33,7 @@ function stubEndpoints(routes: {
   server?: () => Response;
   xray?: () => Response;
   users?: () => Response;
+  addUser?: () => Response;
   details?: (url: string, init?: RequestInit) => Response | Promise<Response>;
   panel?: () => Response;
   logout?: () => Response;
@@ -42,10 +43,14 @@ function stubEndpoints(routes: {
     const url = String(input);
     if (url.endsWith("api/v1/server") && routes.server) return routes.server();
     if (url.endsWith("api/v1/xray") && routes.xray) return routes.xray();
+    if (url.endsWith("api/v1/users") && init?.method === "POST") {
+      if (routes.addUser) return routes.addUser();
+      return json({ error: "unstubbed add" }, 500);
+    }
     if (url.endsWith("api/v1/users")) {
       const response = routes.users
         ? routes.users()
-        : json({ collected_at: 1_723_800_000, stale: false, users: [] });
+        : json({ collected_at: 1_723_800_000, stale: false, users: [], roster_sync: "synced", inbounds: [] });
       if (response.ok) latestUsers = await response.clone().json();
       return response;
     }
@@ -361,6 +366,11 @@ describe("xray runtime stats", () => {
 const usersSnapshot = {
   collected_at: 1_723_800_000,
   stale: false,
+  roster_sync: "synced",
+  inbounds: [
+    { tag: "vless-vision", label: "VLESS · Reality · tcp :443" },
+    { tag: "vless-xhttp", label: "VLESS · Reality · xhttp :8443" },
+  ],
   users: [
     {
       email: "alice@example.com",
@@ -565,6 +575,126 @@ describe("users table", () => {
     expect(aliceRow).toHaveTextContent("203.0.113.10");
     expect(aliceRow).toHaveTextContent("2m ago");
     expect(aliceRow).toHaveTextContent("stale");
+  });
+});
+
+describe("add user", () => {
+  it("opens the add dialog from the Users header and adds the user", async () => {
+    const fetchMock = stubEndpoints({
+      server: () => json(stats),
+      xray: () => json(xrayRunning),
+      users: () => json(usersSnapshot),
+      addUser: () =>
+        json(
+          {
+            user: {
+              email: "iris@example.com",
+              client_id: "1d37a118-4f1b-4dc0-9e3c-3426b07518df",
+              inbounds: ["vless-vision", "vless-xhttp"],
+              created_at: 1_780_000_000,
+              updated_at: 1_780_000_000,
+            },
+            roster_sync: "synced",
+          },
+          201,
+        ),
+    });
+
+    render(<Dashboard onUnauthenticated={() => {}} />);
+
+    const table = await screen.findByRole("region", { name: "Users" });
+    fireEvent.click(within(table).getByRole("button", { name: "+ Add user" }));
+
+    const dialog = await screen.findByRole("dialog", { name: "Add user" });
+    // The real inbound options, each checked by default.
+    for (const tag of ["vless-vision", "vless-xhttp"]) {
+      expect(within(dialog).getByRole("checkbox", { name: new RegExp(tag) })).toBeChecked();
+    }
+    fireEvent.change(within(dialog).getByLabelText("Email"), {
+      target: { value: "iris@example.com" },
+    });
+    fireEvent.change(within(dialog).getByLabelText("Client ID"), {
+      target: { value: "1d37a118-4f1b-4dc0-9e3c-3426b07518df" },
+    });
+    fireEvent.click(within(dialog).getByRole("button", { name: "Add user" }));
+
+    await waitFor(() => {
+      expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+    });
+    const post = fetchMock.mock.calls.find(
+      ([input, init]) => String(input).endsWith("api/v1/users") && (init as RequestInit)?.method === "POST",
+    );
+    expect(post).toBeDefined();
+    expect(JSON.parse(String((post![1] as RequestInit).body))).toMatchObject({
+      email: "iris@example.com",
+      inbounds: ["vless-vision", "vless-xhttp"],
+    });
+  });
+
+  it("marks the failed row and the section header when the apply failed", async () => {
+    stubEndpoints({
+      server: () => json(stats),
+      xray: () => json(xrayRunning),
+      users: () =>
+        json({
+          ...usersSnapshot,
+          roster_sync: "failed",
+          users: [
+            { ...usersSnapshot.users[0], apply_state: "failed" },
+            usersSnapshot.users[1],
+          ],
+        }),
+    });
+
+    render(<Dashboard onUnauthenticated={() => {}} />);
+
+    const table = await screen.findByRole("region", { name: "Users" });
+    const aliceRow = within(table).getByRole("row", { name: /alice@example\.com/ });
+    expect(aliceRow).toHaveTextContent("apply failed");
+    const bobRow = within(table).getByRole("row", { name: /bob@example\.com/ });
+    expect(bobRow).not.toHaveTextContent("apply failed");
+    // The header carries the Roster sync state while it is not synced.
+    expect(within(table).getByText("Users").parentElement).toHaveTextContent("apply failed");
+  });
+
+  it("shows applying in the section header while a change is pending", async () => {
+    stubEndpoints({
+      server: () => json(stats),
+      xray: () => json(xrayRunning),
+      users: () => json({ ...usersSnapshot, roster_sync: "pending" }),
+    });
+
+    render(<Dashboard onUnauthenticated={() => {}} />);
+
+    const table = await screen.findByRole("region", { name: "Users" });
+    expect(within(table).getByText("Users").parentElement).toHaveTextContent("applying");
+  });
+
+  it("shows the failure banner in the edit dialog for a failed user", async () => {
+    stubEndpoints({
+      server: () => json(stats),
+      xray: () => json(xrayRunning),
+      users: () =>
+        json({
+          ...usersSnapshot,
+          roster_sync: "failed",
+          users: [{ ...usersSnapshot.users[0], apply_state: "failed" }, usersSnapshot.users[1]],
+        }),
+    });
+
+    render(<Dashboard onUnauthenticated={() => {}} />);
+
+    const table = await screen.findByRole("region", { name: "Users" });
+    fireEvent.click(within(table).getByRole("button", { name: "Edit alice@example.com" }));
+
+    const dialog = await screen.findByRole("dialog", { name: "Edit alice@example.com" });
+    expect(within(dialog).getByRole("alert")).toHaveTextContent(/stored.*retries/i);
+
+    // bob — applied — carries no banner.
+    fireEvent.click(within(dialog).getByRole("button", { name: "Cancel" }));
+    fireEvent.click(within(table).getByRole("button", { name: "Edit bob@example.com" }));
+    const bobDialog = await screen.findByRole("dialog", { name: "Edit bob@example.com" });
+    expect(within(bobDialog).queryByRole("alert")).not.toBeInTheDocument();
   });
 });
 
