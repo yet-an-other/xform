@@ -135,9 +135,10 @@ export interface RosterUser {
   updated_at: number;
 }
 
-// AddUserResult is POST /api/v1/users: the stored record plus the Roster
-// sync state once the first apply settled (or the settle window elapsed).
-export interface AddUserResult {
+// MutationResult is POST and PATCH /api/v1/users: the stored record plus
+// the Roster sync state once the first apply settled (or the settle window
+// elapsed).
+export interface MutationResult {
   user: RosterUser;
   roster_sync: RosterSync;
 }
@@ -154,17 +155,23 @@ export class ConflictError extends Error {
   }
 }
 
-// addUser stores a new roster user; apply proceeds from there and the
-// returned sync state says how the first apply went.
-export async function addUser(
-  email: string,
-  clientId: string,
-  inbounds: string[],
-): Promise<AddUserResult> {
-  const response = await fetch("api/v1/users", {
-    method: "POST",
+// UserNotFoundError is an edit naming an email the roster no longer
+// carries — the row was removed out from under the dialog.
+export class UserNotFoundError extends Error {
+  constructor() {
+    super("not_found");
+    this.name = "UserNotFoundError";
+  }
+}
+
+// mutation fetches one mutation verb and maps the panel's answers onto the
+// dialog-facing errors: 401 expires the session, 409 carries the conflict
+// reason, 404 is a gone record, anything else is unreachable.
+async function mutate(method: string, path: string, body: unknown): Promise<MutationResult> {
+  const response = await fetch(path, {
+    method,
     headers: { "Content-Type": "application/json", Accept: "application/json" },
-    body: JSON.stringify({ email, client_id: clientId, inbounds }),
+    body: JSON.stringify(body),
   });
   if (response.status === 401) {
     throw new UnauthenticatedError();
@@ -172,18 +179,45 @@ export async function addUser(
   if (response.status === 409) {
     const reason = await response
       .json()
-      .then((body: unknown) =>
-        typeof body === "object" && body !== null && typeof (body as { error?: unknown }).error === "string"
-          ? (body as { error: string }).error
+      .then((parsed: unknown) =>
+        typeof parsed === "object" && parsed !== null && typeof (parsed as { error?: unknown }).error === "string"
+          ? (parsed as { error: string }).error
           : null,
       )
       .catch(() => null);
     throw new ConflictError(reason ?? "conflict");
   }
+  if (response.status === 404) {
+    throw new UserNotFoundError();
+  }
   if (!response.ok) {
     throw new Error(`panel returned ${response.status}`);
   }
-  return (await response.json()) as AddUserResult;
+  return (await response.json()) as MutationResult;
+}
+
+// addUser stores a new roster user; apply proceeds from there and the
+// returned sync state says how the first apply went.
+export function addUser(
+  email: string,
+  clientId: string,
+  inbounds: string[],
+): Promise<MutationResult> {
+  return mutate("POST", "api/v1/users", { email, client_id: clientId, inbounds });
+}
+
+// editUser stores one roster edit — the inbound set always sent whole, the
+// Client ID only when the dialog has one to send (user-management spec §5).
+export function editUser(
+  email: string,
+  clientId: string | null,
+  inbounds: string[],
+): Promise<MutationResult> {
+  const body: Record<string, unknown> = { inbounds };
+  if (clientId !== null) {
+    body.client_id = clientId;
+  }
+  return mutate("PATCH", `api/v1/users/${encodeURIComponent(email)}`, body);
 }
 
 export type ConnectionProfileState =

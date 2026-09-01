@@ -35,10 +35,12 @@ func TestRenderClientsAppendsAndLeavesEverythingElseUntouched(t *testing.T) {
   ],
   "routing": {"rules": [{"type": "field", "outboundTag": "direct"}]}
 }`
-	rendered, changed, err := xrayconfig.RenderClients([]byte(document), map[string][]xrayconfig.NewClient{
-		"vless-vision": {
-			{Email: "bob@example.com", ID: "uuid-bob", Flow: "xtls-rprx-vision"},
-			{Email: "erin@example.com", ID: "uuid-erin"},
+	rendered, changed, err := xrayconfig.RenderClients([]byte(document), xrayconfig.RenderPlan{
+		Adds: map[string][]xrayconfig.ClientOp{
+			"vless-vision": {
+				{Email: "bob@example.com", ID: "uuid-bob", Flow: "xtls-rprx-vision"},
+				{Email: "erin@example.com", ID: "uuid-erin"},
+			},
 		},
 	})
 	if err != nil {
@@ -68,8 +70,10 @@ func TestRenderClientsSkipsClientsAlreadyThere(t *testing.T) {
     "settings": {"clients": [{"email": "alice@example.com", "id": "uuid-alice-old"}]}
   }]
 }`
-	rendered, changed, err := xrayconfig.RenderClients([]byte(document), map[string][]xrayconfig.NewClient{
-		"vless-vision": {{Email: "alice@example.com", ID: "uuid-alice-new"}},
+	rendered, changed, err := xrayconfig.RenderClients([]byte(document), xrayconfig.RenderPlan{
+		Adds: map[string][]xrayconfig.ClientOp{
+			"vless-vision": {{Email: "alice@example.com", ID: "uuid-alice-new"}},
+		},
 	})
 	if err != nil {
 		t.Fatalf("render: %v", err)
@@ -96,8 +100,10 @@ func TestRenderClientsInsertsAMissingClientsKey(t *testing.T) {
     }
   ]
 }`
-	rendered, changed, err := xrayconfig.RenderClients([]byte(document), map[string][]xrayconfig.NewClient{
-		"vless-vision": {{Email: "alice@example.com", ID: "uuid-alice", Flow: "xtls-rprx-vision"}},
+	rendered, changed, err := xrayconfig.RenderClients([]byte(document), xrayconfig.RenderPlan{
+		Adds: map[string][]xrayconfig.ClientOp{
+			"vless-vision": {{Email: "alice@example.com", ID: "uuid-alice", Flow: "xtls-rprx-vision"}},
+		},
 	})
 	if err != nil {
 		t.Fatalf("render: %v", err)
@@ -128,8 +134,10 @@ func TestRenderClientsFillsAnEmptyArray(t *testing.T) {
 	document := `{
   "inbounds": [{"tag": "vless-vision", "protocol": "vless", "settings": {"clients": []}}]
 }`
-	rendered, changed, err := xrayconfig.RenderClients([]byte(document), map[string][]xrayconfig.NewClient{
-		"vless-vision": {{Email: "alice@example.com", ID: "uuid-alice"}},
+	rendered, changed, err := xrayconfig.RenderClients([]byte(document), xrayconfig.RenderPlan{
+		Adds: map[string][]xrayconfig.ClientOp{
+			"vless-vision": {{Email: "alice@example.com", ID: "uuid-alice"}},
+		},
 	})
 	if err != nil {
 		t.Fatalf("render: %v", err)
@@ -156,8 +164,10 @@ func TestRenderClientsKeepsCommentsAndToleratesTrailingCommas(t *testing.T) {
     ]}
   }]
 }`
-	rendered, changed, err := xrayconfig.RenderClients([]byte(document), map[string][]xrayconfig.NewClient{
-		"vless-vision": {{Email: "bob@example.com", ID: "uuid-bob"}},
+	rendered, changed, err := xrayconfig.RenderClients([]byte(document), xrayconfig.RenderPlan{
+		Adds: map[string][]xrayconfig.ClientOp{
+			"vless-vision": {{Email: "bob@example.com", ID: "uuid-bob"}},
+		},
 	})
 	if err != nil {
 		t.Fatalf("render: %v", err)
@@ -189,15 +199,19 @@ func TestRenderClientsGuardsTheManagedSet(t *testing.T) {
     {"tag": "vless-vision", "protocol": "vless", "settings": {"clients": []}}
   ]
 }`
-	_, _, err := xrayconfig.RenderClients([]byte(document), map[string][]xrayconfig.NewClient{
-		"trojan": {{Email: "alice@example.com", ID: "uuid-alice"}},
+	_, _, err := xrayconfig.RenderClients([]byte(document), xrayconfig.RenderPlan{
+		Adds: map[string][]xrayconfig.ClientOp{
+			"trojan": {{Email: "alice@example.com", ID: "uuid-alice"}},
+		},
 	})
 	if err == nil {
 		t.Error("a trojan inbound must refuse a managed client")
 	}
 
-	rendered, changed, err := xrayconfig.RenderClients([]byte(document), map[string][]xrayconfig.NewClient{
-		"no-such-inbound": {{Email: "alice@example.com", ID: "uuid-alice"}},
+	rendered, changed, err := xrayconfig.RenderClients([]byte(document), xrayconfig.RenderPlan{
+		Adds: map[string][]xrayconfig.ClientOp{
+			"no-such-inbound": {{Email: "alice@example.com", ID: "uuid-alice"}},
+		},
 	})
 	if err != nil {
 		t.Fatalf("an unknown tag is drift, not a render error: %v", err)
@@ -218,10 +232,10 @@ func TestRenderClientsOutputStaysParseable(t *testing.T) {
     ]}
   }]
 }`
-	adds := map[string][]xrayconfig.NewClient{
+	adds := map[string][]xrayconfig.ClientOp{
 		"vless-vision": {{Email: "bo\"b@example.com", ID: "0f28c9a2-5d0f-4e51-9b1e-5d07d0a1bbcc", Flow: "xtls-rprx-vision"}},
 	}
-	rendered, changed, err := xrayconfig.RenderClients([]byte(document), adds)
+	rendered, changed, err := xrayconfig.RenderClients([]byte(document), xrayconfig.RenderPlan{Adds: adds})
 	if err != nil || !changed {
 		t.Fatalf("render: changed = %v, err = %v", changed, err)
 	}

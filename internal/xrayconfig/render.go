@@ -8,28 +8,44 @@ import (
 	"strings"
 )
 
-// NewClient is one roster client the render adds to a managed inbound's
-// clients array. An empty Flow is omitted from the rendered object.
-type NewClient struct {
+// ClientOp is one roster client the render places in a managed inbound's
+// clients array — an append, or an in-place Client ID rewrite. An empty
+// Flow is omitted from a rendered entry.
+type ClientOp struct {
 	Email string
 	ID    string
 	Flow  string
 }
 
-// RenderClients renders roster additions into an xray config document via
+// RenderPlan is the file half of one apply pass (user-management spec §4):
+// per managed inbound, the client appends (attach), entry removals
+// (detach), and in-place Client ID rewrites (rotate). Every operation is
+// idempotent — a retry over an already-converged document writes nothing.
+type RenderPlan struct {
+	Adds    map[string][]ClientOp // tag → clients to append
+	Removes map[string][]string   // tag → emails whose entries are dropped
+	Sets    map[string][]ClientOp // tag → emails whose id the entry must carry
+}
+
+func (p RenderPlan) empty() bool {
+	return len(p.Adds) == 0 && len(p.Removes) == 0 && len(p.Sets) == 0
+}
+
+// RenderClients renders one roster plan into an xray config document via
 // raw-span surgery (user-management spec §4): a token scan locates each
 // managed inbound's settings.clients array and only those spans change.
 // Key order, unknown fields, and JSONC comments elsewhere stay byte-stable;
-// existing clients keep their positions and new clients append at the end.
+// existing entries keep their positions, appends land at the end, and a
+// Client ID rotation rewrites just the id value.
 //
-// Render is additive and store-respecting: a client the array already
-// carries — by email, the identity — is never rewritten, so a hand-edited
+// The render is store-respecting: an append the array already carries — by
+// email, the identity — never rewrites the entry, so a hand-edited
 // credential survives and retries are byte-identical no-ops. A managed tag
 // the document does not have is skipped (the live push reports the drift);
 // one naming a non-VLESS inbound is an error, because the panel manages
 // VLESS only. changed reports whether rendered differs from document.
-func RenderClients(document []byte, adds map[string][]NewClient) (rendered []byte, changed bool, err error) {
-	if len(adds) == 0 {
+func RenderClients(document []byte, plan RenderPlan) (rendered []byte, changed bool, err error) {
+	if plan.empty() {
 		return document, false, nil
 	}
 	root, err := parseJSONC(document)
@@ -41,9 +57,9 @@ func RenderClients(document []byte, adds map[string][]NewClient) (rendered []byt
 		return nil, false, fmt.Errorf("scan xray config: no inbounds array")
 	}
 
-	// Insertions compose because every one is a pure insert: applied from
-	// last to first, earlier offsets stay valid.
-	var inserts []insertion
+	// Edits compose because each one replaces a distinct, non-overlapping
+	// span: applied from last to first, earlier offsets stay valid.
+	var edits []textEdit
 	for _, inbound := range inbounds.items {
 		if inbound.kind != '{' {
 			continue
@@ -52,8 +68,10 @@ func RenderClients(document []byte, adds map[string][]NewClient) (rendered []byt
 		if tag == nil || tag.kind != '"' {
 			continue
 		}
-		add, managed := adds[tag.value]
-		if !managed {
+		adds, managedAdds := plan.Adds[tag.value]
+		removes, managedRemoves := plan.Removes[tag.value]
+		sets, managedSets := plan.Sets[tag.value]
+		if !managedAdds && !managedRemoves && !managedSets {
 			continue
 		}
 		protocol := inbound.get("protocol")
@@ -64,37 +82,163 @@ func RenderClients(document []byte, adds map[string][]NewClient) (rendered []byt
 		if settings == nil || settings.kind != '{' {
 			return nil, false, fmt.Errorf("render clients: inbound %q has no settings object", tag.value)
 		}
-		insert, err := planClientsInsert(document, settings, add)
-		if err != nil {
-			return nil, false, err
+		clients := settings.get("clients")
+		if clients == nil {
+			// No clients array yet (the ansible template no longer renders
+			// one): appends and sets both insert the key; removals have
+			// nothing to drop.
+			appendOps := append(slices.Clone(adds), sets...)
+			if len(removes) > 0 {
+				appendOps = dropEmails(appendOps, removes)
+			}
+			insert, err := planClientsInsert(document, settings, appendOps)
+			if err != nil {
+				return nil, false, err
+			}
+			if insert != nil {
+				edits = append(edits, textEdit{at: insert.at, end: insert.at, text: insert.text})
+			}
+			continue
 		}
-		if insert != nil {
-			inserts = append(inserts, *insert)
+		if clients.kind != '[' {
+			return nil, false, fmt.Errorf("render clients: clients is not an array")
+		}
+
+		byEmail := byEmailOf(clients)
+
+		for _, email := range removes {
+			if index, ok := byEmail[email]; ok {
+				if edit, ok := planEntryRemoval(document, clients, index); ok {
+					edits = append(edits, edit)
+				}
+			}
+		}
+
+		// Sets whose email the array carries rewrite the id in place; the
+		// rest append together with the adds.
+		appendOps := slices.Clone(adds)
+		for _, set := range sets {
+			index, ok := byEmail[set.Email]
+			if !ok {
+				appendOps = append(appendOps, set)
+				continue
+			}
+			if edit, ok := planIDSet(clients.items[index], set.ID); ok {
+				edits = append(edits, edit)
+			}
+		}
+		if len(appendOps) > 0 {
+			insert, err := planClientsInsert(document, settings, dropEmails(appendOps, emailsOf(byEmail)))
+			if err != nil {
+				return nil, false, err
+			}
+			if insert != nil {
+				edits = append(edits, textEdit{at: insert.at, end: insert.at, text: insert.text})
+			}
 		}
 	}
-	if len(inserts) == 0 {
+	if len(edits) == 0 {
 		return document, false, nil
 	}
 
-	slices.SortFunc(inserts, func(a, b insertion) int { return b.at - a.at })
+	slices.SortFunc(edits, func(a, b textEdit) int { return b.at - a.at })
 	rendered = slices.Clone(document)
-	for _, insert := range inserts {
-		rendered = slices.Insert(rendered, insert.at, []byte(insert.text)...)
+	for _, edit := range edits {
+		replacement := []byte(edit.text)
+		rendered = append(rendered[:edit.at], append(replacement, rendered[edit.end:]...)...)
 	}
 	return rendered, true, nil
 }
 
-// insertion is one pure text insert at a byte offset.
+// textEdit replaces [at, end) with text; at == end is a pure insert.
+type textEdit struct {
+	at, end int
+	text    string
+}
+
+// insertion is one planned pure text insert at a byte offset — the append
+// path's helper before it joins the edit list.
 type insertion struct {
 	at   int
 	text string
+}
+
+// planEntryRemoval plans one entry's deletion: the entry span plus the
+// separator comma — the following one for a non-last entry (swallowing
+// whatever trails it up to the next entry), the preceding one for a last
+// entry (so no dangling comma is introduced), nothing extra for the only
+// entry. ok is false only when the comma bookkeeping cannot add up.
+func planEntryRemoval(document []byte, clients *node, index int) (textEdit, bool) {
+	entry := clients.items[index]
+	if index < len(clients.items)-1 {
+		// A non-last entry has a following separator; deleting through the
+		// next entry's start also takes any trailing comment.
+		return textEdit{at: entry.start, end: clients.items[index+1].start}, true
+	}
+	if index < len(clients.commas) { // trailing comma after the last entry
+		return textEdit{at: entry.start, end: clients.commas[index] + 1}, true
+	}
+	if index > 0 { // last entry, preceded by its separator
+		return textEdit{at: clients.commas[index-1], end: entry.end}, true
+	}
+	return textEdit{at: entry.start, end: entry.end}, true // the only entry
+}
+
+// planIDSet plans an in-place Client ID rewrite: the id value's bytes are
+// replaced and nothing else in the entry moves. An entry without an id key
+// (hand-mangled) gains one as its first key; an equal id writes nothing.
+func planIDSet(entry *node, id string) (textEdit, bool) {
+	encoded, _ := json.Marshal(id)
+	if key := entry.get("id"); key != nil && key.kind == '"' {
+		if key.value == id {
+			return textEdit{}, false
+		}
+		return textEdit{at: key.start, end: key.end, text: string(encoded)}, true
+	}
+	if len(entry.items) == 0 {
+		return textEdit{at: entry.start + 1, end: entry.start + 1, text: `"id": ` + string(encoded)}, true
+	}
+	return textEdit{at: entry.start + 1, end: entry.start + 1, text: `"id": ` + string(encoded) + `, `}, true
+}
+
+// byEmailOf indexes an array's client objects by email.
+func byEmailOf(clients *node) map[string]int {
+	byEmail := map[string]int{}
+	for index, entry := range clients.items {
+		if entry.kind != '{' {
+			continue
+		}
+		if email := entry.get("email"); email != nil && email.kind == '"' {
+			byEmail[email.value] = index
+		}
+	}
+	return byEmail
+}
+
+// dropEmails filters out any op whose email is present — appends only.
+func dropEmails(ops []ClientOp, present []string) []ClientOp {
+	remaining := make([]ClientOp, 0, len(ops))
+	for _, op := range ops {
+		if !slices.Contains(present, op.Email) {
+			remaining = append(remaining, op)
+		}
+	}
+	return remaining
+}
+
+func emailsOf(byEmail map[string]int) []string {
+	emails := make([]string, 0, len(byEmail))
+	for email := range byEmail {
+		emails = append(emails, email)
+	}
+	return emails
 }
 
 // planClientsInsert plans one managed inbound's append: the clients array
 // gains every add its emails do not already carry, or — when settings has no
 // clients key yet — the key itself is inserted. Nil when nothing remains to
 // add.
-func planClientsInsert(document []byte, settings *node, add []NewClient) (*insertion, error) {
+func planClientsInsert(document []byte, settings *node, add []ClientOp) (*insertion, error) {
 	clients := settings.get("clients")
 	if clients == nil {
 		// The ansible template no longer renders clients lists: the key is
@@ -121,18 +265,7 @@ func planClientsInsert(document []byte, settings *node, add []NewClient) (*inser
 		return nil, fmt.Errorf("render clients: clients is not an array")
 	}
 
-	existing := map[string]bool{}
-	for _, entry := range clients.items {
-		if email := entry.get("email"); email != nil && email.kind == '"' {
-			existing[email.value] = true
-		}
-	}
-	remaining := make([]NewClient, 0, len(add))
-	for _, client := range add {
-		if !existing[client.Email] {
-			remaining = append(remaining, client)
-		}
-	}
+	remaining := dropEmails(add, emailsOf(byEmailOf(clients)))
 	if len(remaining) == 0 {
 		return nil, nil
 	}
@@ -172,7 +305,7 @@ func planClientsInsert(document []byte, settings *node, add []NewClient) (*inser
 
 // renderClientsValue renders a whole clients array for an inbound that had
 // no clients key yet, one compact object per line at the key's indent.
-func renderClientsValue(keyIndent string, add []NewClient) string {
+func renderClientsValue(keyIndent string, add []ClientOp) string {
 	entries := renderEntries(add)
 	return "[\n" + keyIndent + "  " + strings.Join(entries, ",\n"+keyIndent+"  ") + "\n" + keyIndent + "]"
 }
@@ -180,7 +313,7 @@ func renderClientsValue(keyIndent string, add []NewClient) string {
 // renderEntries marshals the additions as compact one-line objects — email,
 // id, then flow when set — in the hand-written style of the configs the
 // panel manages (a space after each colon).
-func renderEntries(add []NewClient) []string {
+func renderEntries(add []ClientOp) []string {
 	entries := make([]string, 0, len(add))
 	for _, client := range add {
 		email, _ := json.Marshal(client.Email) // strings marshal cleanly
@@ -211,8 +344,9 @@ func lineIndent(document []byte, pos int) string {
 }
 
 // node is one parsed JSONC value with its byte span. Objects carry their
-// keys and values; arrays their elements; strings their decoded form.
-// trailing marks a comma directly before the closer (JSONC, not JSON).
+// keys and values; arrays their elements and separator comma offsets;
+// strings their decoded form. trailing marks a comma directly before the
+// closer (JSONC, not JSON).
 type node struct {
 	kind       byte // '{', '[', '"', or 'l' for a literal
 	start, end int  // end is exclusive, right after the closing token
@@ -220,6 +354,7 @@ type node struct {
 	keys       []string
 	propStarts []int // byte offset of each key, for indentation
 	items      []*node
+	commas     []int // arrays: byte offset of each item separator comma
 	trailing   bool
 }
 
@@ -357,6 +492,7 @@ func (p *jsoncParser) array() (*node, error) {
 		array.items = append(array.items, item)
 		p.blank()
 		if p.pos < len(p.src) && p.src[p.pos] == ',' {
+			array.commas = append(array.commas, p.pos)
 			p.pos++
 			p.blank()
 			if p.pos < len(p.src) && p.src[p.pos] == ']' {

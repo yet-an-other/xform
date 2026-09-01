@@ -18,15 +18,15 @@ type FileRenderer struct {
 	Path string
 }
 
-// Render reads the config, appends the additions inside the managed clients
-// arrays, and persists the result when it changed. An unchanged render never
+// Render reads the config and applies the plan inside the managed clients
+// arrays, persisting the result when it changed. An unchanged render never
 // writes — no watcher echo, no mtime churn.
-func (r FileRenderer) Render(_ context.Context, adds map[string][]xrayconfig.NewClient) (bool, error) {
+func (r FileRenderer) Render(_ context.Context, plan xrayconfig.RenderPlan) (bool, error) {
 	document, err := os.ReadFile(r.Path)
 	if err != nil {
 		return false, fmt.Errorf("read xray config: %w", err)
 	}
-	rendered, changed, err := xrayconfig.RenderClients(document, adds)
+	rendered, changed, err := xrayconfig.RenderClients(document, plan)
 	if err != nil {
 		return false, err
 	}

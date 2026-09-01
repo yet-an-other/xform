@@ -23,11 +23,13 @@ func TestFileRendererWritesAtomicallyAndIdempotently(t *testing.T) {
 		t.Fatalf("write fixture: %v", err)
 	}
 	renderer := roster.FileRenderer{Path: path}
-	adds := map[string][]xrayconfig.NewClient{
-		"vless-vision": {{Email: "alice@example.com", ID: "uuid-alice", Flow: "xtls-rprx-vision"}},
+	plan := xrayconfig.RenderPlan{
+		Adds: map[string][]xrayconfig.ClientOp{
+			"vless-vision": {{Email: "alice@example.com", ID: "uuid-alice", Flow: "xtls-rprx-vision"}},
+		},
 	}
 
-	changed, err := renderer.Render(context.Background(), adds)
+	changed, err := renderer.Render(context.Background(), plan)
 	if err != nil || !changed {
 		t.Fatalf("first render: changed = %v, err = %v", changed, err)
 	}
@@ -46,12 +48,12 @@ func TestFileRendererWritesAtomicallyAndIdempotently(t *testing.T) {
 		t.Errorf("mode = %o, want 640 — the temp file takes the config's permissions", info.Mode().Perm())
 	}
 
-	// Same adds again: nothing to do, nothing written.
+	// Same plan again: nothing to do, nothing written.
 	before, err := os.Stat(path)
 	if err != nil {
 		t.Fatalf("stat: %v", err)
 	}
-	changed, err = renderer.Render(context.Background(), adds)
+	changed, err = renderer.Render(context.Background(), plan)
 	if err != nil {
 		t.Fatalf("second render: %v", err)
 	}

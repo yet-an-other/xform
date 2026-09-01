@@ -22,6 +22,7 @@ type fakeStore struct {
 	mu     sync.Mutex
 	byMail map[string]users.RosterRecord // lower(email) → record
 	byID   map[string]string             // lower(client_id) → email
+	edits  int                           // writes EditRosterUser actually made
 }
 
 func newFakeStore() *fakeStore {
@@ -38,6 +39,9 @@ func (f *fakeStore) AddRosterUser(_ context.Context, user users.NewRosterUser, n
 	if _, ok := f.byID[strings.ToLower(user.ClientID)]; ok {
 		return users.RosterRecord{}, users.ErrClientIDTaken
 	}
+	if user.Inbounds == nil {
+		user.Inbounds = []string{}
+	}
 	record := users.RosterRecord{
 		Email: user.Email, ClientID: user.ClientID, Inbounds: user.Inbounds,
 		CreatedAt: now.Unix(), UpdatedAt: now.Unix(),
@@ -47,6 +51,47 @@ func (f *fakeStore) AddRosterUser(_ context.Context, user users.NewRosterUser, n
 	return record, nil
 }
 
+func (f *fakeStore) RosterRecord(_ context.Context, email string) (users.RosterRecord, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	record, ok := f.byMail[strings.ToLower(email)]
+	if !ok {
+		return users.RosterRecord{}, users.ErrRosterNotFound
+	}
+	return record, nil
+}
+
+func (f *fakeStore) EditRosterUser(_ context.Context, email string, edit users.RosterEdit, now time.Time) (users.RosterRecord, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	key := strings.ToLower(email)
+	before, ok := f.byMail[key]
+	if !ok {
+		return users.RosterRecord{}, users.ErrRosterNotFound
+	}
+	if edit.ClientID != nil {
+		holder, taken := f.byID[strings.ToLower(*edit.ClientID)]
+		if taken && strings.ToLower(holder) != key {
+			return users.RosterRecord{}, users.ErrClientIDTaken
+		}
+	}
+	after := before
+	if edit.ClientID != nil && !strings.EqualFold(before.ClientID, *edit.ClientID) {
+		after.ClientID = *edit.ClientID
+	}
+	if edit.Inbounds != nil {
+		after.Inbounds = edit.Inbounds
+	}
+	if after.ClientID == before.ClientID && slices.Equal(after.Inbounds, before.Inbounds) {
+		return before, nil
+	}
+	after.UpdatedAt = now.Unix()
+	f.byMail[key] = after
+	f.byID[strings.ToLower(after.ClientID)] = before.Email
+	f.edits++
+	return after, nil
+}
+
 type fakeViews struct{ view xrayconfig.View }
 
 func (f fakeViews) View() xrayconfig.View { return f.view }
@@ -54,34 +99,36 @@ func (f fakeViews) View() xrayconfig.View { return f.view }
 type fakeRenderer struct {
 	mu     sync.Mutex
 	events *[]string // shared with the pusher to assert apply order
-	adds   []map[string][]xrayconfig.NewClient
+	plans  []xrayconfig.RenderPlan
 	err    error
 	block  chan struct{} // non-nil: Render waits on it (the slow-apply test)
 }
 
-func (f *fakeRenderer) Render(_ context.Context, adds map[string][]xrayconfig.NewClient) (bool, error) {
+func (f *fakeRenderer) Render(_ context.Context, plan xrayconfig.RenderPlan) (bool, error) {
 	if f.block != nil {
 		<-f.block
 	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	*f.events = append(*f.events, "render")
-	f.adds = append(f.adds, adds)
+	f.plans = append(f.plans, plan)
 	return true, f.err
 }
 
-func (f *fakeRenderer) lastAdds() map[string][]xrayconfig.NewClient {
+func (f *fakeRenderer) lastPlan() xrayconfig.RenderPlan {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	return f.adds[len(f.adds)-1]
+	return f.plans[len(f.plans)-1]
 }
 
 type fakePusher struct {
-	mu     sync.Mutex
-	events *[]string
-	pushed []xraygrpc.ManagedUser
-	tags   []string
-	err    error
+	mu        sync.Mutex
+	events    *[]string
+	pushed    []xraygrpc.ManagedUser
+	tags      []string
+	removed   []string // "email off tag" records, in push order
+	addErr    error
+	removeErr error
 }
 
 func (f *fakePusher) AddUser(_ context.Context, tag string, user xraygrpc.ManagedUser) error {
@@ -90,7 +137,16 @@ func (f *fakePusher) AddUser(_ context.Context, tag string, user xraygrpc.Manage
 	*f.events = append(*f.events, "push")
 	f.tags = append(f.tags, tag)
 	f.pushed = append(f.pushed, user)
-	return f.err
+	return f.addErr
+}
+
+func (f *fakePusher) RemoveUser(_ context.Context, tag, email string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	*f.events = append(*f.events, "remove")
+	f.tags = append(f.tags, tag)
+	f.removed = append(f.removed, email+" off "+tag)
+	return f.removeErr
 }
 
 type fakeStatus struct {
@@ -159,7 +215,7 @@ func newHarness(t *testing.T) *harness {
 	return h
 }
 
-func (h *harness) add(t *testing.T, email, clientID string, inbounds []string) roster.AddResult {
+func (h *harness) add(t *testing.T, email, clientID string, inbounds []string) roster.MutationResult {
 	t.Helper()
 	result, err := h.service.Add(context.Background(), email, clientID, inbounds)
 	if err != nil {
@@ -201,11 +257,11 @@ func TestAddStoresRendersPushes(t *testing.T) {
 
 	// The render carries the attach-time flow — vision's first client sets
 	// it; ws has no vision flow — and the push matches, per inbound.
-	adds := h.renderer.lastAdds()
-	if got := adds["vless-vision"]; len(got) != 1 || got[0].Flow != "xtls-rprx-vision" {
+	plan := h.renderer.lastPlan()
+	if got := plan.Adds["vless-vision"]; len(got) != 1 || got[0].Flow != "xtls-rprx-vision" {
 		t.Errorf("vision render add = %+v, want the copied vision flow", got)
 	}
-	if got := adds["vless-ws"]; len(got) != 1 || got[0].Flow != "" {
+	if got := plan.Adds["vless-ws"]; len(got) != 1 || got[0].Flow != "" {
 		t.Errorf("ws render add = %+v, want an empty flow", got)
 	}
 	if !slices.Equal(h.pusher.tags, []string{"vless-vision", "vless-ws"}) {
@@ -299,7 +355,7 @@ func TestAddWithZeroInboundsAppliesNothing(t *testing.T) {
 	if result.Sync != roster.Synced {
 		t.Errorf("sync = %q, want synced — there is nothing to apply", result.Sync)
 	}
-	if len(h.renderer.adds) != 0 || len(h.pusher.pushed) != 0 {
+	if len(h.renderer.plans) != 0 || len(h.pusher.pushed) != 0 {
 		t.Error("no render and no push for a profile-less user")
 	}
 }
@@ -310,7 +366,7 @@ func TestAddWithZeroInboundsAppliesNothing(t *testing.T) {
 func TestApplyFailureSurfacesAndRetriesOnWatchFire(t *testing.T) {
 	h := newHarness(t)
 	h.status.set("stopped")
-	h.pusher.err = errors.New("connect: connection refused")
+	h.pusher.addErr = errors.New("connect: connection refused")
 
 	result := h.add(t, "alice@example.com", "1d37a118-4f1b-4dc0-9e3c-3426b07518df", []string{"vless-vision"})
 	if result.Sync != roster.Failed {
@@ -324,7 +380,7 @@ func TestApplyFailureSurfacesAndRetriesOnWatchFire(t *testing.T) {
 	}
 
 	// xray returns; the next config-watch fire retries and settles.
-	h.pusher.err = nil
+	h.pusher.addErr = nil
 	h.changes <- struct{}{}
 	eventually(t, "synced after the retry", func() bool {
 		return h.service.Sync() == roster.Synced
@@ -396,5 +452,229 @@ func TestInboundOptions(t *testing.T) {
 	}
 	if options[1].Tag != "vless-ws" || options[1].Label != "VLESS · TLS · ws :2053" {
 		t.Errorf("option[1] = %+v", options[1])
+	}
+}
+
+// --- the edit slices (issue #54) ---
+
+func (h *harness) edit(t *testing.T, email string, req roster.EditRequest) roster.MutationResult {
+	t.Helper()
+	result, err := h.service.Edit(context.Background(), email, req)
+	if err != nil {
+		t.Fatalf("edit %s: %v", email, err)
+	}
+	return result
+}
+
+// Changing the inbound selection applies live (user-management spec §4):
+// the detached inbound loses the entry — file and running xray — and the
+// newly attached one gains it, with the attach-time flow.
+func TestEditAttachAndDetachApplyLive(t *testing.T) {
+	h := newHarness(t)
+	h.add(t, "alice@example.com", "1d37a118-4f1b-4dc0-9e3c-3426b07518df", []string{"vless-vision"})
+
+	result := h.edit(t, "alice@example.com", roster.EditRequest{Inbounds: []string{"vless-ws"}})
+	if result.Sync != roster.Synced {
+		t.Fatalf("sync = %q, want synced once the apply settled", result.Sync)
+	}
+	if !slices.Equal(result.User.Inbounds, []string{"vless-ws"}) {
+		t.Errorf("record inbounds = %v", result.User.Inbounds)
+	}
+
+	plan := h.renderer.lastPlan()
+	if got := plan.Removes["vless-vision"]; len(got) != 1 || got[0] != "alice@example.com" {
+		t.Errorf("file removals = %v, want alice off vision", got)
+	}
+	if got := plan.Adds["vless-ws"]; len(got) != 1 || got[0].ID != "1d37a118-4f1b-4dc0-9e3c-3426b07518df" || got[0].Flow != "" {
+		t.Errorf("file adds = %+v, want alice onto ws with no flow", got)
+	}
+	if !slices.Equal(h.pusher.removed, []string{"alice@example.com off vless-vision"}) {
+		t.Errorf("live removals = %v", h.pusher.removed)
+	}
+	// The add-time push on vision, then the edit's push on ws — the final
+	// add carries the unchanged credential onto the new inbound.
+	if len(h.pusher.pushed) != 2 {
+		t.Fatalf("live adds = %+d entries, want the add-time and the edit's", len(h.pusher.pushed))
+	}
+	final := h.pusher.pushed[len(h.pusher.pushed)-1]
+	if final.Email != "alice@example.com" || final.ID != "1d37a118-4f1b-4dc0-9e3c-3426b07518df" || final.Flow != "" {
+		t.Errorf("the edit's live add = %+v, want alice onto ws with no flow", final)
+	}
+}
+
+// A Client ID rotation is remove + add on every attached inbound (§4): the
+// running xray drops the old credential and takes the new one per inbound,
+// and the file carries the new id in place.
+func TestEditRotatesTheClientIDEverywhere(t *testing.T) {
+	h := newHarness(t)
+	h.add(t, "alice@example.com", "1d37a118-4f1b-4dc0-9e3c-3426b07518df", []string{"vless-vision", "vless-ws"})
+
+	result := h.edit(t, "alice@example.com", roster.EditRequest{
+		ClientID: "2d37a118-4f1b-4dc0-9e3c-3426b07518df",
+	})
+	if result.Sync != roster.Synced {
+		t.Fatalf("sync = %q, want synced", result.Sync)
+	}
+	if result.User.ClientID != "2d37a118-4f1b-4dc0-9e3c-3426b07518df" {
+		t.Errorf("record Client ID = %q", result.User.ClientID)
+	}
+
+	// Per attached inbound: remove the old credential, add the new one —
+	// the spec's remove+add pair, adjacent per inbound.
+	if !slices.Equal(h.pusher.removed, []string{
+		"alice@example.com off vless-vision",
+		"alice@example.com off vless-ws",
+	}) {
+		t.Errorf("live removals = %v", h.pusher.removed)
+	}
+	// Two adds from the add itself, then the rotation's two — the final two
+	// both carry the rotated credential.
+	if len(h.pusher.pushed) != 4 {
+		t.Fatalf("live adds = %d, want the add-time pair and the rotation pair", len(h.pusher.pushed))
+	}
+	for _, push := range h.pusher.pushed[2:] {
+		if push.ID != "2d37a118-4f1b-4dc0-9e3c-3426b07518df" {
+			t.Errorf("pushed = %+v, want the rotated credential", push)
+		}
+	}
+
+	// The file rewrites the id in place on both inbounds.
+	plan := h.renderer.lastPlan()
+	if got := plan.Sets["vless-vision"]; len(got) != 1 || got[0].ID != "2d37a118-4f1b-4dc0-9e3c-3426b07518df" {
+		t.Errorf("file sets vision = %+v", got)
+	}
+	if got := plan.Sets["vless-ws"]; len(got) != 1 {
+		t.Errorf("file sets ws = %+v", got)
+	}
+	if len(plan.Adds) != 0 || len(plan.Removes) != 0 {
+		t.Errorf("a pure rotation adds and removes nothing else: %+v", plan)
+	}
+}
+
+// PATCH is idempotent (§5): repeating the same save stores nothing, renders
+// nothing, pushes nothing — the same state.
+func TestEditIsIdempotent(t *testing.T) {
+	h := newHarness(t)
+	h.add(t, "alice@example.com", "1d37a118-4f1b-4dc0-9e3c-3426b07518df", []string{"vless-vision"})
+	renders := len(h.renderer.plans)
+	adds := len(h.pusher.pushed)
+
+	same := "1d37a118-4f1b-4dc0-9e3c-3426b07518df"
+	result := h.edit(t, "alice@example.com", roster.EditRequest{
+		ClientID: same,
+		Inbounds: []string{"vless-vision"},
+	})
+	if result.Sync != roster.Synced {
+		t.Errorf("sync = %q, want synced", result.Sync)
+	}
+	if len(h.renderer.plans) != renders || len(h.pusher.pushed) != adds {
+		t.Error("a repeated save must render and push nothing")
+	}
+	if states := h.service.UserStates(); len(states) != 0 {
+		t.Errorf("user states = %v, want clean", states)
+	}
+}
+
+// Detaching every inbound keeps the user in the roster — profile-less, not
+// gone (CONTEXT.md) — and takes them off the one inbound they had.
+func TestEditCanDetachEveryInbound(t *testing.T) {
+	h := newHarness(t)
+	h.add(t, "alice@example.com", "1d37a118-4f1b-4dc0-9e3c-3426b07518df", []string{"vless-vision"})
+
+	result := h.edit(t, "alice@example.com", roster.EditRequest{Inbounds: []string{}})
+	if result.Sync != roster.Synced {
+		t.Fatalf("sync = %q, want synced — nothing to apply to xray", result.Sync)
+	}
+	if len(result.User.Inbounds) != 0 {
+		t.Errorf("record inbounds = %v, want none", result.User.Inbounds)
+	}
+	if !slices.Equal(h.pusher.removed, []string{"alice@example.com off vless-vision"}) {
+		t.Errorf("live removals = %v", h.pusher.removed)
+	}
+	record, err := h.store.RosterRecord(context.Background(), "alice@example.com")
+	if err != nil || len(record.Inbounds) != 0 {
+		t.Errorf("record after detach-all = %+v, err %v — the roster keeps her", record, err)
+	}
+}
+
+// Validation matches add (§5): unknown inbound, invalid or taken Client ID
+// are conflicts with the machine-readable reason, and nothing is stored.
+func TestEditValidationConflicts(t *testing.T) {
+	h := newHarness(t)
+	h.add(t, "alice@example.com", "1d37a118-4f1b-4dc0-9e3c-3426b07518df", []string{"vless-vision"})
+	h.add(t, "bob@example.com", "3d37a118-4f1b-4dc0-9e3c-3426b07518df", nil)
+	edits := h.store.edits
+
+	for _, test := range []struct {
+		name string
+		req  roster.EditRequest
+		want string
+	}{
+		{"unknown inbound", roster.EditRequest{Inbounds: []string{"no-such"}}, roster.ReasonUnknownInbound},
+		{"non-vless inbound", roster.EditRequest{Inbounds: []string{"trojan"}}, roster.ReasonUnknownInbound},
+		{"invalid client ID", roster.EditRequest{ClientID: "not-a-uuid"}, roster.ReasonClientIDInvalid},
+		{"client ID taken", roster.EditRequest{ClientID: "3D37A118-4F1B-4DC0-9E3C-3426B07518DF"}, roster.ReasonClientIDTaken},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			_, err := h.service.Edit(context.Background(), "alice@example.com", test.req)
+			var conflict *roster.ConflictError
+			if !errors.As(err, &conflict) {
+				t.Fatalf("error = %v, want a ConflictError", err)
+			}
+			if conflict.Reason != test.want {
+				t.Errorf("reason = %q, want %q", conflict.Reason, test.want)
+			}
+		})
+	}
+	if h.store.edits != edits {
+		t.Errorf("store edits = %d, want %d — a conflict writes nothing", h.store.edits, edits)
+	}
+}
+
+// Editing an email the roster does not carry is a not-found the API answers
+// with 404.
+func TestEditUnknownEmailIsNotFound(t *testing.T) {
+	h := newHarness(t)
+	_, err := h.service.Edit(context.Background(), "ghost@example.com", roster.EditRequest{Inbounds: []string{}})
+	var missing *roster.NotFoundError
+	if !errors.As(err, &missing) {
+		t.Fatalf("error = %v, want a NotFoundError", err)
+	}
+}
+
+// A second edit while the first change is still applying replaces the
+// pending change but keeps converging the first edit's tags (§7): whatever
+// partially landed, the final pass pushes the final record everywhere it
+// belongs.
+func TestEditWhilePendingConvergesBothChanges(t *testing.T) {
+	h := newHarness(t)
+	h.renderer.block = make(chan struct{})
+	h.service.WithSettleWait(50 * time.Millisecond)
+
+	h.add(t, "alice@example.com", "1d37a118-4f1b-4dc0-9e3c-3426b07518df", []string{"vless-vision"})
+	h.edit(t, "alice@example.com", roster.EditRequest{
+		ClientID: "2d37a118-4f1b-4dc0-9e3c-3426b07518df",
+		Inbounds: []string{"vless-vision", "vless-ws"},
+	})
+
+	close(h.renderer.block)
+	eventually(t, "synced with the final state everywhere", func() bool {
+		return h.service.Sync() == roster.Synced
+	})
+
+	// The final pass carries the rotated credential on both inbounds —
+	// vision from the first change, ws from the second.
+	if len(h.pusher.pushed) != 2 {
+		t.Fatalf("live adds = %+v, want the final credential on both inbounds", h.pusher.pushed)
+	}
+	for _, push := range h.pusher.pushed {
+		if push.ID != "2d37a118-4f1b-4dc0-9e3c-3426b07518df" {
+			t.Errorf("pushed = %+v, want the rotated credential", push)
+		}
+	}
+	for _, tag := range []string{"vless-vision", "vless-ws"} {
+		if !slices.Contains(h.pusher.tags, tag) {
+			t.Errorf("pushed tags = %v, want %s covered", h.pusher.tags, tag)
+		}
 	}
 }

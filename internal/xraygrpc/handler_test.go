@@ -140,3 +140,55 @@ func TestAddUserSurfacesPushFailures(t *testing.T) {
 		t.Errorf("a missing inbound is a push failure, got %v", err)
 	}
 }
+
+// RemoveUser detaches one roster user from one inbound (user-management
+// spec §4): a RemoveUserOperation keyed by email — the identity xray's
+// handler manager indexes users by.
+func TestRemoveUserPushesTheRemoveOperation(t *testing.T) {
+	service := &fakeHandlerService{}
+	client := xraygrpc.HandlerClient{Address: "127.0.0.1:8080", Dial: dialToHandler(service)}
+
+	if err := client.RemoveUser(context.Background(), "vless-vision", "alice@example.com"); err != nil {
+		t.Fatalf("remove user: %v", err)
+	}
+
+	if len(service.got) != 1 {
+		t.Fatalf("AlterInbound calls = %d, want 1", len(service.got))
+	}
+	request := service.got[0]
+	if request.Tag != "vless-vision" {
+		t.Errorf("tag = %q, want vless-vision", request.Tag)
+	}
+	operation, err := request.Operation.GetInstance()
+	if err != nil {
+		t.Fatalf("decode operation: %v", err)
+	}
+	remove, ok := operation.(*command.RemoveUserOperation)
+	if !ok {
+		t.Fatalf("operation = %T, want RemoveUserOperation", operation)
+	}
+	if remove.Email != "alice@example.com" {
+		t.Errorf("email = %q", remove.Email)
+	}
+}
+
+// xray answers a missing email with "not found" — the remove counterpart of
+// the add's "already exists": for a retrying apply that means the user is
+// already gone, so it reads as success.
+func TestRemoveUserTreatsNotFoundAsApplied(t *testing.T) {
+	service := &fakeHandlerService{err: status.Error(codes.Unknown, "User alice@example.com not found.")}
+	client := xraygrpc.HandlerClient{Address: "127.0.0.1:8080", Dial: dialToHandler(service)}
+
+	if err := client.RemoveUser(context.Background(), "vless-vision", "alice@example.com"); err != nil {
+		t.Errorf("a missing email must read as applied, got %v", err)
+	}
+}
+
+func TestRemoveUserSurfacesPushFailures(t *testing.T) {
+	service := &fakeHandlerService{err: status.Error(codes.Unknown, "failed to get handler: no-such-tag")}
+	client := xraygrpc.HandlerClient{Address: "127.0.0.1:8080", Dial: dialToHandler(service)}
+
+	if err := client.RemoveUser(context.Background(), "no-such-tag", "alice@example.com"); err == nil {
+		t.Error("a missing inbound is a push failure, not success")
+	}
+}

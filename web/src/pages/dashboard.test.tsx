@@ -699,7 +699,7 @@ describe("add user", () => {
 });
 
 describe("edit user dialog", () => {
-  it("opens a read-only edit dialog with the user's real inbound selection and Client ID", async () => {
+  it("opens the edit dialog with the user's real inbound selection and Client ID", async () => {
     stubEndpoints({
       server: () => json(stats),
       xray: () => json(xrayRunning),
@@ -712,19 +712,20 @@ describe("edit user dialog", () => {
     fireEvent.click(within(table).getByRole("button", { name: "Edit alice@example.com" }));
 
     const dialog = await screen.findByRole("dialog", { name: "Edit alice@example.com" });
-    // alice's real roster record: both inbound attachments, checked and
-    // untouchable, and her adopted Client ID.
+    // alice's real roster record: both inbound attachments preselected and
+    // editable, her adopted Client ID ready to rotate.
     for (const tag of ["vless-vision", "vless-xhttp"]) {
-      const attachment = within(dialog).getByRole("checkbox", { name: tag });
+      const attachment = within(dialog).getByRole("checkbox", { name: new RegExp(tag) });
       expect(attachment).toBeChecked();
-      expect(attachment).toBeDisabled();
+      expect(attachment).toBeEnabled();
     }
     expect(
       within(dialog).getByDisplayValue("1e7f6c2a-9b3d-4f8a-9c1e-2d5a7b8c9d0e"),
     ).toBeInTheDocument();
-    // Nothing mutates yet: Save and Generate stay disabled.
-    expect(within(dialog).getByRole("button", { name: "Save" })).toBeDisabled();
-    expect(within(dialog).getByRole("button", { name: /generate/i })).toBeDisabled();
+    expect(within(dialog).getByRole("button", { name: "Save" })).toBeEnabled();
+    expect(within(dialog).getByRole("button", { name: /generate/i })).toBeEnabled();
+    // The email is the identity — no field offers to change it.
+    expect(within(dialog).queryByLabelText("Email")).not.toBeInTheDocument();
 
     // Cancel dismisses without a trace.
     fireEvent.click(within(dialog).getByRole("button", { name: "Cancel" }));
@@ -746,11 +747,14 @@ describe("edit user dialog", () => {
     fireEvent.click(within(table).getByRole("button", { name: "Edit bob@example.com" }));
 
     const dialog = await screen.findByRole("dialog", { name: "Edit bob@example.com" });
-    expect(within(dialog).queryByRole("checkbox")).not.toBeInTheDocument();
+    // The multi-select stays unchecked — bob has no stored record — and the
+    // Client ID field starts empty rather than fake.
+    for (const checkbox of within(dialog).getAllByRole("checkbox")) {
+      expect(checkbox).not.toBeChecked();
+    }
     expect(
       within(dialog).queryByDisplayValue("1e7f6c2a-9b3d-4f8a-9c1e-2d5a7b8c9d0e"),
     ).not.toBeInTheDocument();
-    expect(within(dialog).getByRole("button", { name: "Save" })).toBeDisabled();
   });
 
   it("offers no edit action for gone users", async () => {

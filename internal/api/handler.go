@@ -40,11 +40,12 @@ type usersSnapshots interface {
 }
 
 // rosterMutations is the Roster's write side behind the mutation API
-// (user-management spec §5): the add mutation, plus the state the users
-// endpoint merges into its reads — the Roster sync state, the per-user
+// (user-management spec §5): the add and edit mutations, plus the state the
+// users endpoint merges into its reads — the Roster sync state, the per-user
 // apply marks, and the add dialog's inbound options.
 type rosterMutations interface {
-	Add(ctx context.Context, email, clientID string, inbounds []string) (roster.AddResult, error)
+	Add(ctx context.Context, email, clientID string, inbounds []string) (roster.MutationResult, error)
+	Edit(ctx context.Context, email string, req roster.EditRequest) (roster.MutationResult, error)
 	Sync() roster.SyncState
 	UserStates() map[string]roster.ApplyState
 	InboundOptions() []roster.InboundOption
@@ -236,7 +237,35 @@ func New(snapshots hostStatsSnapshots, xray xrayStatuses, usersSource usersSnaps
 			writeJSON(response, http.StatusInternalServerError, map[string]string{"error": "roster unavailable"})
 			return
 		}
-		writeJSON(response, http.StatusCreated, addUserResponse{User: result.User, RosterSync: result.Sync})
+		writeJSON(response, http.StatusCreated, mutationResponse{User: result.User, RosterSync: result.Sync})
+	}))))
+	mux.HandleFunc("PATCH /api/v1/users/{email}", noStore(requireSession(sameSiteOnly(func(response http.ResponseWriter, request *http.Request) {
+		var body struct {
+			ClientID string   `json:"client_id"` // absent keeps the stored credential
+			Inbounds []string `json:"inbounds"`  // absent keeps; an explicit array sets (empty detaches all)
+		}
+		if err := json.NewDecoder(request.Body).Decode(&body); err != nil {
+			writeJSON(response, http.StatusBadRequest, map[string]string{"error": "invalid_request"})
+			return
+		}
+		result, err := rosterSource.Edit(request.Context(), request.PathValue("email"), roster.EditRequest{
+			ClientID: body.ClientID, Inbounds: body.Inbounds,
+		})
+		var conflict *roster.ConflictError
+		if errors.As(err, &conflict) {
+			writeJSON(response, http.StatusConflict, map[string]string{"error": conflict.Reason})
+			return
+		}
+		var missing *roster.NotFoundError
+		if errors.As(err, &missing) {
+			writeJSON(response, http.StatusNotFound, map[string]string{"error": "not_found"})
+			return
+		}
+		if err != nil {
+			writeJSON(response, http.StatusInternalServerError, map[string]string{"error": "roster unavailable"})
+			return
+		}
+		writeJSON(response, http.StatusOK, mutationResponse{User: result.User, RosterSync: result.Sync})
 	}))))
 	mux.HandleFunc("GET /api/v1/users/{email}", noStore(requireSession(func(response http.ResponseWriter, request *http.Request) {
 		if malformedUserEmailEscape(request.RequestURI) {
@@ -292,9 +321,9 @@ type usersResponse struct {
 	Inbounds    []roster.InboundOption `json:"inbounds"`
 }
 
-// addUserResponse is POST /api/v1/users: the stored roster record plus the
-// Roster sync state once the first apply settled.
-type addUserResponse struct {
+// mutationResponse is POST and PATCH /api/v1/users: the stored roster record
+// plus the Roster sync state once the first apply settled.
+type mutationResponse struct {
 	User       roster.Record    `json:"user"`
 	RosterSync roster.SyncState `json:"roster_sync"`
 }

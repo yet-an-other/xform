@@ -65,8 +65,7 @@ func (c HandlerClient) connect(ctx context.Context) (command.HandlerServiceClien
 
 // AddUser pushes one roster user onto one inbound via AlterInbound's
 // AddUserOperation. xray answers a duplicate email with "already exists"
-// (docs/research/handlerservice-live-user-management.md §5) — for a
-// retrying apply that means the user is there, so it returns nil.
+// — for a retrying apply that means the user is there, so it returns nil.
 func (c HandlerClient) AddUser(ctx context.Context, tag string, user ManagedUser) error {
 	ctx, cancel := context.WithTimeout(ctx, pushTimeout)
 	defer cancel()
@@ -95,6 +94,37 @@ func (c HandlerClient) AddUser(ctx context.Context, tag string, user ManagedUser
 			return nil
 		}
 		return fmt.Errorf("add %s to inbound %s: %w", user.Email, tag, err)
+	}
+	return nil
+}
+
+// RemoveUser removes one roster user from one inbound via AlterInbound's
+// RemoveUserOperation — keyed by email, the identity xray's handler manager
+// indexes users by. The remove leaves established connections to close
+// naturally (user-management spec §4). xray answers a missing email with
+// "not found" — for a retrying apply that means the user is already off
+// the inbound, so it returns nil. An unknown inbound tag is a real failure.
+func (c HandlerClient) RemoveUser(ctx context.Context, tag, email string) error {
+	ctx, cancel := context.WithTimeout(ctx, pushTimeout)
+	defer cancel()
+
+	client, closeConn, err := c.connect(ctx)
+	if err != nil {
+		return err
+	}
+	defer closeConn()
+
+	_, err = client.AlterInbound(ctx, &command.AlterInboundRequest{
+		Tag: tag,
+		Operation: serial.ToTypedMessage(&command.RemoveUserOperation{
+			Email: email,
+		}),
+	})
+	if err != nil {
+		if strings.Contains(err.Error(), "not found") {
+			return nil
+		}
+		return fmt.Errorf("remove %s from inbound %s: %w", email, tag, err)
 	}
 	return nil
 }

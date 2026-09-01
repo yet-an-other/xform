@@ -705,7 +705,13 @@ export function Dashboard({ onUnauthenticated }: { onUnauthenticated: () => void
             // every poll so the dialog never shows a replaced record.
             const user = users.users.find((candidate) => candidate.email === dialog.email);
             return user ? (
-              <EditUserModal user={user} opener={dialogOpener} onClose={closeDialog} />
+              <EditUserModal
+                user={user}
+                inbounds={users.inbounds}
+                opener={dialogOpener}
+                onClose={closeDialog}
+                onExpired={sessionExpired}
+              />
             ) : null;
           })()
         : null}

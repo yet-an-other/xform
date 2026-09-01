@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strings"
 	"time"
 
 	_ "modernc.org/sqlite" // pure-Go driver — no cgo, static binary preserved (SPEC.md §4)
@@ -88,9 +89,12 @@ func (s *Store) Close() error { return s.db.Close() }
 // (user-management spec §5): email conflicts case-insensitively because the
 // email IS the identity, Client IDs case-insensitively too because xray's
 // auth index silently overwrites on same-UUID-different-email.
+// ErrRosterNotFound marks a mutation naming an email the roster does not
+// carry.
 var (
-	ErrEmailTaken    = errors.New("email taken")
-	ErrClientIDTaken = errors.New("client ID taken")
+	ErrEmailTaken     = errors.New("email taken")
+	ErrClientIDTaken  = errors.New("client ID taken")
+	ErrRosterNotFound = errors.New("roster record not found")
 )
 
 // NewRosterUser is one panel-added user to store. Protocol and Security are
@@ -167,6 +171,121 @@ func (s *Store) AddRosterUser(ctx context.Context, user NewRosterUser, now time.
 	return RosterRecord{
 		Email: user.Email, ClientID: user.ClientID, Inbounds: inbounds,
 		CreatedAt: stamp, UpdatedAt: stamp,
+	}, nil
+}
+
+// RosterEdit is one edit mutation's stored fields (user-management spec
+// §5): a nil ClientID keeps the stored credential; nil Inbounds keeps the
+// stored attachment set while an empty (non-nil) set detaches every
+// inbound. Protocol and Security relabel the dashboard row for the new
+// attachment set.
+type RosterEdit struct {
+	ClientID *string
+	Inbounds []string
+	Protocol string
+	Security string
+}
+
+// RosterRecord returns the stored roster record for email — the before
+// state the edit path diffs against. Emails match case-insensitively.
+func (s *Store) RosterRecord(ctx context.Context, email string) (RosterRecord, error) {
+	var record RosterRecord
+	var inbounds string
+	err := s.db.QueryRowContext(ctx,
+		`SELECT email, client_id, inbounds, created_at, updated_at
+		 FROM roster WHERE lower(email) = lower(?)`, email,
+	).Scan(&record.Email, &record.ClientID, &inbounds, &record.CreatedAt, &record.UpdatedAt)
+	if errors.Is(err, sql.ErrNoRows) {
+		return RosterRecord{}, ErrRosterNotFound
+	}
+	if err != nil {
+		return RosterRecord{}, fmt.Errorf("query roster record: %w", err)
+	}
+	record.Inbounds = []string{}
+	_ = json.Unmarshal([]byte(inbounds), &record.Inbounds) // tolerate malformed rows
+	return record, nil
+}
+
+// EditRosterUser stores one edit: the attachment set and — optionally — the
+// Client ID change, with the row relabelled and kept not-gone (a roster
+// member edited to zero inbounds is profile-less, not gone). Idempotent: an
+// edit carrying the stored state — including the labels — writes nothing.
+// Conflicts write nothing.
+func (s *Store) EditRosterUser(ctx context.Context, email string, edit RosterEdit, now time.Time) (RosterRecord, error) {
+	before, err := s.RosterRecord(ctx, email)
+	if err != nil {
+		return RosterRecord{}, err
+	}
+
+	clientID := before.ClientID
+	if edit.ClientID != nil {
+		var taken string
+		switch err := s.db.QueryRowContext(ctx,
+			`SELECT email FROM roster WHERE lower(client_id) = lower(?) AND lower(email) <> lower(?)`,
+			*edit.ClientID, before.Email).Scan(&taken); {
+		case err == nil:
+			return RosterRecord{}, fmt.Errorf("%w: %s", ErrClientIDTaken, taken)
+		case !errors.Is(err, sql.ErrNoRows):
+			return RosterRecord{}, fmt.Errorf("check client ID uniqueness: %w", err)
+		}
+		// The stored spelling wins for the user's own credential — an
+		// equivalent case-variant is the same ID, not a rotation.
+		if !strings.EqualFold(clientID, *edit.ClientID) {
+			clientID = *edit.ClientID
+		}
+	}
+	inbounds := before.Inbounds
+	if edit.Inbounds != nil {
+		inbounds = edit.Inbounds
+	}
+
+	// The no-op probe: same credential, same attachment set, same labels.
+	var protocol, security sql.NullString
+	switch err := s.db.QueryRowContext(ctx,
+		`SELECT protocol, security FROM users WHERE lower(email) = lower(?)`, before.Email,
+	).Scan(&protocol, &security); {
+	case errors.Is(err, sql.ErrNoRows): // no dashboard row yet — a label write is due
+	case err != nil:
+		return RosterRecord{}, fmt.Errorf("read stored labels: %w", err)
+	default:
+		if clientID == before.ClientID && slices.Equal(inbounds, before.Inbounds) &&
+			edit.Protocol == protocol.String && edit.Security == security.String {
+			return before, nil
+		}
+	}
+
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return RosterRecord{}, fmt.Errorf("begin edit transaction: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	encoded, err := json.Marshal(inbounds)
+	if err != nil {
+		return RosterRecord{}, fmt.Errorf("encode attachments: %w", err)
+	}
+	stamp := now.Unix()
+	if _, err := tx.ExecContext(ctx, `
+		UPDATE roster SET client_id = ?, inbounds = ?, updated_at = ? WHERE email = ?`,
+		clientID, string(encoded), stamp, before.Email); err != nil {
+		return RosterRecord{}, fmt.Errorf("update roster row: %w", err)
+	}
+	if _, err := tx.ExecContext(ctx, `
+		INSERT INTO users (email, protocol, security, gone, first_seen)
+		VALUES (?, ?, ?, 0, ?)
+		ON CONFLICT(email) DO UPDATE SET
+			protocol = excluded.protocol,
+			security = excluded.security,
+			gone     = 0`,
+		before.Email, edit.Protocol, edit.Security, stamp); err != nil {
+		return RosterRecord{}, fmt.Errorf("relabel user row: %w", err)
+	}
+	if err := tx.Commit(); err != nil {
+		return RosterRecord{}, fmt.Errorf("commit edit transaction: %w", err)
+	}
+	return RosterRecord{
+		Email: before.Email, ClientID: clientID, Inbounds: inbounds,
+		CreatedAt: before.CreatedAt, UpdatedAt: stamp,
 	}, nil
 }
 
@@ -264,7 +383,12 @@ func (s *Store) ApplyPoll(ctx context.Context, deltas []Delta, presence []Presen
 // zero totals, returning users lose the gone flag, and labels follow the
 // config.
 func syncLabels(ctx context.Context, tx *sql.Tx, roster map[string]RosterUser, now time.Time) error {
-	if _, err := tx.ExecContext(ctx, `UPDATE users SET gone = 1 WHERE gone = 0`); err != nil {
+	// Gone-ness is the Roster's call, not the config's (CONTEXT.md): a parse
+	// missing a roster member leaves them alone — convergence re-applies —
+	// so only users with no roster row can go gone here.
+	if _, err := tx.ExecContext(ctx, `
+		UPDATE users SET gone = 1 WHERE gone = 0
+		AND NOT EXISTS (SELECT 1 FROM roster r WHERE lower(r.email) = lower(users.email))`); err != nil {
 		return fmt.Errorf("mark gone users: %w", err)
 	}
 
