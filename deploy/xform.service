@@ -17,6 +17,16 @@ User=xform
 # Creates /var/lib/xform (default XFORM_DB location) owned by the system user.
 StateDirectory=xform
 
+# Roster applies rewrite the xray config file — a temp file in the same
+# directory, then rename — so the config directory must be writable inside
+# this sandbox: ProtectSystem=strict below mounts / (and so /usr/local/etc)
+# read-only, and this whitelist is the only way through it. Keep it in step
+# with XFORM_XRAY_CONFIG: a config in another location needs that directory
+# here instead. The whitelist lifts only the mount-namespace wall — the
+# xform user still needs DAC write access (setfacl, see README), and both
+# are required for user management to apply.
+ReadWritePaths=/usr/local/etc/xray
+
 # Log snapshots. Both this unit and the configured xray service log into one
 # dedicated journal namespace, and the xform user gets read ACLs on that
 # namespace alone — never membership in systemd-journal, adm, or wheel, which
@@ -39,7 +49,9 @@ ExecStartPre=-+/usr/bin/systemd-tmpfiles --create /etc/tmpfiles.d/xform-journal-
 
 # Hardening. The panel needs exactly: read-only host /proc + /sys, the D-Bus
 # system bus, a loopback listener, outbound loopback to the xray gRPC API,
-# and its writable StateDirectory (ProtectSystem=strict leaves that writable).
+# its writable StateDirectory, and write access to the xray config directory
+# for roster applies (ReadWritePaths above — ProtectSystem=strict mounts
+# everything else read-only).
 NoNewPrivileges=true
 ProtectSystem=strict
 ProtectHome=true
@@ -62,6 +74,8 @@ Environment=XFORM_LISTEN=127.0.0.1:9090
 # REQUIRED: the panel refuses to start without a login password.
 # Environment=XFORM_PASSWORD=change-me
 # Environment=XFORM_XRAY_API=127.0.0.1:8080
+# XFORM_XRAY_CONFIG default is /usr/local/etc/xray/config.json; ReadWritePaths
+# above must name its directory.
 # Environment=XFORM_XRAY_CONFIG=/usr/local/etc/xray/config.json
 # Environment=XFORM_DB=/var/lib/xform/xform.db
 # Environment=XFORM_XRAY_UNIT=xray.service

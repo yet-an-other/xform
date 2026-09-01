@@ -89,7 +89,12 @@ ssh root@HOST 'chgrp xform /usr/local/etc/xray/config.json && chmod 0640 /usr/lo
 
 or via an ACL: `setfacl -m u:xform:r /usr/local/etc/xray/config.json`. Either way the file's directory (`/usr/local/etc/xray`, typically `0755`) must stay traversable by the `xform` system user.
 
-**xray config write access (user management)**: roster applies rewrite the config file — a temp file in the same directory, then rename — so the `xform` user needs write access to the directory itself: `setfacl -m u:xform:rwx /usr/local/etc/xray`. Without it, mutations store but the apply stays failed (`cannot render the roster into the xray config ... permission denied` in the panel log, `journalctl -u xform`); grant the ACL and the next config edit or xray restart retries the stored change through.
+**xray config write access (user management)**: roster applies rewrite the config file — a temp file in the same directory, then rename — so writes must reach the directory itself, through two independent layers:
+
+1. **The unit's sandbox** — the shipped unit hardens the panel with `ProtectSystem=strict`, which mounts the filesystem read-only; the unit whitelists the config directory with `ReadWritePaths=/usr/local/etc/xray`. Units installed before user management lack that line: add it with `systemctl edit xform` (a drop-in containing `ReadWritePaths=/usr/local/etc/xray`), then `systemctl daemon-reload && systemctl restart xform`. Symptom of the missing line: `cannot render the roster into the xray config ... read-only file system` in `journalctl -u xform`.
+2. **File permissions** — the `xform` user needs DAC write access to the directory: `setfacl -m u:xform:rwx /usr/local/etc/xray`. Symptom: the same log line, but `... permission denied`.
+
+Either wall alone blocks the apply — the add-user dialog answers "Apply failed — the change is stored and retries automatically" — and the stored change applies on its own once both are open (a config edit or xray restart re-triggers it). A non-default `XFORM_XRAY_CONFIG` needs its directory in both places.
 
 ### Journal namespace (log snapshots)
 
