@@ -186,6 +186,7 @@ type harness struct {
 	store    *fakeStore
 	renderer *fakeRenderer
 	pusher   *fakePusher
+	views    *fakeViews
 	status   *fakeStatus
 	changes  chan struct{}
 	events   *[]string
@@ -198,15 +199,17 @@ func newHarness(t *testing.T) *harness {
 		t.Fatalf("parse view: %v", err)
 	}
 	events := &[]string{}
+	views := &fakeViews{view: view}
 	h := &harness{
 		store:    newFakeStore(),
 		renderer: &fakeRenderer{events: events},
 		pusher:   &fakePusher{events: events},
+		views:    views,
 		status:   &fakeStatus{status: "running"},
 		changes:  make(chan struct{}, 1),
 		events:   events,
 	}
-	h.service = roster.NewService(h.store, fakeViews{view: view}, h.renderer, h.pusher, h.status, h.changes).
+	h.service = roster.NewService(h.store, views, h.renderer, h.pusher, h.status, h.changes).
 		WithSettleWait(2 * time.Second).
 		WithStatusPoll(10 * time.Millisecond)
 	ctx, cancel := context.WithCancel(context.Background())
@@ -676,5 +679,111 @@ func TestEditWhilePendingConvergesBothChanges(t *testing.T) {
 		if !slices.Contains(h.pusher.tags, tag) {
 			t.Errorf("pushed tags = %v, want %s covered", h.pusher.tags, tag)
 		}
+	}
+}
+
+// A failed rotate re-saved with the same (already stored) Client ID must
+// still push remove+add (§7 re-saving retries): xray holds the old
+// credential under the email, and a plain add would read "already exists"
+// as success — leaving the old ID authenticating forever (issue #54
+// review).
+func TestResaveOfAFailedRotateKeepsTheRemoveAddPair(t *testing.T) {
+	h := newHarness(t)
+	h.add(t, "alice@example.com", "1d37a118-4f1b-4dc0-9e3c-3426b07518df", []string{"vless-vision"})
+
+	// The first rotate fails at the remove half — xray unreachable — so the
+	// old credential stays live under the email.
+	h.pusher.removeErr = errors.New("connect: connection refused")
+	first := h.edit(t, "alice@example.com", roster.EditRequest{ClientID: "2d37a118-4f1b-4dc0-9e3c-3426b07518df"})
+	if first.Sync != roster.Failed {
+		t.Fatalf("first rotate sync = %q, want failed", first.Sync)
+	}
+
+	// xray returns; the admin re-saves the same values.
+	h.pusher.removeErr = nil
+	again := h.edit(t, "alice@example.com", roster.EditRequest{ClientID: "2d37a118-4f1b-4dc0-9e3c-3426b07518df"})
+	if again.Sync != roster.Synced {
+		t.Fatalf("re-save sync = %q, want synced", again.Sync)
+	}
+
+	// The re-save's pass must remove before adding again — a bare add would
+	// be swallowed by xray's "already exists" while the old credential
+	// keeps authenticating. The events log carries both attempts' removes.
+	removes := 0
+	for _, event := range *h.events {
+		if event == "remove" {
+			removes++
+		}
+	}
+	if removes != 2 {
+		t.Errorf("remove events = %d (events %v), want the failed attempt and the re-save's remove-before-add", removes, *h.events)
+	}
+	if states := h.service.UserStates(); len(states) != 0 {
+		t.Errorf("user states = %v, want clean", states)
+	}
+}
+
+// A failed detach re-saved with the same (already stored) empty set must
+// re-queue the detach (§7): consuming the pending change without applying
+// it would strand the roster failed forever and leave xray serving the
+// detached user (issue #54 review).
+func TestResaveOfAFailedDetachRetriesTheRemoval(t *testing.T) {
+	h := newHarness(t)
+	h.add(t, "alice@example.com", "1d37a118-4f1b-4dc0-9e3c-3426b07518df", []string{"vless-vision"})
+
+	h.pusher.removeErr = errors.New("connect: connection refused")
+	first := h.edit(t, "alice@example.com", roster.EditRequest{Inbounds: []string{}})
+	if first.Sync != roster.Failed {
+		t.Fatalf("first detach sync = %q, want failed", first.Sync)
+	}
+
+	h.pusher.removeErr = nil
+	again := h.edit(t, "alice@example.com", roster.EditRequest{Inbounds: []string{}})
+	if again.Sync != roster.Synced {
+		t.Fatalf("re-save sync = %q, want synced — the detach retries", again.Sync)
+	}
+
+	count := 0
+	for _, removed := range h.pusher.removed {
+		if removed == "alice@example.com off vless-vision" {
+			count++
+		}
+	}
+	if count < 2 {
+		t.Errorf("removals = %d, want the failed attempt and the re-save's retry", count)
+	}
+	if states := h.service.UserStates(); len(states) != 0 {
+		t.Errorf("user states = %v, want clean", states)
+	}
+}
+
+// A PATCH that keeps the stored selection (no inbounds field) must not be
+// blocked by a stored attachment the config has since dropped (§5 body
+// fields optional): the vanished tag is pruned from the record — the
+// inbound is gone from xray too — and the rest of the edit applies.
+func TestEditKeptSelectionPrunesVanishedInbounds(t *testing.T) {
+	h := newHarness(t)
+	h.add(t, "alice@example.com", "1d37a118-4f1b-4dc0-9e3c-3426b07518df", []string{"vless-vision"})
+	pushes := len(h.pusher.pushed)
+	removes := len(h.pusher.removed)
+
+	// The config loses vless-vision between the add and the edit — an empty
+	// inbound view is the cleanest stand-in.
+	h.views.view = xrayconfig.View{}
+
+	result := h.edit(t, "alice@example.com", roster.EditRequest{
+		ClientID: "2d37a118-4f1b-4dc0-9e3c-3426b07518df", // rotate only, inbounds kept
+	})
+	if result.Sync != roster.Synced {
+		t.Fatalf("sync = %q, want synced — nothing remains to apply", result.Sync)
+	}
+	if len(result.User.Inbounds) != 0 {
+		t.Errorf("record inbounds = %v, want the vanished tag pruned", result.User.Inbounds)
+	}
+	if result.User.ClientID != "2d37a118-4f1b-4dc0-9e3c-3426b07518df" {
+		t.Errorf("record Client ID = %q, want the rotated one", result.User.ClientID)
+	}
+	if len(h.pusher.pushed) != pushes || len(h.pusher.removed) != removes {
+		t.Errorf("pushes = %+v removes = %v — a vanished inbound is not a push target", h.pusher.pushed, h.pusher.removed)
 	}
 }

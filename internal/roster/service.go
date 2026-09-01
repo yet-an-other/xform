@@ -308,20 +308,28 @@ func (s *Service) Edit(ctx context.Context, email string, req EditRequest) (Muta
 	}
 
 	// The final attachment set, validated against the current inbound view
-	// with each attach flow resolved.
+	// with each attach flow resolved. A kept selection (no inbounds in the
+	// request) is pruned of tags the config no longer carries — a vanished
+	// inbound must not block the rest of the edit; the store simply stops
+	// claiming it (the inbound is gone from xray too).
 	view := s.views.View()
-	tags := before.Inbounds
-	if req.Inbounds != nil {
-		tags = dedupeOrder(req.Inbounds)
+	selection := req.Inbounds
+	if selection == nil {
+		selection = before.Inbounds // keep — pruned below of vanished tags
 	}
-	flows := make(map[string]string, len(tags))
-	finalOps := make([]pushOp, 0, len(tags))
-	for _, tag := range tags {
+	tags := make([]string, 0, len(selection))
+	flows := make(map[string]string, len(selection))
+	finalOps := make([]pushOp, 0, len(selection))
+	for _, tag := range selection {
 		inbound, ok := findManaged(view, tag)
 		if !ok {
+			if req.Inbounds == nil {
+				continue // a stored attachment the config dropped: prune it
+			}
 			return MutationResult{}, &ConflictError{Reason: ReasonUnknownInbound}
 		}
 		flow := xrayconfig.DefaultFlow(inbound)
+		tags = append(tags, tag)
 		flows[tag] = flow
 		finalOps = append(finalOps, pushOp{kind: opAttach, tag: tag, flow: flow})
 	}
@@ -330,12 +338,17 @@ func (s *Service) Edit(ctx context.Context, email string, req EditRequest) (Muta
 	if clientID != "" {
 		idPtr = &clientID
 	}
-	edit := users.RosterEdit{
-		ClientID: idPtr, Inbounds: nil,
-		Protocol: labelProtocol(view, finalOps), Security: labelSecurity(view, finalOps),
+	// The pruned before-record — only on the keep path: detached ops are
+	// diffed against what the config still carries, so a vanished tag never
+	// queues a push to an inbound xray no longer has. On the set path the
+	// diff needs the store's real before.
+	if req.Inbounds == nil {
+		before.Inbounds = tags
 	}
-	if req.Inbounds != nil {
-		edit.Inbounds = tags
+	edit := users.RosterEdit{
+		ClientID: idPtr,
+		Inbounds: tags,
+		Protocol: labelProtocol(view, finalOps), Security: labelSecurity(view, finalOps),
 	}
 	after, err := s.store.EditRosterUser(ctx, email, edit, s.now())
 	if errors.Is(err, users.ErrClientIDTaken) {
@@ -368,10 +381,11 @@ func (s *Service) takePending(email string) pendingChange {
 // diffOps plans the edit's operations: everything the running xray and the
 // file must do to carry the after record, given the before record and — for
 // merges — the previous change that never finished applying. With no
-// previous change the plan is the pure before/after diff; with one, every
-// finally-attached inbound gets the remove+add treatment, because whatever
-// partially landed must be overwritten, and a remove of an absent user
-// reads as applied (user-management spec §4, §7).
+// previous change the plan is the pure before/after diff. With one, tags
+// the unfinished change touched get the remove+add treatment (their push
+// may have half-landed) and its unfinished detaches are re-queued — a
+// remove of an absent user and an add of a present one both read as
+// applied, so retries converge (user-management spec §4, §7).
 func diffOps(before, after users.RosterRecord, flows map[string]string, prev pendingChange) []pushOp {
 	idChanged := before.ClientID != after.ClientID
 	attached := make(map[string]bool, len(before.Inbounds))
@@ -383,26 +397,43 @@ func diffOps(before, after users.RosterRecord, flows map[string]string, prev pen
 		kept[tag] = true
 	}
 
+	prevAttached := make(map[string]bool, len(prev.ops))
+	for _, op := range prev.ops {
+		if op.kind == opAttach || op.kind == opRotate {
+			prevAttached[op.tag] = true
+		}
+	}
+
 	var ops []pushOp
-	// First the leaves: tags the before record (or an unfinished change)
-	// had and the after record does not.
+	// First the leaves: tags the before record had — or an unfinished
+	// change still owed a change to — and the after record does not keep.
 	for _, tag := range before.Inbounds {
 		if !kept[tag] {
 			ops = append(ops, pushOp{kind: opDetach, tag: tag})
 		}
 	}
-	for _, op := range prev.ops { // an unfinished detach of an already-gone tag converges too
-		if (op.kind == opAttach || op.kind == opRotate) && !kept[op.tag] && !attached[op.tag] {
+	for _, op := range prev.ops {
+		// An unfinished detach is still owed (§7: re-saving retries): a
+		// remove of an already-gone user reads as applied, so re-queuing it
+		// converges whether or not the earlier attempt landed.
+		if op.kind == opDetach && !kept[op.tag] {
 			ops = append(ops, pushOp{kind: opDetach, tag: op.tag})
 		}
 	}
-	// Then the stays and joins.
+	// Then the stays and joins. A rotate (the spec's remove+add pair) is
+	// due wherever the running xray may hold a credential other than the
+	// after record's: an id change on a kept tag, or any tag an unfinished
+	// change touched — its push may have half-landed, and a bare add would
+	// be swallowed by xray's "already exists" while the old credential
+	// keeps authenticating.
 	merge := len(prev.ops) > 0
 	for _, tag := range after.Inbounds {
 		switch {
-		case (idChanged || (merge && prev.id != after.ClientID)) && attached[tag]:
+		case (idChanged && attached[tag]) || prevAttached[tag]:
 			ops = append(ops, pushOp{kind: opRotate, tag: tag, flow: flows[tag]})
-		case !attached[tag] || merge:
+		case !attached[tag] && !prevAttached[tag]:
+			ops = append(ops, pushOp{kind: opAttach, tag: tag, flow: flows[tag]})
+		case merge: // a stayed tag whose earlier change never finished: re-push
 			ops = append(ops, pushOp{kind: opAttach, tag: tag, flow: flows[tag]})
 		}
 	}

@@ -228,13 +228,7 @@ func New(snapshots hostStatsSnapshots, xray xrayStatuses, usersSource usersSnaps
 			return
 		}
 		result, err := rosterSource.Add(request.Context(), body.Email, body.ClientID, body.Inbounds)
-		var conflict *roster.ConflictError
-		if errors.As(err, &conflict) {
-			writeJSON(response, http.StatusConflict, map[string]string{"error": conflict.Reason})
-			return
-		}
-		if err != nil {
-			writeJSON(response, http.StatusInternalServerError, map[string]string{"error": "roster unavailable"})
+		if writeMutationError(response, err) {
 			return
 		}
 		writeJSON(response, http.StatusCreated, mutationResponse{User: result.User, RosterSync: result.Sync})
@@ -251,18 +245,7 @@ func New(snapshots hostStatsSnapshots, xray xrayStatuses, usersSource usersSnaps
 		result, err := rosterSource.Edit(request.Context(), request.PathValue("email"), roster.EditRequest{
 			ClientID: body.ClientID, Inbounds: body.Inbounds,
 		})
-		var conflict *roster.ConflictError
-		if errors.As(err, &conflict) {
-			writeJSON(response, http.StatusConflict, map[string]string{"error": conflict.Reason})
-			return
-		}
-		var missing *roster.NotFoundError
-		if errors.As(err, &missing) {
-			writeJSON(response, http.StatusNotFound, map[string]string{"error": "not_found"})
-			return
-		}
-		if err != nil {
-			writeJSON(response, http.StatusInternalServerError, map[string]string{"error": "roster unavailable"})
+		if writeMutationError(response, err) {
 			return
 		}
 		writeJSON(response, http.StatusOK, mutationResponse{User: result.User, RosterSync: result.Sync})
@@ -326,6 +309,28 @@ type usersResponse struct {
 type mutationResponse struct {
 	User       roster.Record    `json:"user"`
 	RosterSync roster.SyncState `json:"roster_sync"`
+}
+
+// writeMutationError maps one roster mutation error onto the mutation
+// API's answers (user-management spec §5): a conflict keeps its
+// machine-readable reason for the dialog, a missing record is a 404, and
+// anything else is a 500. Reports whether it wrote an error response.
+func writeMutationError(response http.ResponseWriter, err error) bool {
+	var conflict *roster.ConflictError
+	if errors.As(err, &conflict) {
+		writeJSON(response, http.StatusConflict, map[string]string{"error": conflict.Reason})
+		return true
+	}
+	var missing *roster.NotFoundError
+	if errors.As(err, &missing) {
+		writeJSON(response, http.StatusNotFound, map[string]string{"error": "not_found"})
+		return true
+	}
+	if err != nil {
+		writeJSON(response, http.StatusInternalServerError, map[string]string{"error": "roster unavailable"})
+		return true
+	}
+	return false
 }
 
 // sameSiteOnly is the mutation CSRF guard (user-management spec §5): the

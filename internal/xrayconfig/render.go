@@ -108,9 +108,7 @@ func RenderClients(document []byte, plan RenderPlan) (rendered []byte, changed b
 
 		for _, email := range removes {
 			if index, ok := byEmail[email]; ok {
-				if edit, ok := planEntryRemoval(document, clients, index); ok {
-					edits = append(edits, edit)
-				}
+				edits = append(edits, planEntryRemoval(document, clients, index))
 			}
 		}
 
@@ -167,21 +165,21 @@ type insertion struct {
 // separator comma — the following one for a non-last entry (swallowing
 // whatever trails it up to the next entry), the preceding one for a last
 // entry (so no dangling comma is introduced), nothing extra for the only
-// entry. ok is false only when the comma bookkeeping cannot add up.
-func planEntryRemoval(document []byte, clients *node, index int) (textEdit, bool) {
+// entry.
+func planEntryRemoval(document []byte, clients *node, index int) textEdit {
 	entry := clients.items[index]
 	if index < len(clients.items)-1 {
 		// A non-last entry has a following separator; deleting through the
 		// next entry's start also takes any trailing comment.
-		return textEdit{at: entry.start, end: clients.items[index+1].start}, true
+		return textEdit{at: entry.start, end: clients.items[index+1].start}
 	}
 	if index < len(clients.commas) { // trailing comma after the last entry
-		return textEdit{at: entry.start, end: clients.commas[index] + 1}, true
+		return textEdit{at: entry.start, end: clients.commas[index] + 1}
 	}
 	if index > 0 { // last entry, preceded by its separator
-		return textEdit{at: clients.commas[index-1], end: entry.end}, true
+		return textEdit{at: clients.commas[index-1], end: entry.end}
 	}
-	return textEdit{at: entry.start, end: entry.end}, true // the only entry
+	return textEdit{at: entry.start, end: entry.end} // the only entry
 }
 
 // planIDSet plans an in-place Client ID rewrite: the id value's bytes are
