@@ -89,6 +89,8 @@ ssh root@HOST 'chgrp xform /usr/local/etc/xray/config.json && chmod 0640 /usr/lo
 
 or via an ACL: `setfacl -m u:xform:r /usr/local/etc/xray/config.json`. Either way the file's directory (`/usr/local/etc/xray`, typically `0755`) must stay traversable by the `xform` system user.
 
+**xray config write access (user management)**: roster applies rewrite the config file — a temp file in the same directory, then rename — so the `xform` user needs write access to the directory itself: `setfacl -m u:xform:rwx /usr/local/etc/xray`. Without it, mutations store but the apply stays failed (`cannot render the roster into the xray config ... permission denied` in the panel log, `journalctl -u xform`); grant the ACL and the next config edit or xray restart retries the stored change through.
+
 ### Journal namespace (log snapshots)
 
 The panel's Log snapshot viewers read the journal as the unprivileged `xform`
@@ -130,11 +132,11 @@ xray must expose per-user and system stats to its loopback gRPC API (without the
       "statsOutboundUplink": true, "statsOutboundDownlink": true
     }
   },
-  "api": { "tag": "api", "listen": "127.0.0.1:8080", "services": ["StatsService"] }
+  "api": { "tag": "api", "listen": "127.0.0.1:8080", "services": ["StatsService", "HandlerService"] }
 }
 ```
 
-Every user must have an `email` in the xray config — per-user stats don't exist without it. Keep xray's gRPC API on loopback: it has no auth/TLS, so loopback binding plus StatsService-only is the entire security model. xray-core ≥ v26.4.13 is recommended; presence (online status, IPs) needs ≥ v26.1.13 (`GetAllOnlineUsers`) — on older servers it is omitted gracefully.
+Every user must have an `email` in the xray config — per-user stats don't exist without it. Keep xray's gRPC API on loopback: it has no auth/TLS, so loopback binding is the entire security model. `HandlerService` is what user management applies through — the panel pushes roster changes to the running xray over it, no restart. Leave it out and every mutation still stores, but the apply stays failed: the add-user dialog answers "Apply failed — the change is stored and retries automatically", and the panel log carries `cannot push a roster add to xray ... Unimplemented`. Hosts set up before user management (v1.2.0) list `StatsService` alone — add `HandlerService` beside it and restart xray; the stored change applies on its own. xray-core ≥ v26.4.13 is recommended; presence (online status, IPs) needs ≥ v26.1.13 (`GetAllOnlineUsers`) — on older servers it is omitted gracefully.
 
 Presence also needs **real client IPs reaching xray**: xray's online tracking deliberately ignores loopback sources (`127.0.0.1`/`::1`). If a userspace forwarder terminates the public port and passes connections to xray over loopback (e.g. an nginx stream block proxying to `127.0.0.1:20001`), every client looks like localhost and the online list stays empty. The fix is PROXY protocol end-to-end: `proxy_protocol on;` on the forwarder and `"sockopt": {"acceptProxyProtocol": true}` in the xray inbound's `streamSettings`.
 
