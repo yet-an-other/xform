@@ -45,7 +45,7 @@ type usersSnapshots interface {
 type rosterMutations interface {
 	Add(ctx context.Context, email, clientID string, inbounds []string) (roster.AddResult, error)
 	Sync() roster.SyncState
-	UserStates() map[string]string
+	UserStates() map[string]roster.ApplyState
 	InboundOptions() []roster.InboundOption
 }
 
@@ -205,7 +205,7 @@ func New(snapshots hostStatsSnapshots, xray xrayStatuses, usersSource usersSnaps
 		states := rosterSource.UserStates()
 		rows := make([]userRow, len(snapshot.Users))
 		for index, user := range snapshot.Users {
-			rows[index] = userRow{User: user, ApplyState: states[user.Email]}
+			rows[index] = userRow{User: user, ApplyState: string(states[user.Email])}
 		}
 		writeJSON(response, http.StatusOK, usersResponse{
 			CollectedAt: snapshot.CollectedAt,

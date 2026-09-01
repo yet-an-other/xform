@@ -26,7 +26,7 @@ type stubRoster struct {
 	called    bool
 
 	sync      roster.SyncState
-	userState map[string]string
+	userState map[string]roster.ApplyState
 	options   []roster.InboundOption
 }
 
@@ -43,7 +43,7 @@ func (s *stubRoster) Sync() roster.SyncState {
 	return s.sync
 }
 
-func (s *stubRoster) UserStates() map[string]string { return s.userState }
+func (s *stubRoster) UserStates() map[string]roster.ApplyState { return s.userState }
 
 func (s *stubRoster) InboundOptions() []roster.InboundOption { return s.options }
 
@@ -136,10 +136,10 @@ func TestAddUserRejectsMalformedBodies(t *testing.T) {
 // close the remaining gaps.
 func TestAddUserRejectsCrossSiteRequests(t *testing.T) {
 	for _, test := range []struct {
-		name     string
-		origin   string
+		name      string
+		origin    string
 		fetchSite string
-		want     int
+		want      int
 	}{
 		{"no headers (same-origin browser form, curl)", "", "", http.StatusCreated},
 		{"same-origin Origin", "http://panel.example.com", "", http.StatusCreated},
@@ -192,7 +192,7 @@ func TestAddUserRequiresASession(t *testing.T) {
 func TestUsersEndpointCarriesTheRosterWriteState(t *testing.T) {
 	rosterSource := &stubRoster{
 		sync:      roster.Failed,
-		userState: map[string]string{"alice@example.com": roster.ApplyFailed},
+		userState: map[string]roster.ApplyState{"alice@example.com": roster.ApplyFailed},
 		options:   []roster.InboundOption{{Tag: "vless-vision", Label: "VLESS · Reality · tcp :443"}},
 	}
 	handler := api.New(

@@ -33,12 +33,14 @@ const (
 	Failed  SyncState = "failed"
 )
 
-// ApplyPending / ApplyFailed are the per-user write-side marks carried on
-// the users rows: a change not yet applied, and a change whose last apply
-// failed. Absent means applied.
+// ApplyState is one user's write-side mark: ApplyPending while its change
+// is stored but not yet applied, ApplyFailed when the last apply failed.
+// Absent means applied.
+type ApplyState string
+
 const (
-	ApplyPending = "pending"
-	ApplyFailed  = "failed"
+	ApplyPending ApplyState = "pending"
+	ApplyFailed  ApplyState = "failed"
 )
 
 // ConflictError is a mutation validation violation (user-management spec
@@ -147,14 +149,16 @@ type Service struct {
 // successful-load channel — a retry trigger.
 func NewService(store Store, views ViewSource, renderer Renderer, pusher Pusher, status StatusSource, changes <-chan struct{}) *Service {
 	return &Service{
-		store:      store,
-		views:      views,
-		renderer:   renderer,
-		pusher:     pusher,
-		status:     status,
-		changes:    changes,
-		now:        time.Now,
-		settleWait: 3 * time.Second,
+		store:    store,
+		views:    views,
+		renderer: renderer,
+		pusher:   pusher,
+		status:   status,
+		changes:  changes,
+		now:      time.Now,
+		// Longer than the pusher's own timeout, so a black-holed xray still
+		// answers failed rather than pending.
+		settleWait: 5 * time.Second,
 		statusPoll: time.Second,
 		pending:    map[string]pendingAdd{},
 		failed:     map[string]bool{},
@@ -196,20 +200,22 @@ func (s *Service) Add(ctx context.Context, email, clientID string, inbounds []st
 	clientID = strings.TrimSpace(clientID)
 	if clientID == "" {
 		clientID = uuid.NewString()
-	} else if _, err := uuid.Parse(clientID); err != nil {
-		return AddResult{}, &ConflictError{Reason: ReasonClientIDInvalid}
+	} else {
+		parsed, err := uuid.Parse(clientID)
+		if err != nil {
+			return AddResult{}, &ConflictError{Reason: ReasonClientIDInvalid}
+		}
+		// Canonical form, so the store's uniqueness check cannot be dodged
+		// by an equivalent-but-different spelling of the same UUID.
+		clientID = parsed.String()
 	}
 
 	// Validate the selection against the current inbound view and resolve
 	// the per-inbound attach flow (user-management spec §4).
 	view := s.views.View()
-	var ops []pushOp
-	seen := map[string]bool{}
-	for _, tag := range inbounds {
-		if seen[tag] {
-			continue
-		}
-		seen[tag] = true
+	tags := dedupeOrder(inbounds)
+	ops := make([]pushOp, 0, len(tags))
+	for _, tag := range tags {
 		inbound, ok := findManaged(view, tag)
 		if !ok {
 			return AddResult{}, &ConflictError{Reason: ReasonUnknownInbound}
@@ -218,8 +224,8 @@ func (s *Service) Add(ctx context.Context, email, clientID string, inbounds []st
 	}
 
 	record, err := s.store.AddRosterUser(ctx, users.NewRosterUser{
-		Email: email, ClientID: clientID, Inbounds: seenOrder(inbounds),
-		Protocol: labelProtocol(view, seen), Security: labelSecurity(view, seen, ops),
+		Email: email, ClientID: clientID, Inbounds: tags,
+		Protocol: labelProtocol(view, ops), Security: labelSecurity(view, ops),
 	}, s.now())
 	if errors.Is(err, users.ErrEmailTaken) {
 		return AddResult{}, &ConflictError{Reason: ReasonEmailTaken}
@@ -266,10 +272,10 @@ func (s *Service) syncLocked() SyncState {
 
 // UserStates maps each user with an unapplied change to its write-side mark
 // — pending or failed. Applied users are absent.
-func (s *Service) UserStates() map[string]string {
+func (s *Service) UserStates() map[string]ApplyState {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	states := make(map[string]string, len(s.pending))
+	states := make(map[string]ApplyState, len(s.pending))
 	for email := range s.pending {
 		states[email] = ApplyPending
 	}
@@ -279,12 +285,12 @@ func (s *Service) UserStates() map[string]string {
 	return states
 }
 
-// InboundOptions is the add dialog's attachable set: the tagged VLESS
-// inbounds, in config order, with their option labels.
+// InboundOptions is the add dialog's attachable set: the managed inbounds,
+// in config order, with their option labels.
 func (s *Service) InboundOptions() []InboundOption {
 	options := []InboundOption{}
 	for _, inbound := range s.views.View().Inbounds() {
-		if inbound.Tag == "" || !strings.EqualFold(inbound.Protocol, "vless") {
+		if !xrayconfig.Managed(inbound) {
 			continue
 		}
 		options = append(options, InboundOption{Tag: inbound.Tag, Label: optionLabel(inbound)})
@@ -340,15 +346,18 @@ func (s *Service) retry(ctx context.Context) {
 	}
 }
 
-// apply runs one pass: every pending add renders into the config file first,
-// then pushes live per inbound. A render failure marks every pending user
-// failed — without the file the push would create a restart-losing split.
-// Push failures mark only their own user; xray's duplicate-email answer is
-// the pusher's success, so retries converge.
+// apply runs one pass on one snapshot of the pending adds — the render and
+// the pushes work the same set, so the file always leads the live server.
+// A render failure marks every pending user failed — without the file the
+// push would create a restart-losing split. Push failures mark only their
+// own user; xray's duplicate-email answer is the pusher's success, so
+// retries converge.
 func (s *Service) apply(ctx context.Context) {
 	s.mu.Lock()
+	pending := make(map[string]pendingAdd, len(s.pending))
 	adds := map[string][]xrayconfig.NewClient{}
 	for email, add := range s.pending {
+		pending[email] = add
 		for _, op := range add.ops {
 			adds[op.tag] = append(adds[op.tag], xrayconfig.NewClient{Email: email, ID: add.id, Flow: op.flow})
 		}
@@ -362,7 +371,7 @@ func (s *Service) apply(ctx context.Context) {
 	if _, err := s.renderer.Render(ctx, adds); err != nil {
 		s.logFailure("cannot render the roster into the xray config; the apply stays failed", err)
 		s.mu.Lock()
-		for email := range s.pending {
+		for email := range pending {
 			s.failed[email] = true
 		}
 		s.mu.Unlock()
@@ -370,12 +379,6 @@ func (s *Service) apply(ctx context.Context) {
 		return
 	}
 
-	s.mu.Lock()
-	pending := make(map[string]pendingAdd, len(s.pending))
-	for email, add := range s.pending {
-		pending[email] = add
-	}
-	s.mu.Unlock()
 	for email, add := range pending {
 		failed := false
 		for _, op := range add.ops {
@@ -394,6 +397,11 @@ func (s *Service) apply(ctx context.Context) {
 		}
 		s.mu.Unlock()
 	}
+	s.mu.Lock()
+	if len(s.pending) == 0 && len(s.failed) == 0 {
+		s.lastApplyErr = "" // healthy again: the next failure logs fresh
+	}
+	s.mu.Unlock()
 	s.broadcast()
 }
 
@@ -443,18 +451,18 @@ func (s *Service) logFailure(msg string, err error) {
 	slog.Warn(msg, "error", err)
 }
 
-// findManaged resolves the tag to a tagged VLESS inbound — the managed set.
+// findManaged resolves the tag to a managed inbound — tagged and VLESS.
 func findManaged(view xrayconfig.View, tag string) (xrayconfig.Inbound, bool) {
 	for _, inbound := range view.Inbounds() {
-		if inbound.Tag == tag && strings.EqualFold(inbound.Protocol, "vless") {
+		if inbound.Tag == tag && xrayconfig.Managed(inbound) {
 			return inbound, true
 		}
 	}
 	return xrayconfig.Inbound{}, false
 }
 
-// seenOrder dedupes the selection preserving its order.
-func seenOrder(inbounds []string) []string {
+// dedupeOrder dedupes the selection preserving its order.
+func dedupeOrder(inbounds []string) []string {
 	seen := map[string]bool{}
 	ordered := make([]string, 0, len(inbounds))
 	for _, tag := range inbounds {
@@ -470,26 +478,37 @@ func seenOrder(inbounds []string) []string {
 // config parse resyncs them: the first attached inbound in config order,
 // exactly as the parser's labels rule. No attachment means no labels — the
 // store writes NULLs.
-func labelProtocol(view xrayconfig.View, selected map[string]bool) string {
-	for _, inbound := range view.Inbounds() {
-		if selected[inbound.Tag] && strings.EqualFold(inbound.Protocol, "vless") {
-			return strings.ToUpper(inbound.Protocol)
-		}
+func labelProtocol(view xrayconfig.View, ops []pushOp) string {
+	if inbound, ok := firstAttached(view, ops); ok {
+		return strings.ToUpper(inbound.Protocol)
 	}
 	return ""
 }
 
-func labelSecurity(view xrayconfig.View, selected map[string]bool, ops []pushOp) string {
+func labelSecurity(view xrayconfig.View, ops []pushOp) string {
+	inbound, ok := firstAttached(view, ops)
+	if !ok {
+		return ""
+	}
 	flows := make(map[string]string, len(ops))
 	for _, op := range ops {
 		flows[op.tag] = op.flow
 	}
+	return xrayconfig.SecurityLabel(inbound.Security.Type, flows[inbound.Tag])
+}
+
+// firstAttached finds the first attached inbound in config order.
+func firstAttached(view xrayconfig.View, ops []pushOp) (xrayconfig.Inbound, bool) {
+	attached := make(map[string]bool, len(ops))
+	for _, op := range ops {
+		attached[op.tag] = true
+	}
 	for _, inbound := range view.Inbounds() {
-		if selected[inbound.Tag] && strings.EqualFold(inbound.Protocol, "vless") {
-			return xrayconfig.SecurityLabel(inbound.Security.Type, flows[inbound.Tag])
+		if attached[inbound.Tag] && xrayconfig.Managed(inbound) {
+			return inbound, true
 		}
 	}
-	return ""
+	return xrayconfig.Inbound{}, false
 }
 
 // optionLabel composes the multi-select option text (user-management

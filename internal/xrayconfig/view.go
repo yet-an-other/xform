@@ -1,6 +1,9 @@
 package xrayconfig
 
-import "slices"
+import (
+	"slices"
+	"strings"
+)
 
 // View is an immutable, ordered parse of the xray inbounds used to evaluate
 // Connection profiles. Its accessors return copies, so callers cannot change
@@ -42,6 +45,13 @@ func (i Inbound) clone() Inbound {
 	i.users = slices.Clone(i.users)
 	i.Security = i.Security.clone()
 	return i
+}
+
+// Managed reports whether the panel manages this inbound: tagged (an
+// untagged inbound can never be addressed by the roster) and VLESS (the
+// protocol the panel manages).
+func Managed(inbound Inbound) bool {
+	return inbound.Tag != "" && strings.EqualFold(inbound.Protocol, "vless")
 }
 
 // DefaultFlow is the flow a newly attached client gets on this inbound
