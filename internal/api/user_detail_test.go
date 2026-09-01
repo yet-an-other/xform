@@ -43,6 +43,7 @@ func TestUserDetailReturnsKnownUserAndProfileState(t *testing.T) {
 		fixedProfileSources{sources: profiles.Sources{
 			XrayView: view, XrayAvailable: true, XrayLoadedAt: loadedAt,
 		}},
+		&stubRoster{},
 		api.OperationalSources{},
 		session.NewManager(testPassword, time.Now),
 		http.NotFoundHandler(),
@@ -95,6 +96,7 @@ func TestUserDetailPreservesUsersEndpointNullabilityAndOmissions(t *testing.T) {
 		fixedHostStats{}, fixedXrayStatus{},
 		fixedUsers{snapshot: users.Snapshot{Users: []users.User{{Email: "alice@example.com", FirstSeen: 123}}}},
 		fixedProfileSources{sources: profiles.Sources{XrayView: view, XrayAvailable: true}},
+		&stubRoster{},
 		api.OperationalSources{}, session.NewManager(testPassword, time.Now), http.NotFoundHandler(), testPanelInfo,
 	)
 	request := httptest.NewRequest(http.MethodGet, "/api/v1/users/alice%40example.com", nil)
@@ -137,6 +139,7 @@ func TestUserDetailPreservesEncodedEmailIdentityAtRootAndSubpath(t *testing.T) {
 			{Email: "once%2F@example.com", IPs: []string{}},
 		}}},
 		fixedProfileSources{sources: profiles.Sources{XrayView: view, XrayAvailable: true}},
+		&stubRoster{},
 		api.OperationalSources{}, session.NewManager(testPassword, time.Now), http.NotFoundHandler(), testPanelInfo,
 	)
 	cookie := login(t, handler, testPassword)
@@ -188,6 +191,7 @@ func TestUserDetailPreservesEncodedEmailIdentityAtRootAndSubpath(t *testing.T) {
 func TestUserDetailRequiresSessionWithoutCachingOrCORS(t *testing.T) {
 	handler := api.New(
 		fixedHostStats{}, fixedXrayStatus{}, fixedUsers{}, fixedProfileSources{},
+		&stubRoster{},
 		api.OperationalSources{}, session.NewManager(testPassword, time.Now), http.NotFoundHandler(), testPanelInfo,
 	)
 	request := httptest.NewRequest(http.MethodGet, "/api/v1/users/alice%40example.com", nil)
@@ -218,6 +222,7 @@ func TestUserDetailUses404OnlyForUnknownUsersAnd500ForInternalFailure(t *testing
 		t.Run(test.name, func(t *testing.T) {
 			handler := api.New(
 				fixedHostStats{}, fixedXrayStatus{}, test.users, fixedProfileSources{},
+				&stubRoster{},
 				api.OperationalSources{}, session.NewManager(testPassword, time.Now), http.NotFoundHandler(), testPanelInfo,
 			)
 			request := httptest.NewRequest(http.MethodGet, "/api/v1/users/unknown%40example.com", nil)
@@ -242,7 +247,7 @@ func TestUserDetailUses404OnlyForUnknownUsersAnd500ForInternalFailure(t *testing
 func TestUserDetailRejectsMalformedPercentEncoding(t *testing.T) {
 	handler := api.New(
 		fixedHostStats{}, fixedXrayStatus{}, fixedUsers{snapshot: users.Snapshot{Users: []users.User{}}},
-		fixedProfileSources{}, api.OperationalSources{}, session.NewManager(testPassword, time.Now), http.NotFoundHandler(), testPanelInfo,
+		fixedProfileSources{}, &stubRoster{}, api.OperationalSources{}, session.NewManager(testPassword, time.Now), http.NotFoundHandler(), testPanelInfo,
 	)
 	request := httptest.NewRequest(http.MethodGet, "/api/v1/users/placeholder", nil)
 	// net/http rejects a malformed request target before dispatch. Mutate the
@@ -329,7 +334,7 @@ func TestUserDetailKeepsObservationAndProfileFreshnessIndependent(t *testing.T) 
 			handler := api.New(
 				fixedHostStats{}, fixedXrayStatus{},
 				fixedUsers{snapshot: users.Snapshot{Stale: test.observationStale, Users: []users.User{{Email: "alice@example.com", IPs: []string{}}}}},
-				fixedProfileSources{sources: test.sources}, api.OperationalSources{}, session.NewManager(testPassword, time.Now),
+				fixedProfileSources{sources: test.sources}, &stubRoster{}, api.OperationalSources{}, session.NewManager(testPassword, time.Now),
 				http.NotFoundHandler(), testPanelInfo,
 			)
 			request := httptest.NewRequest(http.MethodGet, "/api/v1/users/alice%40example.com", nil)
@@ -423,7 +428,7 @@ func TestUserDetailSerializesEveryUserLevelProfileState(t *testing.T) {
 					Email: "alice@example.com", Gone: test.gone, UpBytesTotal: 123, DownBytesTotal: 456,
 					Online: true, IPs: []string{"203.0.113.10"},
 				}}}},
-				fixedProfileSources{sources: test.sources}, api.OperationalSources{}, session.NewManager(testPassword, time.Now),
+				fixedProfileSources{sources: test.sources}, &stubRoster{}, api.OperationalSources{}, session.NewManager(testPassword, time.Now),
 				http.NotFoundHandler(), testPanelInfo,
 			)
 			request := httptest.NewRequest(http.MethodGet, "/api/v1/users/alice%40example.com", nil)
@@ -500,6 +505,7 @@ func TestUserDetailSerializesAvailableAndUnavailableProfileUnions(t *testing.T) 
 			XrayView: xrayView, XrayAvailable: true,
 			AdvertisementsView: advertisedView, AdvertisementsConfigured: true, AdvertisementsAvailable: true,
 		}},
+		&stubRoster{},
 		api.OperationalSources{}, session.NewManager(testPassword, time.Now), http.NotFoundHandler(), testPanelInfo,
 	)
 

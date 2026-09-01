@@ -4,13 +4,17 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
+	"net/url"
+	"strings"
 	"time"
 
 	"github.com/yet-an-other/xform/internal/configsnapshot"
 	"github.com/yet-an-other/xform/internal/hoststats"
 	"github.com/yet-an-other/xform/internal/journal"
 	"github.com/yet-an-other/xform/internal/profiles"
+	"github.com/yet-an-other/xform/internal/roster"
 	"github.com/yet-an-other/xform/internal/session"
 	"github.com/yet-an-other/xform/internal/users"
 	"github.com/yet-an-other/xform/internal/xraystatus"
@@ -32,6 +36,17 @@ type xrayStatuses interface {
 
 type usersSnapshots interface {
 	Latest(context.Context) (users.Snapshot, error)
+}
+
+// rosterMutations is the Roster's write side behind the mutation API
+// (user-management spec §5): the add mutation, plus the state the users
+// endpoint merges into its reads — the Roster sync state, the per-user
+// apply marks, and the add dialog's inbound options.
+type rosterMutations interface {
+	Add(ctx context.Context, email, clientID string, inbounds []string) (roster.AddResult, error)
+	Sync() roster.SyncState
+	UserStates() map[string]string
+	InboundOptions() []roster.InboundOption
 }
 
 type connectionProfileSources interface {
@@ -94,7 +109,8 @@ type xrayResponse struct {
 // New returns the HTTP handler for the API and dashboard. Every /api/ route
 // except login and healthz requires a session (SPEC.md §5); the dashboard
 // itself loads openly and lets the SPA route to its login page on 401.
-func New(snapshots hostStatsSnapshots, xray xrayStatuses, usersSource usersSnapshots, profileSources connectionProfileSources, operational OperationalSources, sessions sessionManager, dashboard http.Handler, panel PanelInfo) http.Handler {
+// Mutations additionally reject cross-site requests (user-management spec §5).
+func New(snapshots hostStatsSnapshots, xray xrayStatuses, usersSource usersSnapshots, profileSources connectionProfileSources, rosterSource rosterMutations, operational OperationalSources, sessions sessionManager, dashboard http.Handler, panel PanelInfo) http.Handler {
 	noStore := func(next http.HandlerFunc) http.HandlerFunc {
 		return func(response http.ResponseWriter, request *http.Request) {
 			response.Header().Set("Cache-Control", "no-store")
@@ -184,8 +200,43 @@ func New(snapshots hostStatsSnapshots, xray xrayStatuses, usersSource usersSnaps
 			return
 		}
 
-		writeJSON(response, http.StatusOK, snapshot)
+		// The write side rides the same payload: the Roster sync state, the
+		// per-user apply marks, and the add dialog's inbound options.
+		states := rosterSource.UserStates()
+		rows := make([]userRow, len(snapshot.Users))
+		for index, user := range snapshot.Users {
+			rows[index] = userRow{User: user, ApplyState: states[user.Email]}
+		}
+		writeJSON(response, http.StatusOK, usersResponse{
+			CollectedAt: snapshot.CollectedAt,
+			Stale:       snapshot.Stale,
+			Users:       rows,
+			RosterSync:  rosterSource.Sync(),
+			Inbounds:    rosterSource.InboundOptions(),
+		})
 	}))
+	mux.HandleFunc("POST /api/v1/users", noStore(requireSession(sameSiteOnly(func(response http.ResponseWriter, request *http.Request) {
+		var body struct {
+			Email    string   `json:"email"`
+			ClientID string   `json:"client_id"`
+			Inbounds []string `json:"inbounds"`
+		}
+		if err := json.NewDecoder(request.Body).Decode(&body); err != nil {
+			writeJSON(response, http.StatusBadRequest, map[string]string{"error": "invalid_request"})
+			return
+		}
+		result, err := rosterSource.Add(request.Context(), body.Email, body.ClientID, body.Inbounds)
+		var conflict *roster.ConflictError
+		if errors.As(err, &conflict) {
+			writeJSON(response, http.StatusConflict, map[string]string{"error": conflict.Reason})
+			return
+		}
+		if err != nil {
+			writeJSON(response, http.StatusInternalServerError, map[string]string{"error": "roster unavailable"})
+			return
+		}
+		writeJSON(response, http.StatusCreated, addUserResponse{User: result.User, RosterSync: result.Sync})
+	}))))
 	mux.HandleFunc("GET /api/v1/users/{email}", noStore(requireSession(func(response http.ResponseWriter, request *http.Request) {
 		if malformedUserEmailEscape(request.RequestURI) {
 			writeJSON(response, http.StatusBadRequest, map[string]string{"error": "invalid_request"})
@@ -221,6 +272,53 @@ func New(snapshots hostStatsSnapshots, xray xrayStatuses, usersSource usersSnaps
 	}))
 	mux.Handle("/", dashboard)
 	return mux
+}
+
+// userRow is one users-table row plus its write-side mark: pending while
+// its change applies, failed when the last apply failed; absent when applied.
+type userRow struct {
+	users.User
+	ApplyState string `json:"apply_state,omitempty"`
+}
+
+// usersResponse is GET /api/v1/users: the observed snapshot plus the Roster
+// write side (user-management spec §5–§6).
+type usersResponse struct {
+	CollectedAt int64                  `json:"collected_at"`
+	Stale       bool                   `json:"stale"`
+	Users       []userRow              `json:"users"`
+	RosterSync  roster.SyncState       `json:"roster_sync"`
+	Inbounds    []roster.InboundOption `json:"inbounds"`
+}
+
+// addUserResponse is POST /api/v1/users: the stored roster record plus the
+// Roster sync state once the first apply settled.
+type addUserResponse struct {
+	User       roster.Record    `json:"user"`
+	RosterSync roster.SyncState `json:"roster_sync"`
+}
+
+// sameSiteOnly is the mutation CSRF guard (user-management spec §5): the
+// SameSite=Lax session cookie already keeps cross-site POSTs from carrying a
+// session, and mutations additionally reject requests whose Origin or
+// Sec-Fetch-Site says cross-site. No token ceremony.
+func sameSiteOnly(next http.HandlerFunc) http.HandlerFunc {
+	return func(response http.ResponseWriter, request *http.Request) {
+		if origin := request.Header.Get("Origin"); origin != "" {
+			parsed, err := url.Parse(origin)
+			if err != nil || !strings.EqualFold(parsed.Host, request.Host) {
+				writeJSON(response, http.StatusForbidden, map[string]string{"error": "forbidden"})
+				return
+			}
+		}
+		switch site := request.Header.Get("Sec-Fetch-Site"); site {
+		case "", "same-origin", "same-site", "none":
+		default:
+			writeJSON(response, http.StatusForbidden, map[string]string{"error": "forbidden"})
+			return
+		}
+		next(response, request)
+	}
 }
 
 // setSessionCookie issues the session cookie per SPEC.md §5: HttpOnly,

@@ -22,6 +22,7 @@ func (v View) Inbounds() []Inbound {
 type Inbound struct {
 	Tag        string
 	Protocol   string
+	Port       string // listen port as written ("443", "1000-2000"), "" when absent
 	Flow       string
 	Decryption string
 	Transport  TransportSettings
@@ -41,6 +42,24 @@ func (i Inbound) clone() Inbound {
 	i.users = slices.Clone(i.users)
 	i.Security = i.Security.clone()
 	return i
+}
+
+// DefaultFlow is the flow a newly attached client gets on this inbound
+// (user-management spec §4): the first existing client's flow, or — with no
+// clients to copy — xtls-rprx-vision on REALITY tcp/xhttp inbounds and empty
+// elsewhere.
+func DefaultFlow(inbound Inbound) string {
+	if users := inbound.Users(); len(users) > 0 {
+		return users[0].Flow
+	}
+	if inbound.Security.Type != "reality" {
+		return ""
+	}
+	switch inbound.Transport.Type {
+	case "tcp", "raw", "xhttp", "splithttp":
+		return "xtls-rprx-vision"
+	}
+	return ""
 }
 
 // InboundUser is one email-bearing User entry from an inbound.

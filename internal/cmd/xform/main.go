@@ -20,6 +20,7 @@ import (
 	"github.com/yet-an-other/xform/internal/hoststats"
 	"github.com/yet-an-other/xform/internal/journal"
 	"github.com/yet-an-other/xform/internal/profiles"
+	"github.com/yet-an-other/xform/internal/roster"
 	"github.com/yet-an-other/xform/internal/session"
 	"github.com/yet-an-other/xform/internal/users"
 	"github.com/yet-an-other/xform/internal/xrayconfig"
@@ -85,6 +86,18 @@ func main() {
 		5*time.Second,
 	)
 	usersCache.Start(shutdownSignal)
+	// The Roster write path (user-management spec §4): mutations store first,
+	// then render into the config file and push live, retrying on every
+	// config-watch fire and xray status transition.
+	rosterService := roster.NewService(
+		store,
+		configViewSource{watcher: configWatcher},
+		roster.FileRenderer{Path: cfg.XrayConfigPath},
+		xraygrpc.HandlerClient{Address: cfg.XrayAPIAddress},
+		xrayStatus,
+		configWatcher.Changes(),
+	)
+	rosterService.Start(shutdownSignal)
 	sessions := session.NewManager(cfg.Password, time.Now)
 
 	server := &http.Server{
@@ -94,6 +107,7 @@ func main() {
 			xrayStatus,
 			usersCache,
 			currentProfileSources{xray: configWatcher, advertisements: advertisementWatcher},
+			rosterService,
 			// Collected per request and never cached: a Log or Config snapshot
 			// is a point-in-time view the admin asked for, not an observation
 			// the Panel keeps refreshing (SPEC §8).
@@ -164,9 +178,19 @@ func (s currentProfileSources) Current() profiles.Sources {
 	return profiles.SourcesFromSnapshots(s.xray.Snapshot(), s.advertisements.Snapshot())
 }
 
-func newHandler(snapshots *hoststats.Cache, statuses *xraystatus.Cache, usersCache *users.Cache, profileSources currentProfileSources, operational api.OperationalSources, sessions *session.Manager, cfg config.Config) http.Handler {
+func newHandler(snapshots *hoststats.Cache, statuses *xraystatus.Cache, usersCache *users.Cache, profileSources currentProfileSources, rosterService *roster.Service, operational api.OperationalSources, sessions *session.Manager, cfg config.Config) http.Handler {
 	panel := api.PanelInfo{Version: version, XrayAPIEndpoint: cfg.XrayAPIAddress, Uptime: api.UptimeSeconds(processStart, time.Now)}
-	return api.New(snapshots, statuses, usersCache, profileSources, operational, sessions, newDashboardHandler(), panel)
+	return api.New(snapshots, statuses, usersCache, profileSources, rosterService, operational, sessions, newDashboardHandler(), panel)
+}
+
+// configViewSource adapts the config watcher to the roster's inbound-view
+// seam; an unparsed config yields an empty view.
+type configViewSource struct {
+	watcher *xrayconfig.Watcher
+}
+
+func (s configViewSource) View() xrayconfig.View {
+	return s.watcher.Snapshot().Value.View
 }
 
 // loadGeoIP opens the geoip.dat behind the users table's country flags

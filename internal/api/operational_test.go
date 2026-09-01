@@ -55,6 +55,7 @@ func (s *stubConfig) Read(context.Context) (configsnapshot.Snapshot, error) {
 // and stubs everywhere else.
 func newOperationalHandler(operational api.OperationalSources) http.Handler {
 	return api.New(fixedHostStats{}, fixedXrayStatus{}, fixedUsers{}, fixedProfileSources{},
+		&stubRoster{},
 		operational, session.NewManager(testPassword, time.Now), http.NotFoundHandler(), testPanelInfo)
 }
 

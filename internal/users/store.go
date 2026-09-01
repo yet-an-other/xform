@@ -84,6 +84,92 @@ func Open(path string) (*Store, error) {
 // Close releases the database.
 func (s *Store) Close() error { return s.db.Close() }
 
+// ErrEmailTaken / ErrClientIDTaken are the roster's two uniqueness rules
+// (user-management spec §5): email conflicts case-insensitively because the
+// email IS the identity, Client IDs case-insensitively too because xray's
+// auth index silently overwrites on same-UUID-different-email.
+var (
+	ErrEmailTaken    = errors.New("email taken")
+	ErrClientIDTaken = errors.New("client ID taken")
+)
+
+// NewRosterUser is one panel-added user to store. Protocol and Security are
+// the table labels for the row until the next config parse resyncs them.
+type NewRosterUser struct {
+	Email    string
+	ClientID string
+	Inbounds []string
+	Protocol string
+	Security string
+}
+
+// RosterRecord is the stored roster row returned to the mutation API.
+type RosterRecord struct {
+	Email     string   `json:"email"`
+	ClientID  string   `json:"client_id"`
+	Inbounds  []string `json:"inbounds"`
+	CreatedAt int64    `json:"created_at"`
+	UpdatedAt int64    `json:"updated_at"`
+}
+
+// AddRosterUser stores one panel-added user: the roster row, plus a users
+// row so the dashboard shows them immediately — labelled, not gone, totals
+// at zero. A returning gone user's email rejoins the existing row and its
+// history (user-management spec §3); first_seen, totals, and last_seen are
+// never touched. Conflicts write nothing.
+func (s *Store) AddRosterUser(ctx context.Context, user NewRosterUser, now time.Time) (RosterRecord, error) {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return RosterRecord{}, fmt.Errorf("begin add transaction: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	var taken string
+	switch err := tx.QueryRowContext(ctx, `SELECT email FROM roster WHERE lower(email) = lower(?)`, user.Email).Scan(&taken); {
+	case err == nil:
+		return RosterRecord{}, fmt.Errorf("%w: %s", ErrEmailTaken, taken)
+	case !errors.Is(err, sql.ErrNoRows):
+		return RosterRecord{}, fmt.Errorf("check email uniqueness: %w", err)
+	}
+	switch err := tx.QueryRowContext(ctx, `SELECT email FROM roster WHERE lower(client_id) = lower(?)`, user.ClientID).Scan(&taken); {
+	case err == nil:
+		return RosterRecord{}, fmt.Errorf("%w: %s", ErrClientIDTaken, taken)
+	case !errors.Is(err, sql.ErrNoRows):
+		return RosterRecord{}, fmt.Errorf("check client ID uniqueness: %w", err)
+	}
+
+	inbounds := user.Inbounds
+	if inbounds == nil {
+		inbounds = []string{}
+	}
+	encoded, err := json.Marshal(inbounds)
+	if err != nil {
+		return RosterRecord{}, fmt.Errorf("encode attachments: %w", err)
+	}
+	stamp := now.Unix()
+	if _, err := tx.ExecContext(ctx, `
+		INSERT INTO roster (email, client_id, inbounds, created_at, updated_at)
+		VALUES (?, ?, ?, ?, ?)`, user.Email, user.ClientID, string(encoded), stamp, stamp); err != nil {
+		return RosterRecord{}, fmt.Errorf("insert roster row: %w", err)
+	}
+	if _, err := tx.ExecContext(ctx, `
+		INSERT INTO users (email, protocol, security, gone, first_seen)
+		VALUES (?, ?, ?, 0, ?)
+		ON CONFLICT(email) DO UPDATE SET
+			protocol = excluded.protocol,
+			security = excluded.security,
+			gone     = 0`, user.Email, user.Protocol, user.Security, stamp); err != nil {
+		return RosterRecord{}, fmt.Errorf("upsert user row: %w", err)
+	}
+	if err := tx.Commit(); err != nil {
+		return RosterRecord{}, fmt.Errorf("commit add transaction: %w", err)
+	}
+	return RosterRecord{
+		Email: user.Email, ClientID: user.ClientID, Inbounds: inbounds,
+		CreatedAt: stamp, UpdatedAt: stamp,
+	}, nil
+}
+
 // lastSeenGrow is the shared upsert clause: last_seen takes the newer of
 // the stored and incoming values — never regressing, and never turning
 // NULL into a timestamp when the incoming report carries none.

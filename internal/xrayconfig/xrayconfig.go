@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"slices"
+	"strconv"
 	"strings"
 	"unicode"
 )
@@ -44,6 +45,7 @@ type config struct {
 type inboundConfig struct {
 	Tag            string               `json:"tag"`
 	Protocol       string               `json:"protocol"`
+	Port           json.RawMessage      `json:"port"`
 	Settings       inboundSettings      `json:"settings"`
 	StreamSettings streamSettingsConfig `json:"streamSettings"`
 }
@@ -191,7 +193,7 @@ func buildRosterParse(cfg config) RosterParse {
 			if _, exists := labels[client.Email]; !exists {
 				labels[client.Email] = User{
 					Protocol: protocol,
-					Security: securityLabel(inbound.StreamSettings.Security, client.Flow),
+					Security: SecurityLabel(inbound.StreamSettings.Security, client.Flow),
 				}
 			}
 			if protocol != "VLESS" {
@@ -225,6 +227,7 @@ func buildView(cfg config) View {
 		inbound := Inbound{
 			Tag:        source.Tag,
 			Protocol:   source.Protocol,
+			Port:       portLabel(source.Port),
 			Flow:       source.Settings.Flow,
 			Decryption: source.Settings.Decryption,
 			Transport: TransportSettings{
@@ -290,6 +293,24 @@ func configured(value json.RawMessage) bool {
 	return len(trimmed) != 0 && !bytes.Equal(trimmed, []byte("null"))
 }
 
+// portLabel renders the inbound's listen port for the add-user dialog's
+// inbound options. xray accepts a number or a range string; either is kept
+// as written. An absent or unparsable port renders empty.
+func portLabel(raw json.RawMessage) string {
+	if !configured(raw) {
+		return ""
+	}
+	var port int
+	if err := json.Unmarshal(raw, &port); err == nil {
+		return strconv.Itoa(port)
+	}
+	var portRange string
+	if err := json.Unmarshal(raw, &portRange); err == nil {
+		return portRange
+	}
+	return ""
+}
+
 func rawHeaderType(document json.RawMessage) string {
 	if !configured(document) {
 		return ""
@@ -315,11 +336,11 @@ func effectiveWebSocketHost(settings httpTransportConfig) string {
 	return ""
 }
 
-// securityLabel renders the protocol · security column's second half:
+// SecurityLabel renders the protocol · security column's second half:
 // the inbound's stream security, title-cased, with an XTLS- prefix when the
 // client's flow is the vision family. No stream encryption reads "None" —
 // never an empty label.
-func securityLabel(security, flow string) string {
+func SecurityLabel(security, flow string) string {
 	var label string
 	switch strings.ToLower(security) {
 	case "", "none":

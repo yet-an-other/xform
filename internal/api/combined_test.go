@@ -66,6 +66,7 @@ func TestCombinedSourcesKeepIndependentFreshnessAndErrors(t *testing.T) {
 			AdvertisementsLoadedAt: advertisementsLoadedAt, AdvertisementsStale: true,
 			AdvertisementsError: &advertisements.SourceError{Reason: advertisements.ReadFailed, Message: "safe advertisement error"},
 		}},
+		&stubRoster{},
 		api.OperationalSources{
 			Logs: &stubLogs{err: &journal.Error{Reason: journal.ReasonAccessDenied}},
 			Config: &stubConfig{snapshot: configsnapshot.Snapshot{
@@ -197,6 +198,7 @@ func TestMalformedCurrentConfigFileKeepsLastValidParsedState(t *testing.T) {
 		fixedHostStats{}, fixedXrayStatus{},
 		fixedUsers{snapshot: users.Snapshot{Users: []users.User{{Email: "alice@example.com", IPs: []string{}}}}},
 		watchedProfileSources{xray: watcher},
+		&stubRoster{},
 		api.OperationalSources{Logs: &stubLogs{}, Config: configsnapshot.NewReader(path)},
 		session.NewManager(testPassword, time.Now), http.NotFoundHandler(), testPanelInfo,
 	)
@@ -315,6 +317,7 @@ func TestSubpathDeploymentPassesSessionAndEncodedIdentity(t *testing.T) {
 		fixedHostStats{}, fixedXrayStatus{},
 		fixedUsers{snapshot: users.Snapshot{Users: []users.User{{Email: "café/x@example.com", IPs: []string{}}}}},
 		fixedProfileSources{sources: profiles.Sources{XrayView: view, XrayAvailable: true}},
+		&stubRoster{},
 		api.OperationalSources{}, session.NewManager(testPassword, time.Now), http.NotFoundHandler(), testPanelInfo,
 	)
 	// The documented shape: the proxy strips the subpath prefix (ADR-0001).
