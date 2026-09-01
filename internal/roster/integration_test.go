@@ -50,7 +50,7 @@ func TestAddEndToEndOverTheRealStoreAndRenderer(t *testing.T) {
 	)
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
-	go service.Start(ctx)
+	service.Start(ctx)
 
 	result, err := service.Add(context.Background(), "alice@example.com", "", []string{"vless-vision"})
 	if err != nil {

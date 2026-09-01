@@ -155,7 +155,7 @@ func newHarness(t *testing.T) *harness {
 		WithStatusPoll(10 * time.Millisecond)
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
-	go h.service.Start(ctx)
+	h.service.Start(ctx)
 	return h
 }
 

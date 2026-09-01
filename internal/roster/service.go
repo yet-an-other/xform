@@ -298,10 +298,16 @@ func (s *Service) InboundOptions() []InboundOption {
 	return options
 }
 
-// Start runs the apply loop until the context is cancelled: kicks from
-// mutations, retries on every config-watch fire, and retries on every xray
-// status transition to running (user-management spec §7).
+// Start runs the apply loop in its own goroutine until the context is
+// cancelled, and returns — the panel's Start convention: callers sequence
+// startups, they never join loops. The loop applies on kicks from
+// mutations, retries on every config-watch fire, and retries on every
+// xray status transition to running (user-management spec §7).
 func (s *Service) Start(ctx context.Context) {
+	go s.run(ctx)
+}
+
+func (s *Service) run(ctx context.Context) {
 	changes := s.changes
 	var lastRunning bool
 	if status, err := s.status.Latest(ctx); err == nil {
