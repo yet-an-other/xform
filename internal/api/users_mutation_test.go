@@ -31,6 +31,12 @@ type stubRoster struct {
 	gotEditEmail string
 	gotEditReq   roster.EditRequest
 
+	removeResult   roster.SyncState
+	removeErr      error
+	removeCalled   bool
+	removeRemoved  bool
+	gotRemoveEmail string
+
 	sync      roster.SyncState
 	userState map[string]roster.ApplyState
 	options   []roster.InboundOption
@@ -46,6 +52,15 @@ func (s *stubRoster) Edit(_ context.Context, email string, req roster.EditReques
 	s.editCalled = true
 	s.gotEditEmail, s.gotEditReq = email, req
 	return s.editResult, s.editErr
+}
+
+func (s *stubRoster) Remove(_ context.Context, email string) (roster.SyncState, bool, error) {
+	s.removeCalled = true
+	s.gotRemoveEmail = email
+	if s.removeResult == "" {
+		return roster.Synced, s.removeRemoved, s.removeErr
+	}
+	return s.removeResult, s.removeRemoved, s.removeErr
 }
 
 func (s *stubRoster) Sync() roster.SyncState {
@@ -387,6 +402,75 @@ func authedPatch(t *testing.T, handler http.Handler, cookie *http.Cookie, path, 
 	t.Helper()
 	request := httptest.NewRequest(http.MethodPatch, path, strings.NewReader(body))
 	request.Header.Set("Content-Type", "application/json")
+	request.AddCookie(cookie)
+	response := httptest.NewRecorder()
+	handler.ServeHTTP(response, request)
+	return response
+}
+
+// The remove mutation (user-management spec §5): a live removal answers
+// 200 with the Roster sync state; an already-gone email answers 204 —
+// idempotent, nothing to say.
+func TestRemoveUserStoresAndAnswersWithTheSyncState(t *testing.T) {
+	rosterSource := &stubRoster{removeRemoved: true}
+	handler := newRosterHandler(rosterSource)
+	cookie := login(t, handler, testPassword)
+
+	response := authedDelete(t, handler, cookie, "/api/v1/users/alice@example.com")
+	if response.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body = %s", response.Code, response.Body)
+	}
+	if !rosterSource.removeCalled || rosterSource.gotRemoveEmail != "alice@example.com" {
+		t.Errorf("the mutation got %q", rosterSource.gotRemoveEmail)
+	}
+	var body struct {
+		RosterSync string `json:"roster_sync"`
+	}
+	if err := json.Unmarshal(response.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if body.RosterSync != "synced" {
+		t.Errorf("roster_sync = %q, want synced", body.RosterSync)
+	}
+
+	// Idempotent: an already-gone email answers 204, no body.
+	rosterSource.removeCalled = false
+	rosterSource.removeRemoved = false
+	response = authedDelete(t, handler, cookie, "/api/v1/users/alice@example.com")
+	if response.Code != http.StatusNoContent {
+		t.Errorf("repeat status = %d, want 204", response.Code)
+	}
+	if !rosterSource.removeCalled {
+		t.Error("the idempotent remove still reaches the roster")
+	}
+}
+
+// The remove mutation sits behind the same guards as add and edit: session
+// and the CSRF Origin check.
+func TestRemoveUserRejectsUnauthenticatedAndCrossSiteRequests(t *testing.T) {
+	handler := newRosterHandler(&stubRoster{})
+	request := httptest.NewRequest(http.MethodDelete, "/api/v1/users/a@b.c", nil)
+	response := httptest.NewRecorder()
+	handler.ServeHTTP(response, request)
+	if response.Code != http.StatusUnauthorized {
+		t.Errorf("status = %d, want 401", response.Code)
+	}
+
+	cookie := login(t, handler, testPassword)
+	request = httptest.NewRequest(http.MethodDelete, "/api/v1/users/a@b.c", nil)
+	request.Host = "panel.example.com"
+	request.AddCookie(cookie)
+	request.Header.Set("Origin", "http://evil.example.com")
+	response = httptest.NewRecorder()
+	handler.ServeHTTP(response, request)
+	if response.Code != http.StatusForbidden {
+		t.Errorf("status = %d, want 403 for a cross-site remove", response.Code)
+	}
+}
+
+func authedDelete(t *testing.T, handler http.Handler, cookie *http.Cookie, path string) *httptest.ResponseRecorder {
+	t.Helper()
+	request := httptest.NewRequest(http.MethodDelete, path, nil)
 	request.AddCookie(cookie)
 	response := httptest.NewRecorder()
 	handler.ServeHTTP(response, request)

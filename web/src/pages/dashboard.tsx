@@ -7,6 +7,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { ConfigSnapshotModal } from "@/components/config-snapshot-modal";
 import { AddUserModal } from "@/components/add-user-modal";
 import { EditUserModal } from "@/components/edit-user-modal";
+import { RemoveUserModal } from "@/components/remove-user-modal";
 import { LogSnapshotModal } from "@/components/log-snapshot-modal";
 import { UserDetailsModal } from "@/components/user-details-modal";
 import {
@@ -49,6 +50,7 @@ const POLL_INTERVAL_MS = 5_000;
 type OpenDialog =
   | { kind: "details"; email: string }
   | { kind: "edit"; email: string }
+  | { kind: "remove"; email: string }
   | { kind: "add" }
   | { kind: "logs"; source: LogSource }
   | { kind: "config" }
@@ -107,6 +109,20 @@ function EditIcon() {
       className="size-4 fill-none stroke-current stroke-[1.8] [stroke-linecap:round] [stroke-linejoin:round]"
     >
       <path d="M16.5 4.5l3 3L8 19l-4 1 1-4L16.5 4.5z" />
+    </svg>
+  );
+}
+
+// TrashIcon is the row-level remove glyph (user-management prototype): a
+// bin, opening the User's remove confirmation.
+function TrashIcon() {
+  return (
+    <svg
+      aria-hidden="true"
+      viewBox="0 0 24 24"
+      className="size-4 fill-none stroke-current stroke-[1.8] [stroke-linecap:round] [stroke-linejoin:round]"
+    >
+      <path d="M4 7h16M10 11v6M14 11v6M6.5 7l1 12.2a1.8 1.8 0 0 0 1.8 1.8h5.4a1.8 1.8 0 0 0 1.8-1.8L17.5 7M9.5 7V5a1.5 1.5 0 0 1 1.5-1.5h2A1.5 1.5 0 0 1 14.5 5v2" />
     </svg>
   );
 }
@@ -181,11 +197,13 @@ function UsersTable({
   snapshot,
   onOpenDetails,
   onOpenEdit,
+  onOpenRemove,
   onOpenAdd,
 }: {
   snapshot: UsersSnapshot;
   onOpenDetails: (email: string, opener: HTMLButtonElement) => void;
   onOpenEdit: (email: string, opener: HTMLButtonElement) => void;
+  onOpenRemove: (email: string, opener: HTMLButtonElement) => void;
   onOpenAdd: (opener: HTMLButtonElement) => void;
 }) {
   const [showGone, setShowGone] = useState(false);
@@ -356,15 +374,24 @@ function UsersTable({
                     >
                       <InfoIcon />
                     </IconAction>
-                    {/* Gone Users are history: inspectable, never editable. */}
+                    {/* Gone Users are history: inspectable, never edited or removed. */}
                     {user.gone ? null : (
-                      <IconAction
-                        label={`Edit ${user.email}`}
-                        title={`Edit ${user.email}`}
-                        onOpen={(opener) => onOpenEdit(user.email, opener)}
-                      >
-                        <EditIcon />
-                      </IconAction>
+                      <>
+                        <IconAction
+                          label={`Edit ${user.email}`}
+                          title={`Edit ${user.email}`}
+                          onOpen={(opener) => onOpenEdit(user.email, opener)}
+                        >
+                          <EditIcon />
+                        </IconAction>
+                        <IconAction
+                          label={`Remove ${user.email}`}
+                          title={`Remove ${user.email}`}
+                          onOpen={(opener) => onOpenRemove(user.email, opener)}
+                        >
+                          <TrashIcon />
+                        </IconAction>
+                      </>
                     )}
                   </span>
                 </TableCell>
@@ -686,6 +713,7 @@ export function Dashboard({ onUnauthenticated }: { onUnauthenticated: () => void
           snapshot={users}
           onOpenDetails={(email, opener) => openDialog({ kind: "details", email }, opener)}
           onOpenEdit={(email, opener) => openDialog({ kind: "edit", email }, opener)}
+          onOpenRemove={(email, opener) => openDialog({ kind: "remove", email }, opener)}
           onOpenAdd={(opener) => openDialog({ kind: "add" }, opener)}
         />
       ) : null}
@@ -708,6 +736,22 @@ export function Dashboard({ onUnauthenticated }: { onUnauthenticated: () => void
               <EditUserModal
                 user={user}
                 inbounds={users.inbounds}
+                opener={dialogOpener}
+                onClose={closeDialog}
+                onExpired={sessionExpired}
+              />
+            ) : null;
+          })()
+        : null}
+
+      {dialog?.kind === "remove" && users
+        ? (() => {
+            // The row the dialog confirms, re-read from the live snapshot —
+            // a removed user must not keep a confirm dialog open.
+            const user = users.users.find((candidate) => candidate.email === dialog.email);
+            return user && !user.gone ? (
+              <RemoveUserModal
+                user={user}
                 opener={dialogOpener}
                 onClose={closeDialog}
                 onExpired={sessionExpired}

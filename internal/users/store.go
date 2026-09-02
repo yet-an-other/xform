@@ -53,20 +53,28 @@ func Open(path string) (*Store, error) {
 		_ = db.Close()
 		return nil, fmt.Errorf("create schema: %w", err)
 	}
-	// The roster store (user-management spec §3): one row per adopted user —
-	// the panel-held source of truth the config is rendered from. Adoption
-	// only ever adds, so a hand-edited config cannot rewrite a stored
-	// Client ID.
+	// The roster store (user-management spec §3): one row per managed user —
+	// the panel-held source of truth the config is rendered from. A removed
+	// user's row stays, flagged gone (CONTEXT.md: never erased); re-adding
+	// the email revives it. Adoption only ever adds, so a hand-edited config
+	// cannot rewrite a stored Client ID.
 	if _, err := db.Exec(`
 		CREATE TABLE IF NOT EXISTS roster (
 			email      TEXT PRIMARY KEY,        -- identity; email change = new row
 			client_id  TEXT NOT NULL,           -- UUID credential
 			inbounds   TEXT NOT NULL,           -- JSON array of VLESS inbound tags
+			gone       INTEGER NOT NULL DEFAULT 0,  -- removed from the Roster; history kept
 			created_at INTEGER NOT NULL,
 			updated_at INTEGER NOT NULL
 		)`); err != nil {
 		_ = db.Close()
 		return nil, fmt.Errorf("create roster schema: %w", err)
+	}
+	// Databases from before the gone flag gain the column in place.
+	if _, err := db.Exec(`ALTER TABLE roster ADD COLUMN gone INTEGER NOT NULL DEFAULT 0`); err != nil &&
+		!strings.Contains(err.Error(), "duplicate column") {
+		_ = db.Close()
+		return nil, fmt.Errorf("migrate roster schema: %w", err)
 	}
 	// The xray row's durable aggregate totals — panel-level state hosted here
 	// because the Store owns the database file. Exactly one row (id = 1).
@@ -120,7 +128,8 @@ type RosterRecord struct {
 // row so the dashboard shows them immediately — labelled, not gone, totals
 // at zero. A returning gone user's email rejoins the existing row and its
 // history (user-management spec §3); first_seen, totals, and last_seen are
-// never touched. Conflicts write nothing.
+// never touched. A removed user's flagged roster row is revived — shed of
+// gone, carrying the new credential. Conflicts write nothing.
 func (s *Store) AddRosterUser(ctx context.Context, user NewRosterUser, now time.Time) (RosterRecord, error) {
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
@@ -129,15 +138,25 @@ func (s *Store) AddRosterUser(ctx context.Context, user NewRosterUser, now time.
 	defer func() { _ = tx.Rollback() }()
 
 	var taken string
-	switch err := tx.QueryRowContext(ctx, `SELECT email FROM roster WHERE lower(email) = lower(?)`, user.Email).Scan(&taken); {
-	case err == nil:
-		return RosterRecord{}, fmt.Errorf("%w: %s", ErrEmailTaken, taken)
-	case !errors.Is(err, sql.ErrNoRows):
+	var existing struct {
+		email string
+		gone  bool
+	}
+	switch err := tx.QueryRowContext(ctx,
+		`SELECT email, gone FROM roster WHERE lower(email) = lower(?)`, user.Email,
+	).Scan(&existing.email, &existing.gone); {
+	case err == nil && !existing.gone:
+		return RosterRecord{}, fmt.Errorf("%w: %s", ErrEmailTaken, existing.email)
+	case !errors.Is(err, sql.ErrNoRows) && err != nil:
 		return RosterRecord{}, fmt.Errorf("check email uniqueness: %w", err)
 	}
 	switch err := tx.QueryRowContext(ctx, `SELECT email FROM roster WHERE lower(client_id) = lower(?)`, user.ClientID).Scan(&taken); {
 	case err == nil:
-		return RosterRecord{}, fmt.Errorf("%w: %s", ErrClientIDTaken, taken)
+		// The user's own gone row may be revived under its old credential;
+		// any other holder — gone or not — is a conflict.
+		if !strings.EqualFold(taken, user.Email) || !existing.gone {
+			return RosterRecord{}, fmt.Errorf("%w: %s", ErrClientIDTaken, taken)
+		}
 	case !errors.Is(err, sql.ErrNoRows):
 		return RosterRecord{}, fmt.Errorf("check client ID uniqueness: %w", err)
 	}
@@ -151,7 +170,19 @@ func (s *Store) AddRosterUser(ctx context.Context, user NewRosterUser, now time.
 		return RosterRecord{}, fmt.Errorf("encode attachments: %w", err)
 	}
 	stamp := now.Unix()
-	if _, err := tx.ExecContext(ctx, `
+	created := stamp
+	if existing.gone { // revive the flagged row, creation preserved
+		if err := tx.QueryRowContext(ctx,
+			`SELECT created_at FROM roster WHERE lower(email) = lower(?)`, user.Email).Scan(&created); err != nil {
+			return RosterRecord{}, fmt.Errorf("read creation for revive: %w", err)
+		}
+		if _, err := tx.ExecContext(ctx, `
+			UPDATE roster SET client_id = ?, inbounds = ?, gone = 0, updated_at = ?
+			WHERE lower(email) = lower(?)`,
+			user.ClientID, string(encoded), stamp, user.Email); err != nil {
+			return RosterRecord{}, fmt.Errorf("revive roster row: %w", err)
+		}
+	} else if _, err := tx.ExecContext(ctx, `
 		INSERT INTO roster (email, client_id, inbounds, created_at, updated_at)
 		VALUES (?, ?, ?, ?, ?)`, user.Email, user.ClientID, string(encoded), stamp, stamp); err != nil {
 		return RosterRecord{}, fmt.Errorf("insert roster row: %w", err)
@@ -170,8 +201,34 @@ func (s *Store) AddRosterUser(ctx context.Context, user NewRosterUser, now time.
 	}
 	return RosterRecord{
 		Email: user.Email, ClientID: user.ClientID, Inbounds: inbounds,
-		CreatedAt: stamp, UpdatedAt: stamp,
+		CreatedAt: created, UpdatedAt: stamp,
 	}, nil
+}
+
+// RemoveRosterUser removes one user from the Roster (user-management spec
+// §3–§4, CONTEXT.md Gone user): the roster row is flagged gone — never
+// erased — and the dashboard row keeps its history behind the gone badge.
+// Idempotent: an already-removed (or never-known) email writes nothing.
+func (s *Store) RemoveRosterUser(ctx context.Context, email string, now time.Time) error {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("begin remove transaction: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	if _, err := tx.ExecContext(ctx, `
+		UPDATE roster SET gone = 1, updated_at = ? WHERE lower(email) = lower(?) AND gone = 0`,
+		now.Unix(), email); err != nil {
+		return fmt.Errorf("flag roster row gone: %w", err)
+	}
+	if _, err := tx.ExecContext(ctx, `
+		UPDATE users SET gone = 1 WHERE lower(email) = lower(?) AND gone = 0`, email); err != nil {
+		return fmt.Errorf("mark user row gone: %w", err)
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit remove transaction: %w", err)
+	}
+	return nil
 }
 
 // RosterEdit is one edit mutation's stored fields (user-management spec
@@ -187,13 +244,15 @@ type RosterEdit struct {
 }
 
 // RosterRecord returns the stored roster record for email — the before
-// state the edit path diffs against. Emails match case-insensitively.
+// state the edit path diffs against. A removed user's row (gone) reads as
+// absent: gone users are history, not roster members. Emails match
+// case-insensitively.
 func (s *Store) RosterRecord(ctx context.Context, email string) (RosterRecord, error) {
 	var record RosterRecord
 	var inbounds string
 	err := s.db.QueryRowContext(ctx,
 		`SELECT email, client_id, inbounds, created_at, updated_at
-		 FROM roster WHERE lower(email) = lower(?)`, email,
+		 FROM roster WHERE lower(email) = lower(?) AND gone = 0`, email,
 	).Scan(&record.Email, &record.ClientID, &inbounds, &record.CreatedAt, &record.UpdatedAt)
 	if errors.Is(err, sql.ErrNoRows) {
 		return RosterRecord{}, ErrRosterNotFound
@@ -385,10 +444,12 @@ func (s *Store) ApplyPoll(ctx context.Context, deltas []Delta, presence []Presen
 func syncLabels(ctx context.Context, tx *sql.Tx, roster map[string]RosterUser, now time.Time) error {
 	// Gone-ness is the Roster's call, not the config's (CONTEXT.md): a parse
 	// missing a roster member leaves them alone — convergence re-applies —
-	// so only users with no roster row can go gone here.
+	// so only users with no live roster row can go gone here. And a parse
+	// may not revive a user the panel removed: the roster upsert keeps the
+	// gone flag for rows flagged gone in the roster.
 	if _, err := tx.ExecContext(ctx, `
 		UPDATE users SET gone = 1 WHERE gone = 0
-		AND NOT EXISTS (SELECT 1 FROM roster r WHERE lower(r.email) = lower(users.email))`); err != nil {
+		AND NOT EXISTS (SELECT 1 FROM roster r WHERE lower(r.email) = lower(users.email) AND r.gone = 0)`); err != nil {
 		return fmt.Errorf("mark gone users: %w", err)
 	}
 
@@ -398,7 +459,9 @@ func syncLabels(ctx context.Context, tx *sql.Tx, roster map[string]RosterUser, n
 		ON CONFLICT(email) DO UPDATE SET
 			protocol = excluded.protocol,
 			security = excluded.security,
-			gone     = 0`)
+			gone     = CASE WHEN EXISTS (
+				SELECT 1 FROM roster r WHERE lower(r.email) = lower(users.email) AND r.gone = 1
+			) THEN users.gone ELSE 0 END`)
 	if err != nil {
 		return fmt.Errorf("prepare roster upsert: %w", err)
 	}
@@ -418,7 +481,10 @@ func syncLabels(ctx context.Context, tx *sql.Tx, roster map[string]RosterUser, n
 // attachments it did not have — never a rewritten Client ID, because the
 // store is the source of truth and the hand edit is drift. An unchanged
 // re-read writes nothing. Attachments not in the config are left alone:
-// re-applying them is convergence's job, not adoption's.
+// re-applying them is convergence's job, not adoption's. A removed user's
+// flagged row is untouched — the panel decided they are gone, and a stale
+// config carrying them (the render has not landed yet) must not revive
+// them.
 //
 // The schema deliberately carries no uniqueness constraint on client_id and
 // no case folding on email: a misconfigured config (duplicate Client IDs,
@@ -426,21 +492,26 @@ func syncLabels(ctx context.Context, tx *sql.Tx, roster map[string]RosterUser, n
 // the traffic totals. Uniqueness is enforced where mutations enter — the
 // mutation API (user-management spec §5), not the observer.
 func adoptClients(ctx context.Context, tx *sql.Tx, clients map[string]RosterClient, now time.Time) error {
-	stored := map[string][]string{}
-	rows, err := tx.QueryContext(ctx, `SELECT email, inbounds FROM roster`)
+	type storedRow struct {
+		tags []string
+		gone bool
+	}
+	stored := map[string]storedRow{}
+	rows, err := tx.QueryContext(ctx, `SELECT email, inbounds, gone FROM roster`)
 	if err != nil {
 		return fmt.Errorf("read roster for adoption: %w", err)
 	}
 	for rows.Next() {
 		var email, inbounds string
-		if err := rows.Scan(&email, &inbounds); err != nil {
+		var gone bool
+		if err := rows.Scan(&email, &inbounds, &gone); err != nil {
 			_ = rows.Close()
 			return fmt.Errorf("scan roster row: %w", err)
 		}
 		// inbounds is a JSON array; tolerate malformed rows.
 		var tags []string
 		_ = json.Unmarshal([]byte(inbounds), &tags)
-		stored[email] = tags
+		stored[email] = storedRow{tags: tags, gone: gone}
 	}
 	if err := rows.Err(); err != nil {
 		_ = rows.Close()
@@ -474,6 +545,9 @@ func adoptClients(ctx context.Context, tx *sql.Tx, clients map[string]RosterClie
 	stamp := now.Unix()
 	for _, email := range emails {
 		client := clients[email]
+		if row, known := stored[email]; known && row.gone {
+			continue // a removed user stays removed — the panel decided
+		}
 		if client.Inbounds == nil {
 			client.Inbounds = []string{}
 		}
@@ -488,13 +562,13 @@ func adoptClients(ctx context.Context, tx *sql.Tx, clients map[string]RosterClie
 			}
 			continue
 		}
-		merged := slices.Clone(tags)
+		merged := slices.Clone(tags.tags)
 		for _, tag := range client.Inbounds {
 			if !slices.Contains(merged, tag) {
 				merged = append(merged, tag)
 			}
 		}
-		if len(merged) == len(tags) {
+		if len(merged) == len(tags.tags) {
 			continue // an unchanged re-read writes nothing
 		}
 		encoded, err := json.Marshal(merged)
@@ -509,15 +583,15 @@ func adoptClients(ctx context.Context, tx *sql.Tx, clients map[string]RosterClie
 }
 
 // Users returns every known user, heaviest traffic first. Roster fields
-// (Client ID, inbounds) join from the roster store: null for users the
-// config never adopted.
+// (Client ID, inbounds) join from the roster store — null for users the
+// config never adopted and for gone users, whose flagged rows are history.
 func (s *Store) Users(ctx context.Context) ([]User, error) {
 	rows, err := s.db.QueryContext(ctx, `
 		SELECT u.email, u.protocol, u.security, u.up_bytes_total, u.down_bytes_total,
 		       u.last_seen, u.last_ips, u.gone, u.first_seen,
 		       r.client_id, r.inbounds
 		FROM users u
-		LEFT JOIN roster r ON r.email = u.email
+		LEFT JOIN roster r ON r.email = u.email AND r.gone = 0
 		ORDER BY u.up_bytes_total + u.down_bytes_total DESC, u.email`)
 	if err != nil {
 		return nil, fmt.Errorf("query users: %w", err)

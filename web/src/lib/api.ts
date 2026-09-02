@@ -220,6 +220,24 @@ export function editUser(
   return mutate("PATCH", `api/v1/users/${encodeURIComponent(email)}`, body);
 }
 
+// removeUser removes one roster user (user-management spec §5): idempotent,
+// always 204 — gone already or just removed alike. Resolves with the Roster
+// sync state so the confirm dialog can tell applied from still-retrying.
+export async function removeUser(email: string): Promise<RosterSync> {
+  const response = await fetch(`api/v1/users/${encodeURIComponent(email)}`, {
+    method: "DELETE",
+    headers: { Accept: "application/json" },
+  });
+  if (response.status === 401) {
+    throw new UnauthenticatedError();
+  }
+  if (!response.ok) {
+    throw new Error(`panel returned ${response.status}`);
+  }
+  const body = (await response.json().catch(() => null)) as { roster_sync?: RosterSync } | null;
+  return body?.roster_sync ?? "synced";
+}
+
 export type ConnectionProfileState =
   | "ready"
   | "gone_user"

@@ -7,6 +7,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/yet-an-other/xform/internal/roster"
 	"github.com/yet-an-other/xform/internal/users"
@@ -229,5 +230,142 @@ func TestEditEndToEndOverTheRealStoreAndRenderer(t *testing.T) {
 	}
 	if alice.Gone || alice.ClientID == nil {
 		t.Errorf("alice = %+v, want a listed profile-less roster member", alice)
+	}
+}
+
+// The remove acceptance path end to end over the real seams (issue #55):
+// the DELETE's store, the real file surgery out of every attached inbound,
+// the live pushes — and the history row that stays behind the gone badge.
+func TestRemoveEndToEndOverTheRealStoreAndRenderer(t *testing.T) {
+	dir := t.TempDir()
+	configPath := filepath.Join(dir, "config.json")
+	document := `{
+  "inbounds": [
+    {"tag": "vless-vision", "protocol": "vless",
+     "settings": {"clients": [
+       {"email": "alice@example.com", "id": "uuid-alice"},
+       {"email": "existing@example.com", "id": "uuid-existing", "flow": "xtls-rprx-vision"}
+     ]}},
+    {"tag": "vless-ws", "protocol": "vless",
+     "settings": {"clients": [{"email": "alice@example.com", "id": "uuid-alice"}]}}
+  ]
+}`
+	if err := os.WriteFile(configPath, []byte(document), 0o600); err != nil {
+		t.Fatalf("write fixture: %v", err)
+	}
+	view, err := xrayconfig.ParseView([]byte(document))
+	if err != nil {
+		t.Fatalf("parse view: %v", err)
+	}
+
+	store, err := users.Open(":memory:")
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+
+	ctx := context.Background()
+	// Seed: alice carries traffic history, and the config parse adopts her
+	// into the roster with both attachments.
+	if err := store.ApplyPoll(ctx, []users.Delta{
+		{Email: "alice@example.com", Up: 100, Down: 1_000, SeenNow: true},
+	}, nil, &users.RosterParse{
+		Labels: map[string]users.RosterUser{
+			"alice@example.com":    {Protocol: "VLESS", Security: "Reality"},
+			"existing@example.com": {Protocol: "VLESS", Security: "Reality"},
+		},
+		Clients: map[string]users.RosterClient{
+			"alice@example.com":    {ClientID: "uuid-alice", Inbounds: []string{"vless-vision", "vless-ws"}},
+			"existing@example.com": {ClientID: "uuid-existing", Inbounds: []string{"vless-vision"}},
+		},
+	}, time.Unix(1_780_000_000, 0)); err != nil {
+		t.Fatalf("seed poll: %v", err)
+	}
+	events := &[]string{}
+	pusher := &fakePusher{events: events}
+	service := roster.NewService(
+		store,
+		fakeViews{view: view},
+		roster.FileRenderer{Path: configPath},
+		pusher,
+		&fakeStatus{status: "running"},
+		make(chan struct{}, 1),
+	)
+	cancelCtx, cancel := context.WithCancel(ctx)
+	t.Cleanup(cancel)
+	service.Start(cancelCtx)
+
+	if _, err := store.RosterRecord(ctx, "alice@example.com"); err != nil {
+		t.Fatalf("adoption seed: %v", err)
+	}
+
+	sync, removed, err := service.Remove(ctx, "alice@example.com")
+	if err != nil {
+		t.Fatalf("remove: %v", err)
+	}
+	if !removed || sync != roster.Synced {
+		t.Fatalf("remove = %t / %q, want a live synced removal", removed, sync)
+	}
+
+	// The file no longer lists her anywhere — an xray restart keeps her
+	// gone — and the neighbours stay byte-stable.
+	rendered, err := os.ReadFile(configPath)
+	if err != nil {
+		t.Fatalf("read config: %v", err)
+	}
+	if strings.Contains(string(rendered), "alice@example.com") {
+		t.Errorf("the file must no longer list alice:\n%s", rendered)
+	}
+	clients, err := xrayconfig.Parse(rendered)
+	if err != nil {
+		t.Fatalf("rendered config does not parse: %v\n%s", err, rendered)
+	}
+	if _, ok := clients["existing@example.com"]; !ok {
+		t.Errorf("the existing client must survive:\n%s", rendered)
+	}
+
+	// The live removals covered both inbounds.
+	if !slices.Equal(pusher.removed, []string{
+		"alice@example.com off vless-vision",
+		"alice@example.com off vless-ws",
+	}) {
+		t.Errorf("live removals = %v", pusher.removed)
+	}
+
+	// The history row stays: gone, totals intact, roster fields null.
+	list, err := store.Users(ctx)
+	if err != nil {
+		t.Fatalf("users: %v", err)
+	}
+	var alice users.User
+	for _, user := range list {
+		if user.Email == "alice@example.com" {
+			alice = user
+		}
+	}
+	if !alice.Gone || alice.UpBytesTotal != 100 || alice.DownBytesTotal != 1_000 || alice.ClientID != nil {
+		t.Errorf("alice = %+v, want gone with history and no roster fields", alice)
+	}
+
+	// And a config parse carrying her again (drift before the render landed
+	// cannot happen here, but a stale parse may race) does not revive her.
+	if err := store.ApplyPoll(ctx, nil, nil, &users.RosterParse{
+		Labels: map[string]xrayconfig.User{"alice@example.com": {Protocol: "VLESS", Security: "Reality"}},
+	}, time.Unix(1_780_010_000, 0)); err != nil {
+		t.Fatalf("apply drift parse: %v", err)
+	}
+	list, err = store.Users(ctx)
+	if err != nil {
+		t.Fatalf("users after parse: %v", err)
+	}
+	for _, user := range list {
+		if user.Email == "alice@example.com" && (!user.Gone || user.ClientID != nil) {
+			t.Errorf("after the parse alice = %+v, want still gone", user)
+		}
+	}
+
+	// Idempotent: a second remove is a no-op success.
+	if sync, removedAgain, err := service.Remove(ctx, "alice@example.com"); err != nil || sync != roster.Synced || removedAgain {
+		t.Errorf("re-remove = %q / %v / %t, want synced, removed nothing", sync, err, removedAgain)
 	}
 }

@@ -22,49 +22,79 @@ type fakeStore struct {
 	mu     sync.Mutex
 	byMail map[string]users.RosterRecord // lower(email) → record
 	byID   map[string]string             // lower(client_id) → email
+	gone   map[string]bool               // lower(email) → removed from the roster
 	edits  int                           // writes EditRosterUser actually made
 }
 
 func newFakeStore() *fakeStore {
-	return &fakeStore{byMail: map[string]users.RosterRecord{}, byID: map[string]string{}}
+	return &fakeStore{
+		byMail: map[string]users.RosterRecord{},
+		byID:   map[string]string{},
+		gone:   map[string]bool{},
+	}
 }
 
 func (f *fakeStore) AddRosterUser(_ context.Context, user users.NewRosterUser, now time.Time) (users.RosterRecord, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	email := strings.ToLower(user.Email)
-	if _, ok := f.byMail[email]; ok {
+	if record, ok := f.byMail[email]; ok && !f.gone[email] {
+		_ = record
 		return users.RosterRecord{}, users.ErrEmailTaken
 	}
-	if _, ok := f.byID[strings.ToLower(user.ClientID)]; ok {
+	if holder, ok := f.byID[strings.ToLower(user.ClientID)]; ok && !(f.gone[email] && strings.EqualFold(holder, user.Email)) {
 		return users.RosterRecord{}, users.ErrClientIDTaken
 	}
 	if user.Inbounds == nil {
 		user.Inbounds = []string{}
 	}
+	created := now.Unix()
+	if record, ok := f.byMail[email]; ok { // revive keeps the creation
+		created = record.CreatedAt
+	}
 	record := users.RosterRecord{
 		Email: user.Email, ClientID: user.ClientID, Inbounds: user.Inbounds,
-		CreatedAt: now.Unix(), UpdatedAt: now.Unix(),
+		CreatedAt: created, UpdatedAt: now.Unix(),
 	}
 	f.byMail[email] = record
 	f.byID[strings.ToLower(user.ClientID)] = user.Email
+	delete(f.gone, email)
 	return record, nil
 }
 
 func (f *fakeStore) RosterRecord(_ context.Context, email string) (users.RosterRecord, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	record, ok := f.byMail[strings.ToLower(email)]
+	email = strings.ToLower(email)
+	if f.gone[email] {
+		return users.RosterRecord{}, users.ErrRosterNotFound
+	}
+	record, ok := f.byMail[email]
 	if !ok {
 		return users.RosterRecord{}, users.ErrRosterNotFound
 	}
 	return record, nil
 }
 
+func (f *fakeStore) RemoveRosterUser(_ context.Context, email string, now time.Time) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	email = strings.ToLower(email)
+	if record, ok := f.byMail[email]; ok && !f.gone[email] {
+		record.UpdatedAt = now.Unix()
+		f.byMail[email] = record
+		f.gone[email] = true
+	}
+	return nil
+}
+
 func (f *fakeStore) EditRosterUser(_ context.Context, email string, edit users.RosterEdit, now time.Time) (users.RosterRecord, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	key := strings.ToLower(email)
+	if f.gone[key] {
+		return users.RosterRecord{}, users.ErrRosterNotFound
+	}
 	before, ok := f.byMail[key]
 	if !ok {
 		return users.RosterRecord{}, users.ErrRosterNotFound
@@ -469,6 +499,18 @@ func (h *harness) edit(t *testing.T, email string, req roster.EditRequest) roste
 	return result
 }
 
+func (h *harness) remove(t *testing.T, email string) roster.SyncState {
+	t.Helper()
+	sync, removed, err := h.service.Remove(context.Background(), email)
+	if err != nil {
+		t.Fatalf("remove %s: %v", email, err)
+	}
+	if !removed {
+		t.Fatalf("remove %s: removed = false, want a live removal", email)
+	}
+	return sync
+}
+
 // Changing the inbound selection applies live (user-management spec §4):
 // the detached inbound loses the entry — file and running xray — and the
 // newly attached one gains it, with the attach-time flow.
@@ -785,5 +827,124 @@ func TestEditKeptSelectionPrunesVanishedInbounds(t *testing.T) {
 	}
 	if len(h.pusher.pushed) != pushes || len(h.pusher.removed) != removes {
 		t.Errorf("pushes = %+v removes = %v — a vanished inbound is not a push target", h.pusher.pushed, h.pusher.removed)
+	}
+}
+
+// --- the remove slices (issue #55) ---
+
+// The remove acceptance path (user-management spec §4): stored first, then
+// rendered out of every attached inbound's clients array and pushed off the
+// running xray — file before live, per inbound, idempotent on retry.
+func TestRemoveDetachesEverywhere(t *testing.T) {
+	h := newHarness(t)
+	h.add(t, "alice@example.com", "1d37a118-4f1b-4dc0-9e3c-3426b07518df", []string{"vless-vision", "vless-ws"})
+
+	sync, removed, err := h.service.Remove(context.Background(), "alice@example.com")
+	if err != nil {
+		t.Fatalf("remove: %v", err)
+	}
+	if !removed {
+		t.Fatal("removed = false, want a live removal")
+	}
+	if sync != roster.Synced {
+		t.Fatalf("sync = %q, want synced once the apply settled", sync)
+	}
+
+	plan := h.renderer.lastPlan()
+	if got := plan.Removes["vless-vision"]; len(got) != 1 || got[0] != "alice@example.com" {
+		t.Errorf("file removals vision = %v", got)
+	}
+	if got := plan.Removes["vless-ws"]; len(got) != 1 || got[0] != "alice@example.com" {
+		t.Errorf("file removals ws = %v", got)
+	}
+	if !slices.Equal(h.pusher.removed, []string{
+		"alice@example.com off vless-vision",
+		"alice@example.com off vless-ws",
+	}) {
+		t.Errorf("live removals = %v", h.pusher.removed)
+	}
+	if states := h.service.UserStates(); len(states) != 0 {
+		t.Errorf("user states = %v, want clean", states)
+	}
+	if _, err := h.store.RosterRecord(context.Background(), "alice@example.com"); !errors.Is(err, users.ErrRosterNotFound) {
+		t.Errorf("record after remove = %v, want gone from the roster", err)
+	}
+}
+
+// DELETE is idempotent (spec §5): removing an already-removed (or unknown)
+// email is a plain success with nothing to apply.
+func TestRemoveIsIdempotent(t *testing.T) {
+	h := newHarness(t)
+	h.add(t, "alice@example.com", "1d37a118-4f1b-4dc0-9e3c-3426b07518df", nil)
+	h.remove(t, "alice@example.com")
+	renders := len(h.renderer.plans)
+	removes := len(h.pusher.removed)
+
+	if sync, removed, err := h.service.Remove(context.Background(), "Alice@Example.com"); err != nil || sync != roster.Synced || removed {
+		t.Errorf("re-remove = %q / %v / %t, want synced, removed nothing", sync, err, removed)
+	}
+	if sync, removed, err := h.service.Remove(context.Background(), "never-was@example.com"); err != nil || sync != roster.Synced || removed {
+		t.Errorf("unknown remove = %q / %v / %t, want synced, removed nothing", sync, err, removed)
+	}
+	if len(h.renderer.plans) != renders || len(h.pusher.removed) != removes {
+		t.Error("an idempotent remove renders and pushes nothing")
+	}
+}
+
+// xray down at remove time: the removal is stored, the answer is failed,
+// the row carries the failed mark, and a config-watch fire retries (§7).
+func TestRemoveFailureSurfacesAndRetriesOnWatchFire(t *testing.T) {
+	h := newHarness(t)
+	h.status.set("stopped")
+	h.add(t, "alice@example.com", "1d37a118-4f1b-4dc0-9e3c-3426b07518df", []string{"vless-vision"})
+
+	h.pusher.removeErr = errors.New("connect: connection refused")
+	sync := h.remove(t, "alice@example.com")
+	if sync != roster.Failed {
+		t.Fatalf("sync = %q, want failed — stored, but the push did not land", sync)
+	}
+	if states := h.service.UserStates(); states["alice@example.com"] != roster.ApplyFailed {
+		t.Errorf("user states = %v, want alice apply-failed", states)
+	}
+
+	h.pusher.removeErr = nil
+	h.changes <- struct{}{}
+	eventually(t, "synced after the retry", func() bool {
+		return h.service.Sync() == roster.Synced
+	})
+	if _, err := h.store.RosterRecord(context.Background(), "alice@example.com"); !errors.Is(err, users.ErrRosterNotFound) {
+		t.Errorf("record after the retry = %v, want gone", err)
+	}
+}
+
+// Removing a user whose previous change never finished applying detaches
+// from every tag that might still hold them live (§7 merge).
+func TestRemoveWhilePendingDetachesEveryTouchedTag(t *testing.T) {
+	h := newHarness(t)
+	h.renderer.block = make(chan struct{})
+	h.service.WithSettleWait(50 * time.Millisecond)
+
+	h.add(t, "alice@example.com", "1d37a118-4f1b-4dc0-9e3c-3426b07518df", []string{"vless-vision"})
+	// A still-pending edit attaching ws — its ops must feed the removal.
+	if _, err := h.service.Edit(context.Background(), "alice@example.com", roster.EditRequest{
+		Inbounds: []string{"vless-vision", "vless-ws"},
+	}); err != nil {
+		t.Fatalf("edit: %v", err)
+	}
+
+	h.remove(t, "alice@example.com")
+	close(h.renderer.block)
+	eventually(t, "synced after the merged removal", func() bool {
+		return h.service.Sync() == roster.Synced
+	})
+
+	removes := map[string]bool{}
+	for _, removed := range h.pusher.removed {
+		removes[removed] = true
+	}
+	for _, tag := range []string{"vless-vision", "vless-ws"} {
+		if !removes["alice@example.com off "+tag] {
+			t.Errorf("live removals = %v, want %s covered", h.pusher.removed, tag)
+		}
 	}
 }

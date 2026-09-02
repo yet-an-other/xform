@@ -46,6 +46,7 @@ type usersSnapshots interface {
 type rosterMutations interface {
 	Add(ctx context.Context, email, clientID string, inbounds []string) (roster.MutationResult, error)
 	Edit(ctx context.Context, email string, req roster.EditRequest) (roster.MutationResult, error)
+	Remove(ctx context.Context, email string) (roster.SyncState, bool, error)
 	Sync() roster.SyncState
 	UserStates() map[string]roster.ApplyState
 	InboundOptions() []roster.InboundOption
@@ -249,6 +250,20 @@ func New(snapshots hostStatsSnapshots, xray xrayStatuses, usersSource usersSnaps
 			return
 		}
 		writeJSON(response, http.StatusOK, mutationResponse{User: result.User, RosterSync: result.Sync})
+	}))))
+	mux.HandleFunc("DELETE /api/v1/users/{email}", noStore(requireSession(sameSiteOnly(func(response http.ResponseWriter, request *http.Request) {
+		sync, removed, err := rosterSource.Remove(request.Context(), request.PathValue("email"))
+		if writeMutationError(response, err) {
+			return
+		}
+		if !removed {
+			// Already gone (or never known): idempotent, nothing to say.
+			response.WriteHeader(http.StatusNoContent)
+			return
+		}
+		// A live removal answers with the Roster sync state so the confirm
+		// dialog can tell applied from still-retrying (spec §5).
+		writeJSON(response, http.StatusOK, map[string]roster.SyncState{"roster_sync": sync})
 	}))))
 	mux.HandleFunc("GET /api/v1/users/{email}", noStore(requireSession(func(response http.ResponseWriter, request *http.Request) {
 		if malformedUserEmailEscape(request.RequestURI) {

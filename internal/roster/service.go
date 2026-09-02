@@ -9,6 +9,7 @@ import (
 	"context"
 	"errors"
 	"log/slog"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -93,6 +94,7 @@ type Store interface {
 	AddRosterUser(ctx context.Context, user users.NewRosterUser, now time.Time) (users.RosterRecord, error)
 	RosterRecord(ctx context.Context, email string) (users.RosterRecord, error)
 	EditRosterUser(ctx context.Context, email string, edit users.RosterEdit, now time.Time) (users.RosterRecord, error)
+	RemoveRosterUser(ctx context.Context, email string, now time.Time) error
 }
 
 // ViewSource supplies the current parsed inbound view — the seam over the
@@ -366,6 +368,61 @@ func (s *Service) Edit(ctx context.Context, email string, req EditRequest) (Muta
 		return MutationResult{User: after, Sync: s.Sync()}, nil
 	}
 	return s.queueOps(after, ops), nil
+}
+
+// Remove stores one user's removal from the Roster — the row is flagged
+// gone, history kept (user-management spec §3–§4) — then applies it live:
+// rendered out of every inbound that might still carry them (including an
+// unfinished change's tags) and pushed off the running xray. Established
+// connections close naturally; xray has no disconnect op. Idempotent: an
+// already-removed or unknown email is a plain success that removed nothing.
+// The mutation succeeds once stored: a failed apply answers failed.
+func (s *Service) Remove(ctx context.Context, email string) (sync SyncState, removed bool, err error) {
+	email = strings.TrimSpace(email)
+	if email == "" {
+		return s.Sync(), false, nil
+	}
+	before, err := s.store.RosterRecord(ctx, email)
+	if errors.Is(err, users.ErrRosterNotFound) {
+		return s.Sync(), false, nil // gone already — idempotent success
+	}
+	if err != nil {
+		return "", false, err
+	}
+
+	// Every tag that might hold them live: the record's attachments plus
+	// an unfinished change's attach/rotate targets (its push may have
+	// landed even though the change never settled).
+	prev := s.takePending(email)
+	tags := make(map[string]bool, len(before.Inbounds)+len(prev.ops))
+	for _, tag := range before.Inbounds {
+		tags[tag] = true
+	}
+	for _, op := range prev.ops {
+		if op.kind == opAttach || op.kind == opRotate {
+			tags[op.tag] = true
+		}
+	}
+
+	if err := s.store.RemoveRosterUser(ctx, email, s.now()); err != nil {
+		return "", false, err
+	}
+
+	if len(tags) == 0 {
+		return s.Sync(), true, nil // profile-less: nothing to apply
+	}
+	ops := make([]pushOp, 0, len(tags))
+	for _, tag := range before.Inbounds {
+		if tags[tag] {
+			ops = append(ops, pushOp{kind: opDetach, tag: tag})
+		}
+	}
+	for _, op := range prev.ops { // pending-attached tags not in the record
+		if (op.kind == opAttach || op.kind == opRotate) && !slices.Contains(before.Inbounds, op.tag) {
+			ops = append(ops, pushOp{kind: opDetach, tag: op.tag})
+		}
+	}
+	return s.queueOps(before, ops).Sync, true, nil
 }
 
 // takePending removes and returns the email's unapplied change, if any —

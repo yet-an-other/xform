@@ -775,15 +775,42 @@ describe("edit user dialog", () => {
       within(table).getByRole("button", { name: "Edit alice@example.com" }),
     ).toBeInTheDocument();
 
-    // Even revealed, gone bob carries no edit action — only details.
+    // Even revealed, gone bob carries no edit or remove action — only details.
     fireEvent.click(within(table).getByRole("button", { name: /show gone/i }));
     const bobRow = within(table).getByRole("row", { name: /bob@example\.com/ });
     expect(
       within(bobRow).queryByRole("button", { name: "Edit bob@example.com" }),
     ).not.toBeInTheDocument();
     expect(
+      within(bobRow).queryByRole("button", { name: "Remove bob@example.com" }),
+    ).not.toBeInTheDocument();
+    expect(
       within(bobRow).getByRole("button", { name: "Open bob@example.com details" }),
     ).toBeInTheDocument();
+  });
+
+  it("opens the remove confirmation from the row's trash action", async () => {
+    stubEndpoints({
+      server: () => json(stats),
+      xray: () => json(xrayRunning),
+      users: () => json(usersSnapshot),
+    });
+
+    render(<Dashboard onUnauthenticated={() => {}} />);
+
+    const table = await screen.findByRole("region", { name: "Users" });
+    fireEvent.click(within(table).getByRole("button", { name: "Remove alice@example.com" }));
+
+    const dialog = await screen.findByRole("dialog", { name: "Remove alice@example.com" });
+    // The confirm names the documented behavior before asking.
+    expect(within(dialog).getByText(/not force-killed/i)).toBeInTheDocument();
+    expect(within(dialog).getByRole("button", { name: /remove user/i })).toBeEnabled();
+
+    // Cancel dismisses without a trace.
+    fireEvent.click(within(dialog).getByRole("button", { name: "Cancel" }));
+    await waitFor(() => {
+      expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+    });
   });
 });
 
