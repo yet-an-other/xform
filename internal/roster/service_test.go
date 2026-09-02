@@ -38,8 +38,7 @@ func (f *fakeStore) AddRosterUser(_ context.Context, user users.NewRosterUser, n
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	email := strings.ToLower(user.Email)
-	if record, ok := f.byMail[email]; ok && !f.gone[email] {
-		_ = record
+	if _, ok := f.byMail[email]; ok && !f.gone[email] {
 		return users.RosterRecord{}, users.ErrEmailTaken
 	}
 	if holder, ok := f.byID[strings.ToLower(user.ClientID)]; ok && !(f.gone[email] && strings.EqualFold(holder, user.Email)) {

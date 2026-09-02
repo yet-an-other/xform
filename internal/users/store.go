@@ -71,10 +71,35 @@ func Open(path string) (*Store, error) {
 		return nil, fmt.Errorf("create roster schema: %w", err)
 	}
 	// Databases from before the gone flag gain the column in place.
-	if _, err := db.Exec(`ALTER TABLE roster ADD COLUMN gone INTEGER NOT NULL DEFAULT 0`); err != nil &&
-		!strings.Contains(err.Error(), "duplicate column") {
+	rows, err := db.Query(`PRAGMA table_info(roster)`)
+	if err != nil {
 		_ = db.Close()
-		return nil, fmt.Errorf("migrate roster schema: %w", err)
+		return nil, fmt.Errorf("inspect roster schema: %w", err)
+	}
+	hasGone := false
+	for rows.Next() {
+		var cid int
+		var name, colType string
+		var notNull, pk int
+		var dflt any
+		if err := rows.Scan(&cid, &name, &colType, &notNull, &dflt, &pk); err != nil {
+			_ = rows.Close()
+			_ = db.Close()
+			return nil, fmt.Errorf("inspect roster schema: %w", err)
+		}
+		hasGone = hasGone || name == "gone"
+	}
+	if err := rows.Err(); err != nil {
+		_ = rows.Close()
+		_ = db.Close()
+		return nil, fmt.Errorf("inspect roster schema: %w", err)
+	}
+	rows.Close()
+	if !hasGone {
+		if _, err := db.Exec(`ALTER TABLE roster ADD COLUMN gone INTEGER NOT NULL DEFAULT 0`); err != nil {
+			_ = db.Close()
+			return nil, fmt.Errorf("migrate roster schema: %w", err)
+		}
 	}
 	// The xray row's durable aggregate totals — panel-level state hosted here
 	// because the Store owns the database file. Exactly one row (id = 1).

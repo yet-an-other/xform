@@ -263,7 +263,7 @@ func New(snapshots hostStatsSnapshots, xray xrayStatuses, usersSource usersSnaps
 		}
 		// A live removal answers with the Roster sync state so the confirm
 		// dialog can tell applied from still-retrying (spec §5).
-		writeJSON(response, http.StatusOK, map[string]roster.SyncState{"roster_sync": sync})
+		writeJSON(response, http.StatusOK, syncResponse{RosterSync: sync})
 	}))))
 	mux.HandleFunc("GET /api/v1/users/{email}", noStore(requireSession(func(response http.ResponseWriter, request *http.Request) {
 		if malformedUserEmailEscape(request.RequestURI) {
@@ -323,6 +323,12 @@ type usersResponse struct {
 // plus the Roster sync state once the first apply settled.
 type mutationResponse struct {
 	User       roster.Record    `json:"user"`
+	RosterSync roster.SyncState `json:"roster_sync"`
+}
+
+// syncResponse is DELETE /api/v1/users: just the Roster sync state — the
+// removed user's record is gone, and the users endpoint carries the row.
+type syncResponse struct {
 	RosterSync roster.SyncState `json:"roster_sync"`
 }
 

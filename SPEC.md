@@ -111,19 +111,22 @@ CREATE TABLE users (
 
 Users disappearing from the config get `gone = 1` — never auto-deleted; hidden by default in the UI.
 
-The roster store holds one row per adopted user — the panel-held source of truth behind user management:
+The roster store holds one row per managed user — the panel-held source of truth behind user management:
 
 ```sql
 CREATE TABLE roster (
   email      TEXT PRIMARY KEY,        -- identity; email change = new row
   client_id  TEXT NOT NULL,           -- UUID credential
   inbounds   TEXT NOT NULL,           -- JSON array of VLESS inbound tags
+  gone       INTEGER NOT NULL DEFAULT 0,  -- removed from the Roster; history kept
   created_at INTEGER NOT NULL,
   updated_at INTEGER NOT NULL
 );
 ```
 
-On startup and whenever the config changes, VLESS clients found in the config are adopted into the roster, additively and idempotently: a new email lands with its config Client ID and attachments, a known email only gains attachments it did not have (a stored Client ID is never rewritten by a config edit), and an unchanged re-read writes nothing.
+On startup and whenever the config changes, VLESS clients found in the config are adopted into the roster, additively and idempotently: a new email lands with its config Client ID and attachments, a known live email only gains attachments it did not have (a stored Client ID is never rewritten by a config edit), and an unchanged re-read writes nothing. A removed user's flagged row is untouched — the Roster decides gone-ness, so a config still carrying a removed user (the render has not landed yet) is drift, not a revival.
+
+Removing a user (DELETE below) flags the row gone — never erased. Re-adding the same email revives it and rejoins the traffic history; the Client ID claim stays roster-wide, gone rows included.
 
 Connection profiles and operational snapshots are never persisted (§7, §8).
 
@@ -140,6 +143,9 @@ Base prefix `/api/v1`. JSON only, snake_case keys, raw integers (bytes, bytes/se
 | GET | `/api/v1/xray` | session | xray status/version/uptime/process/speeds/totals/online counts |
 | GET | `/api/v1/panel` | session | panel identity — release version + process uptime |
 | GET | `/api/v1/users` | session | `{"stale": bool, "collected_at": ts, "users": [...]}` |
+| POST | `/api/v1/users` | session + same-origin | add a roster user → 201 with the stored record + `roster_sync`; 409 with a machine-readable reason; cross-site → 403 |
+| PATCH | `/api/v1/users/{email}` | session + same-origin | edit (optional `client_id`, optional `inbounds`) → 200 with the stored record + `roster_sync`; idempotent |
+| DELETE | `/api/v1/users/{email}` | session + same-origin | remove → gone: 200 with `roster_sync`; already-gone → 204 |
 | GET | `/api/v1/users/{email}` | session | one user's observations + connection profiles (§7) |
 | GET | `/api/v1/logs/panel` | session | bounded Log snapshot of the panel's journal (§8) |
 | GET | `/api/v1/logs/xray` | session | bounded Log snapshot of xray's journal (§8) |

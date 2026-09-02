@@ -394,13 +394,10 @@ func (s *Service) Remove(ctx context.Context, email string) (sync SyncState, rem
 	// an unfinished change's attach/rotate targets (its push may have
 	// landed even though the change never settled).
 	prev := s.takePending(email)
-	tags := make(map[string]bool, len(before.Inbounds)+len(prev.ops))
-	for _, tag := range before.Inbounds {
-		tags[tag] = true
-	}
+	tags := slices.Clone(before.Inbounds)
 	for _, op := range prev.ops {
-		if op.kind == opAttach || op.kind == opRotate {
-			tags[op.tag] = true
+		if (op.kind == opAttach || op.kind == opRotate) && !slices.Contains(tags, op.tag) {
+			tags = append(tags, op.tag)
 		}
 	}
 
@@ -412,15 +409,8 @@ func (s *Service) Remove(ctx context.Context, email string) (sync SyncState, rem
 		return s.Sync(), true, nil // profile-less: nothing to apply
 	}
 	ops := make([]pushOp, 0, len(tags))
-	for _, tag := range before.Inbounds {
-		if tags[tag] {
-			ops = append(ops, pushOp{kind: opDetach, tag: tag})
-		}
-	}
-	for _, op := range prev.ops { // pending-attached tags not in the record
-		if (op.kind == opAttach || op.kind == opRotate) && !slices.Contains(before.Inbounds, op.tag) {
-			ops = append(ops, pushOp{kind: opDetach, tag: op.tag})
-		}
+	for _, tag := range tags {
+		ops = append(ops, pushOp{kind: opDetach, tag: tag})
 	}
 	return s.queueOps(before, ops).Sync, true, nil
 }
