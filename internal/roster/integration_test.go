@@ -328,11 +328,11 @@ func TestRemoveEndToEndOverTheRealStoreAndRenderer(t *testing.T) {
 	}
 
 	// The live removals covered both inbounds.
-	if !slices.Equal(pusher.removed, []string{
+	if !slices.Equal(pusher.removedList(), []string{
 		"alice@example.com off vless-vision",
 		"alice@example.com off vless-ws",
 	}) {
-		t.Errorf("live removals = %v", pusher.removed)
+		t.Errorf("live removals = %v", pusher.removedList())
 	}
 
 	// The history row stays: gone, totals intact, roster fields null.
@@ -470,7 +470,7 @@ func TestConvergeEndToEndOverTheRealStoreAndRenderer(t *testing.T) {
 	if _, ok := clients["existing@example.com"]; !ok {
 		t.Errorf("the existing client must survive:\n%s", rendered)
 	}
-	if got := pusher.pushed[len(pusher.pushed)-1]; got.Email != "alice@example.com" || got.Flow != "xtls-rprx-vision" {
+	if got := pusher.lastAdd(); got.Email != "alice@example.com" || got.Flow != "xtls-rprx-vision" {
 		t.Errorf("final push = %+v, want alice restored with the vision flow", got)
 	}
 
@@ -481,7 +481,7 @@ func TestConvergeEndToEndOverTheRealStoreAndRenderer(t *testing.T) {
 	}
 
 	// And the next tick over the now-consistent parse is quiet.
-	pushes := len(pusher.pushed)
+	pushes, _ := pusher.counts()
 	parses.set(map[string]xrayconfig.Client{
 		"existing@example.com": {ClientID: "uuid-existing", Inbounds: []string{"vless-vision"}},
 		"alice@example.com":    {ClientID: "1d37a118-4f1b-4dc0-9e3c-3426b07518df", Inbounds: []string{"vless-vision"}},

@@ -106,8 +106,8 @@ type ViewSource interface {
 
 // RosterParseSource supplies the config file's roster as last parsed —
 // clients with their inbound attachments — plus a version that bumps on
-// every parse (0: nothing parsed yet). The seam for convergence over the
-// xray config watcher.
+// every parse (0: nothing parsed yet). The convergence seam over the
+// watched config parse.
 type RosterParseSource interface {
 	Roster() (xrayconfig.RosterParse, uint64)
 }
@@ -505,6 +505,19 @@ func (s *Service) queueOps(record users.RosterRecord, ops []pushOp) MutationResu
 	return MutationResult{User: record, Sync: s.waitSettled(record.Email)}
 }
 
+// enqueueIfLive is convergence's enqueue: the roster is re-checked under
+// the pending lock, so a DELETE that landed between the listing and here
+// wins — a removed user never comes back with working credentials.
+func (s *Service) enqueueIfLive(ctx context.Context, record users.RosterRecord, ops []pushOp) {
+	s.mu.Lock()
+	if _, err := s.store.RosterRecord(ctx, record.Email); errors.Is(err, users.ErrRosterNotFound) {
+		s.mu.Unlock()
+		return
+	}
+	s.mu.Unlock()
+	s.enqueue(record, ops)
+}
+
 // enqueue queues the operations and kicks the apply loop without waiting —
 // the background path (convergence) never blocks the loop it runs in.
 func (s *Service) enqueue(record users.RosterRecord, ops []pushOp) {
@@ -622,7 +635,8 @@ func (s *Service) retry(ctx context.Context) {
 }
 
 // converge reconciles one config parse against the Roster (user-management
-// spec §4, store wins with adoption): a store user the file lost is
+// spec §4, store wins — adoption of extra config clients is the collector's
+// poll): a store user the file lost is
 // re-rendered and re-pushed — a hand edit or an ansible re-run that strips
 // clients never deletes; an inbound the file lost has its attachments
 // pruned from the store (the inbound is gone from xray too), users left
@@ -699,7 +713,7 @@ func (s *Service) converge(ctx context.Context) {
 			ops = append(ops, pushOp{kind: opAttach, tag: tag, flow: xrayconfig.DefaultFlow(inbound)})
 		}
 		if len(ops) > 0 {
-			s.enqueue(record, ops)
+			s.enqueueIfLive(ctx, record, ops)
 		}
 	}
 }

@@ -24,7 +24,10 @@ type fakeStore struct {
 	byMail map[string]users.RosterRecord // lower(email) → record
 	byID   map[string]string             // lower(client_id) → email
 	gone   map[string]bool               // lower(email) → removed from the roster
-	edits  int                           // writes EditRosterUser actually made
+	// vanishOnList makes the next RosterRecords flag every row gone — a
+	// DELETE racing the caller between the listing and its next read.
+	vanishOnList bool
+	edits        int // writes EditRosterUser actually made
 }
 
 func newFakeStore() *fakeStore {
@@ -89,6 +92,11 @@ func (f *fakeStore) RosterRecords(_ context.Context) ([]users.RosterRecord, erro
 	records := make([]users.RosterRecord, 0, len(emails))
 	for _, email := range emails {
 		records = append(records, f.byMail[email])
+	}
+	if f.vanishOnList { // a DELETE landing right after the listing
+		for email := range f.byMail {
+			f.gone[email] = true
+		}
 	}
 	return records, nil
 }
@@ -191,6 +199,24 @@ func (f *fakePusher) AddUser(_ context.Context, tag string, user xraygrpc.Manage
 	return f.addErr
 }
 
+func (f *fakePusher) lastAdd() xraygrpc.ManagedUser {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.pushed[len(f.pushed)-1]
+}
+
+func (f *fakePusher) removedList() []string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return slices.Clone(f.removed)
+}
+
+func (f *fakePusher) counts() (adds, removes int) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return len(f.pushed), len(f.removed)
+}
+
 func (f *fakePusher) RemoveUser(_ context.Context, tag, email string) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -227,6 +253,12 @@ func (f *fakeParseSource) set(clients map[string]xrayconfig.Client) {
 
 // echo models the watcher re-parsing the file after the renderer wrote it:
 // the plan's appends and removals land in the parse, version bumped.
+func (f *fakeParseSource) clientCount() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return len(f.parse.Clients)
+}
+
 func (f *fakeParseSource) echo(plan xrayconfig.RenderPlan) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -1129,7 +1161,6 @@ func TestConvergePrunesAttachmentsToVanishedInbounds(t *testing.T) {
 // gone users (adoption handles foreign clients).
 func TestConvergeSkipsPendingGoneAndForeign(t *testing.T) {
 	h := newHarness(t)
-	h.status.set("stopped")
 	h.pusher.addErr = errors.New("connect: connection refused")
 
 	// The add failed at the push: stored, failed, pending — retrying.
@@ -1147,7 +1178,8 @@ func TestConvergeSkipsPendingGoneAndForeign(t *testing.T) {
 	})
 	h.changes <- struct{}{}
 	eventually(t, "the retry attempt ran", func() bool {
-		return len(h.pusher.pushed) > pushes
+		adds, _ := h.pusher.counts()
+		return adds > pushes
 	})
 	h.renderer.mu.Lock()
 	rendersAfterFire := len(h.renderer.plans)
@@ -1156,17 +1188,19 @@ func TestConvergeSkipsPendingGoneAndForeign(t *testing.T) {
 		t.Errorf("renders = %d, want the retry only — convergence skips pending users", rendersAfterFire)
 	}
 
-	// The push recovers; the apply lands through the ordinary retry.
+	// The push recovers; the next watch fire retries and settles.
 	h.pusher.addErr = nil
-	h.status.set("running")
+	h.changes <- struct{}{}
 	eventually(t, "synced after the retry", func() bool {
 		return h.service.Sync() == roster.Synced
 	})
 
 	// A gone user in the parse is nobody's business: still gone, no ops.
 	h.remove(t, "alice@example.com")
+	h.renderer.mu.Lock()
 	renders = len(h.renderer.plans)
-	pushes = len(h.pusher.pushed)
+	h.renderer.mu.Unlock()
+	pushes, _ = h.pusher.counts()
 	h.parses.set(map[string]xrayconfig.Client{
 		"existing@example.com": {ClientID: "uuid-existing", Inbounds: []string{"vless-vision", "vless-ws"}},
 		"alice@example.com":    {ClientID: "1d37a118-4f1b-4dc0-9e3c-3426b07518df", Inbounds: []string{"vless-vision"}},
@@ -1177,8 +1211,9 @@ func TestConvergeSkipsPendingGoneAndForeign(t *testing.T) {
 		defer h.renderer.mu.Unlock()
 		return len(h.renderer.plans) == renders && h.service.Sync() == roster.Synced
 	})
-	if len(h.pusher.pushed) != pushes {
-		t.Errorf("pushes = %+v — a gone user must not be re-applied", h.pusher.pushed)
+	adds, _ := h.pusher.counts()
+	if adds != pushes {
+		t.Errorf("pushes = %d, want %d — a gone user must not be re-applied", adds, pushes)
 	}
 }
 
@@ -1202,14 +1237,43 @@ func TestConvergeRunsAtStartup(t *testing.T) {
 	service.Start(ctx)
 
 	eventually(t, "startup convergence restored alice", func() bool {
-		return service.Sync() == roster.Synced && len(h.parses.parse.Clients) == 1
+		return service.Sync() == roster.Synced && h.parses.clientCount() == 1
 	})
-	if len(h.pusher.pushed) != 0 { // the new service's pusher saw nothing — the render+push went through its own fake
-		t.Logf("pushes through the shared fake = %d", len(h.pusher.pushed))
-	}
 	plan := h.renderer.lastPlan()
 	if got := plan.Adds["vless-vision"]; len(got) != 1 || got[0].Email != "alice@example.com" {
 		t.Errorf("startup converge plan = %+v, want alice restored", plan.Adds)
+	}
+}
+
+// A user removed between the roster listing and the restore must not come
+// back: convergence re-checks liveness before it enqueues (§5 — DELETE is
+// final; a ghost with working credentials is the worst outcome).
+func TestConvergeDoesNotResurrectARemovedUser(t *testing.T) {
+	h := newHarness(t)
+	h.add(t, "alice@example.com", "1d37a118-4f1b-4dc0-9e3c-3426b07518df", []string{"vless-vision"})
+
+	// The listing still carries alice; the removal lands right after it.
+	h.store.vanishOnList = true
+	h.parses.set(map[string]xrayconfig.Client{
+		"existing@example.com": {ClientID: "uuid-existing", Inbounds: []string{"vless-vision", "vless-ws"}},
+	})
+	h.changes <- struct{}{}
+
+	// The resurrection, if it happened, would render within the tick —
+	// give the loop a fair window, then hold the line at the add's pass.
+	deadline := time.Now().Add(300 * time.Millisecond)
+	for time.Now().Before(deadline) {
+		h.renderer.mu.Lock()
+		renders := len(h.renderer.plans)
+		h.renderer.mu.Unlock()
+		if renders != 1 {
+			t.Fatalf("renders = %d, want just the add's — a removed user came back", renders)
+		}
+		adds, _ := h.pusher.counts()
+		if adds != 1 {
+			t.Fatalf("pushes = %d, want just the add's — a removed user came back", adds)
+		}
+		time.Sleep(5 * time.Millisecond)
 	}
 }
 

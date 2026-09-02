@@ -9,11 +9,31 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
 	"github.com/yet-an-other/xform/internal/xraystatus"
 )
+
+// syncBuffer is a bytes.Buffer safe to read while the child process writes
+// it — the boot log is polled before the panel exits.
+type syncBuffer struct {
+	mu  sync.Mutex
+	buf bytes.Buffer
+}
+
+func (b *syncBuffer) Write(p []byte) (int, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.Write(p)
+}
+
+func (b *syncBuffer) String() string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.String()
+}
 
 // TestPanelBootsAndListens is the process-level smoke test (v1.2.0 shipped a
 // panel that never listened: a blocking roster Start kept main from reaching
@@ -66,7 +86,7 @@ func TestPanelBootsAndListens(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(dir, "config.json"), []byte(`{"inbounds":[]}`), 0o600); err != nil {
 		t.Fatalf("write config fixture: %v", err)
 	}
-	var boot bytes.Buffer
+	var boot syncBuffer
 	panel.Stdout = &boot
 	panel.Stderr = &boot
 	if err := panel.Start(); err != nil {
