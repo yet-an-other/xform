@@ -256,8 +256,9 @@ function UsersTable({
       {/* Fixed columns keep their width past the container and the wrapper
           scrolls horizontally at narrow widths; table-fixed alone would
           compress every column into the viewport. The actions column fits
-          both row actions (2 × 30px + gap + padding) without overflow. */}
-      <Table className="min-w-[66rem] table-fixed">
+          all three row actions (3 × 30px + gaps + padding) without
+          overflow. */}
+      <Table className="min-w-[68.5rem] table-fixed">
         <TableHeader>
           <TableRow className="text-muted-foreground text-[0.7rem] font-bold tracking-[0.08em] uppercase hover:bg-transparent">
             <TableHead className="w-10 px-5" aria-label="Online" />
@@ -267,7 +268,7 @@ function UsersTable({
             <TableHead className="w-52">Speed now</TableHead>
             <TableHead className="w-40">Online IPs</TableHead>
             <TableHead className="w-24 text-right">Last seen</TableHead>
-            <TableHead className="w-[5.5rem] pr-5" aria-label="Actions" />
+            <TableHead className="w-32 pr-5" aria-label="Actions" />
           </TableRow>
         </TableHeader>
         <TableBody>
