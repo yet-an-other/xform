@@ -109,7 +109,7 @@ CREATE TABLE users (
 );
 ```
 
-Users disappearing from the config get `gone = 1` — never auto-deleted; hidden by default in the UI.
+Users with no roster row that vanish from the config get `gone = 1` — never auto-deleted; hidden by default in the UI. A roster member the config loses is not marked gone: the panel converges instead (store wins) — the user is re-rendered and re-pushed on the next watch tick, and an inbound the config dropped has its attachments pruned from the roster (users left with none stay profile-less and manageable).
 
 The roster store holds one row per managed user — the panel-held source of truth behind user management:
 

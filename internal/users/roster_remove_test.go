@@ -142,3 +142,26 @@ func TestRemoveKeepsClientIDUniquenessClaim(t *testing.T) {
 		t.Errorf("reusing a removed user's Client ID = %v, want ErrClientIDTaken", err)
 	}
 }
+
+// The convergence read (user-management spec §4): every live roster record,
+// gone rows excluded — convergence re-applies the Roster, and gone users
+// are history, not roster members.
+func TestRosterRecordsReturnsLiveRecordsOnly(t *testing.T) {
+	store := openStore(t)
+	ctx := context.Background()
+	now := time.Unix(1_780_000_000, 0)
+
+	addRoster(t, store, "bob@example.com", "uuid-bob", []string{"vless-ws"}, now)
+	addRoster(t, store, "alice@example.com", "uuid-alice", []string{"vless-vision"}, now)
+	if err := store.RemoveRosterUser(ctx, "bob@example.com", now.Add(time.Second)); err != nil {
+		t.Fatalf("remove: %v", err)
+	}
+
+	records, err := store.RosterRecords(ctx)
+	if err != nil {
+		t.Fatalf("records: %v", err)
+	}
+	if len(records) != 1 || records[0].Email != "alice@example.com" || records[0].ClientID != "uuid-alice" {
+		t.Errorf("records = %+v, want alice only, gone bob excluded", records)
+	}
+}

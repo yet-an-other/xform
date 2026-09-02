@@ -290,6 +290,34 @@ func (s *Store) RosterRecord(ctx context.Context, email string) (RosterRecord, e
 	return record, nil
 }
 
+// RosterRecords returns every live roster record, gone rows excluded — the
+// convergence pass re-applies exactly these against the config parse
+// (user-management spec §4). Ordered by email for deterministic writes.
+func (s *Store) RosterRecords(ctx context.Context) ([]RosterRecord, error) {
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT email, client_id, inbounds FROM roster WHERE gone = 0 ORDER BY email`)
+	if err != nil {
+		return nil, fmt.Errorf("query roster records: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+
+	var records []RosterRecord
+	for rows.Next() {
+		var record RosterRecord
+		var inbounds string
+		if err := rows.Scan(&record.Email, &record.ClientID, &inbounds); err != nil {
+			return nil, fmt.Errorf("scan roster record: %w", err)
+		}
+		record.Inbounds = []string{}
+		_ = json.Unmarshal([]byte(inbounds), &record.Inbounds) // tolerate malformed rows
+		records = append(records, record)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("read roster records: %w", err)
+	}
+	return records, nil
+}
+
 // EditRosterUser stores one edit: the attachment set and — optionally — the
 // Client ID change, with the row relabelled and kept not-gone (a roster
 // member edited to zero inbounds is profile-less, not gone). Idempotent: an

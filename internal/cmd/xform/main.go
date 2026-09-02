@@ -92,6 +92,7 @@ func main() {
 	rosterService := roster.NewService(
 		store,
 		configViewSource{watcher: configWatcher},
+		configWatcher,
 		roster.FileRenderer{Path: cfg.XrayConfigPath},
 		xraygrpc.HandlerClient{Address: cfg.XrayAPIAddress},
 		xrayStatus,

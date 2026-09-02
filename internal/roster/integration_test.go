@@ -46,6 +46,7 @@ func TestAddEndToEndOverTheRealStoreAndRenderer(t *testing.T) {
 	service := roster.NewService(
 		store,
 		fakeViews{view: view},
+		&fakeParseSource{version: 1, parse: xrayconfig.RosterParse{Labels: map[string]xrayconfig.User{}, Clients: map[string]xrayconfig.Client{}}},
 		roster.FileRenderer{Path: configPath},
 		pusher,
 		&fakeStatus{status: "running"},
@@ -128,6 +129,7 @@ func TestEditEndToEndOverTheRealStoreAndRenderer(t *testing.T) {
 	service := roster.NewService(
 		store,
 		fakeViews{view: view},
+		&fakeParseSource{version: 1, parse: xrayconfig.RosterParse{Labels: map[string]xrayconfig.User{}, Clients: map[string]xrayconfig.Client{}}},
 		roster.FileRenderer{Path: configPath},
 		pusher,
 		&fakeStatus{status: "running"},
@@ -286,6 +288,7 @@ func TestRemoveEndToEndOverTheRealStoreAndRenderer(t *testing.T) {
 	service := roster.NewService(
 		store,
 		fakeViews{view: view},
+		&fakeParseSource{version: 1, parse: xrayconfig.RosterParse{Labels: map[string]xrayconfig.User{}, Clients: map[string]xrayconfig.Client{}}},
 		roster.FileRenderer{Path: configPath},
 		pusher,
 		&fakeStatus{status: "running"},
@@ -368,4 +371,123 @@ func TestRemoveEndToEndOverTheRealStoreAndRenderer(t *testing.T) {
 	if sync, removedAgain, err := service.Remove(ctx, "alice@example.com"); err != nil || sync != roster.Synced || removedAgain {
 		t.Errorf("re-remove = %q / %v / %t, want synced, removed nothing", sync, err, removedAgain)
 	}
+}
+
+// The convergence acceptance path end to end over the real seams (issue
+// #56): a store user hand-deleted from the config file comes back — file
+// and live — within a watch tick, with the store untouched.
+func TestConvergeEndToEndOverTheRealStoreAndRenderer(t *testing.T) {
+	dir := t.TempDir()
+	configPath := filepath.Join(dir, "config.json")
+	document := `{
+  "inbounds": [
+    {"tag": "vless-vision", "protocol": "vless",
+     "settings": {"clients": [{"email": "existing@example.com", "id": "uuid-existing", "flow": "xtls-rprx-vision"}]}}
+  ]
+}`
+	if err := os.WriteFile(configPath, []byte(document), 0o600); err != nil {
+		t.Fatalf("write fixture: %v", err)
+	}
+	view, err := xrayconfig.ParseView([]byte(document))
+	if err != nil {
+		t.Fatalf("parse view: %v", err)
+	}
+
+	store, err := users.Open(":memory:")
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+
+	events := &[]string{}
+	pusher := &fakePusher{events: events}
+	parses := &fakeParseSource{version: 1, parse: xrayconfig.RosterParse{
+		Labels: map[string]xrayconfig.User{},
+		Clients: map[string]xrayconfig.Client{
+			"existing@example.com": {ClientID: "uuid-existing", Inbounds: []string{"vless-vision"}},
+		},
+	}}
+	changes := make(chan struct{}, 1)
+	service := roster.NewService(
+		store,
+		fakeViews{view: view},
+		parses,
+		roster.FileRenderer{Path: configPath},
+		pusher,
+		&fakeStatus{status: "running"},
+		changes,
+	)
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	service.Start(ctx)
+
+	added, err := service.Add(ctx, "alice@example.com", "1d37a118-4f1b-4dc0-9e3c-3426b07518df", []string{"vless-vision"})
+	if err != nil {
+		t.Fatalf("add: %v", err)
+	}
+	if added.Sync != roster.Synced {
+		t.Fatalf("add sync = %q, want synced", added.Sync)
+	}
+
+	// The hand edit: the file loses alice — the panel is not the only
+	// writer — and the watcher parses the drifted file.
+	drifted := `{
+  "inbounds": [
+    {"tag": "vless-vision", "protocol": "vless",
+     "settings": {"clients": [{"email": "existing@example.com", "id": "uuid-existing", "flow": "xtls-rprx-vision"}]}}
+  ]
+}`
+	if err := os.WriteFile(configPath, []byte(drifted), 0o600); err != nil {
+		t.Fatalf("hand edit: %v", err)
+	}
+	parses.set(map[string]xrayconfig.Client{
+		"existing@example.com": {ClientID: "uuid-existing", Inbounds: []string{"vless-vision"}},
+	})
+
+	// The watch tick: the panel restores alice into the file and pushes her
+	// back to xray.
+	changes <- struct{}{}
+	eventually(t, "the file carries alice again", func() bool {
+		rendered, err := os.ReadFile(configPath)
+		if err != nil {
+			return false
+		}
+		clients, err := xrayconfig.Parse(rendered)
+		return err == nil && func() bool { _, ok := clients["alice@example.com"]; return ok }()
+	})
+
+	rendered, err := os.ReadFile(configPath)
+	if err != nil {
+		t.Fatalf("read config: %v", err)
+	}
+	if strings.Contains(string(rendered), `"id": "uuid-wrong"`) {
+		t.Errorf("unexpected drift in the restored file:\n%s", rendered)
+	}
+	clients, err := xrayconfig.Parse(rendered)
+	if err != nil {
+		t.Fatalf("restored config does not parse: %v\n%s", err, rendered)
+	}
+	if _, ok := clients["existing@example.com"]; !ok {
+		t.Errorf("the existing client must survive:\n%s", rendered)
+	}
+	if got := pusher.pushed[len(pusher.pushed)-1]; got.Email != "alice@example.com" || got.Flow != "xtls-rprx-vision" {
+		t.Errorf("final push = %+v, want alice restored with the vision flow", got)
+	}
+
+	// The store was never touched by the drift.
+	record, err := store.RosterRecord(ctx, "alice@example.com")
+	if err != nil || !slices.Equal(record.Inbounds, []string{"vless-vision"}) {
+		t.Errorf("record after converge = %+v / %v, want untouched", record, err)
+	}
+
+	// And the next tick over the now-consistent parse is quiet.
+	pushes := len(pusher.pushed)
+	parses.set(map[string]xrayconfig.Client{
+		"existing@example.com": {ClientID: "uuid-existing", Inbounds: []string{"vless-vision"}},
+		"alice@example.com":    {ClientID: "1d37a118-4f1b-4dc0-9e3c-3426b07518df", Inbounds: []string{"vless-vision"}},
+	})
+	changes <- struct{}{}
+	eventually(t, "the echo tick stayed quiet", func() bool {
+		return len(pusher.pushed) == pushes && service.Sync() == roster.Synced
+	})
 }

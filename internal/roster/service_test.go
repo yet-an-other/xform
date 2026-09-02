@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"slices"
+	"sort"
 	"strings"
 	"sync"
 	"testing"
@@ -75,6 +76,23 @@ func (f *fakeStore) RosterRecord(_ context.Context, email string) (users.RosterR
 	return record, nil
 }
 
+func (f *fakeStore) RosterRecords(_ context.Context) ([]users.RosterRecord, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	emails := make([]string, 0, len(f.byMail))
+	for email := range f.byMail {
+		if !f.gone[email] {
+			emails = append(emails, email)
+		}
+	}
+	sort.Strings(emails)
+	records := make([]users.RosterRecord, 0, len(emails))
+	for _, email := range emails {
+		records = append(records, f.byMail[email])
+	}
+	return records, nil
+}
+
 func (f *fakeStore) RemoveRosterUser(_ context.Context, email string, now time.Time) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -130,7 +148,8 @@ type fakeRenderer struct {
 	events *[]string // shared with the pusher to assert apply order
 	plans  []xrayconfig.RenderPlan
 	err    error
-	block  chan struct{} // non-nil: Render waits on it (the slow-apply test)
+	block  chan struct{}    // non-nil: Render waits on it (the slow-apply test)
+	parses *fakeParseSource // non-nil: models the watcher re-parsing our writes
 }
 
 func (f *fakeRenderer) Render(_ context.Context, plan xrayconfig.RenderPlan) (bool, error) {
@@ -138,9 +157,12 @@ func (f *fakeRenderer) Render(_ context.Context, plan xrayconfig.RenderPlan) (bo
 		<-f.block
 	}
 	f.mu.Lock()
-	defer f.mu.Unlock()
 	*f.events = append(*f.events, "render")
 	f.plans = append(f.plans, plan)
+	f.mu.Unlock()
+	if f.parses != nil {
+		f.parses.echo(plan)
+	}
 	return true, f.err
 }
 
@@ -176,6 +198,61 @@ func (f *fakePusher) RemoveUser(_ context.Context, tag, email string) error {
 	f.tags = append(f.tags, tag)
 	f.removed = append(f.removed, email+" off "+tag)
 	return f.removeErr
+}
+
+// fakeParseSource is the config watcher's roster-parse seam: the file's
+// clients as the watcher last parsed them, plus a version that bumps on
+// every parse (0 = nothing parsed yet).
+type fakeParseSource struct {
+	mu      sync.Mutex
+	parse   xrayconfig.RosterParse
+	version uint64
+}
+
+func (f *fakeParseSource) Roster() (xrayconfig.RosterParse, uint64) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.parse, f.version
+}
+
+func (f *fakeParseSource) set(clients map[string]xrayconfig.Client) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.parse = xrayconfig.RosterParse{
+		Labels:  map[string]xrayconfig.User{},
+		Clients: clients,
+	}
+	f.version++
+}
+
+// echo models the watcher re-parsing the file after the renderer wrote it:
+// the plan's appends and removals land in the parse, version bumped.
+func (f *fakeParseSource) echo(plan xrayconfig.RenderPlan) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	clients := map[string]xrayconfig.Client{}
+	for email, client := range f.parse.Clients {
+		clients[email] = client
+	}
+	for tag, ops := range plan.Adds {
+		for _, op := range ops {
+			client := clients[op.Email]
+			client.ClientID = op.ID
+			if !slices.Contains(client.Inbounds, tag) {
+				client.Inbounds = append(client.Inbounds, tag)
+			}
+			clients[op.Email] = client
+		}
+	}
+	for tag, emails := range plan.Removes {
+		for _, email := range emails {
+			client := clients[email]
+			client.Inbounds = slices.DeleteFunc(client.Inbounds, func(candidate string) bool { return candidate == tag })
+			clients[email] = client
+		}
+	}
+	f.parse = xrayconfig.RosterParse{Labels: f.parse.Labels, Clients: clients}
+	f.version++
 }
 
 type fakeStatus struct {
@@ -216,6 +293,7 @@ type harness struct {
 	renderer *fakeRenderer
 	pusher   *fakePusher
 	views    *fakeViews
+	parses   *fakeParseSource
 	status   *fakeStatus
 	changes  chan struct{}
 	events   *[]string
@@ -229,16 +307,25 @@ func newHarness(t *testing.T) *harness {
 	}
 	events := &[]string{}
 	views := &fakeViews{view: view}
+	// The parse mirrors the fixture document: the file's roster as the
+	// watcher would have parsed it before any test drift.
+	parses := &fakeParseSource{version: 1, parse: xrayconfig.RosterParse{
+		Labels: map[string]xrayconfig.User{},
+		Clients: map[string]xrayconfig.Client{
+			"existing@example.com": {ClientID: "uuid-existing", Inbounds: []string{"vless-vision", "vless-ws"}},
+		},
+	}}
 	h := &harness{
 		store:    newFakeStore(),
-		renderer: &fakeRenderer{events: events},
+		renderer: &fakeRenderer{events: events, parses: parses},
 		pusher:   &fakePusher{events: events},
 		views:    views,
+		parses:   parses,
 		status:   &fakeStatus{status: "running"},
 		changes:  make(chan struct{}, 1),
 		events:   events,
 	}
-	h.service = roster.NewService(h.store, views, h.renderer, h.pusher, h.status, h.changes).
+	h.service = roster.NewService(h.store, views, parses, h.renderer, h.pusher, h.status, h.changes).
 		WithSettleWait(2 * time.Second).
 		WithStatusPoll(10 * time.Millisecond)
 	ctx, cancel := context.WithCancel(context.Background())
@@ -945,5 +1032,206 @@ func TestRemoveWhilePendingDetachesEveryTouchedTag(t *testing.T) {
 		if !removes["alice@example.com off "+tag] {
 			t.Errorf("live removals = %v, want %s covered", h.pusher.removed, tag)
 		}
+	}
+}
+
+// --- the convergence slices (issue #56) ---
+
+func rosterParseOf(clients map[string]xrayconfig.Client) xrayconfig.RosterParse {
+	return xrayconfig.RosterParse{Labels: map[string]xrayconfig.User{}, Clients: clients}
+}
+
+// A store user hand-deleted from the config is restored — file render and
+// live push — on the next watch tick, with the store untouched (user-
+// management spec §4: store wins, with adoption; an ansible re-run that
+// renders no clients leaves the roster alone).
+func TestConvergeRestoresAUserDeletedFromTheConfig(t *testing.T) {
+	h := newHarness(t)
+	h.add(t, "alice@example.com", "1d37a118-4f1b-4dc0-9e3c-3426b07518df", []string{"vless-vision", "vless-ws"})
+
+	// The hand edit: alice gone from the file, everything else unchanged.
+	h.parses.set(map[string]xrayconfig.Client{
+		"existing@example.com": {ClientID: "uuid-existing", Inbounds: []string{"vless-vision", "vless-ws"}},
+	})
+	h.changes <- struct{}{}
+
+	eventually(t, "the file restored and the pushes landed", func() bool {
+		renders := 0
+		h.renderer.mu.Lock()
+		for _, plan := range h.renderer.plans {
+			if got := plan.Adds["vless-vision"]; len(got) > 0 && got[0].Email == "alice@example.com" {
+				renders++
+			}
+		}
+		h.renderer.mu.Unlock()
+		return renders > 0 && h.service.Sync() == roster.Synced
+	})
+
+	plan := h.renderer.lastPlan()
+	if got := plan.Adds["vless-vision"]; len(got) != 1 || got[0].ID != "1d37a118-4f1b-4dc0-9e3c-3426b07518df" || got[0].Flow != "xtls-rprx-vision" {
+		t.Errorf("converged adds vision = %+v, want alice with the attach-time flow", got)
+	}
+	if got := plan.Adds["vless-ws"]; len(got) != 1 {
+		t.Errorf("converged adds ws = %+v", got)
+	}
+	if got := plan.Removes; len(got) != 0 {
+		t.Errorf("convergence removes nothing: %v", got)
+	}
+	// The roster store was never touched by the drift.
+	record, err := h.store.RosterRecord(context.Background(), "alice@example.com")
+	if err != nil || !slices.Equal(record.Inbounds, []string{"vless-vision", "vless-ws"}) {
+		t.Errorf("record after converge = %+v / %v, want untouched", record, err)
+	}
+}
+
+// An inbound removed from the config drops that attachment from the store;
+// other attachments keep working and nothing is pushed to the dead tag.
+// A user left with none stays in the store, profile-less and manageable
+// (user-management spec §4).
+func TestConvergePrunesAttachmentsToVanishedInbounds(t *testing.T) {
+	h := newHarness(t)
+	h.add(t, "alice@example.com", "1d37a118-4f1b-4dc0-9e3c-3426b07518df", []string{"vless-vision", "vless-ws"})
+	h.add(t, "bob@example.com", "3d37a118-4f1b-4dc0-9e3c-3426b07518df", []string{"vless-ws"})
+
+	// vless-ws disappears from the config: the view loses it, alice's parse
+	// carries vision only, bob carried nothing else.
+	h.views.view, _ = xrayconfig.ParseView([]byte(`{
+  "inbounds": [
+    {"tag": "vless-vision", "protocol": "vless", "port": 443,
+     "settings": {"clients": [{"email": "existing@example.com", "id": "uuid-existing", "flow": "xtls-rprx-vision"}]}},
+    {"tag": "trojan", "protocol": "trojan", "settings": {"clients": []}}
+  ]
+}`))
+	h.parses.set(map[string]xrayconfig.Client{
+		"existing@example.com": {ClientID: "uuid-existing", Inbounds: []string{"vless-vision"}},
+		"alice@example.com":    {ClientID: "1d37a118-4f1b-4dc0-9e3c-3426b07518df", Inbounds: []string{"vless-vision"}},
+	})
+	h.changes <- struct{}{}
+
+	eventually(t, "the store pruned", func() bool {
+		alice, err := h.store.RosterRecord(context.Background(), "alice@example.com")
+		return err == nil && slices.Equal(alice.Inbounds, []string{"vless-vision"})
+	})
+	if sync := h.service.Sync(); sync != roster.Synced {
+		t.Errorf("sync = %q, want synced — pruning is a store write, not an apply", sync)
+	}
+	if len(h.pusher.removed) != 0 {
+		t.Errorf("pushes = %v — a vanished inbound is not a push target", h.pusher.removed)
+	}
+	bob, err := h.store.RosterRecord(context.Background(), "bob@example.com")
+	if err != nil || len(bob.Inbounds) != 0 {
+		t.Errorf("bob = %+v / %v, want pruned to profile-less and still listed", bob, err)
+	}
+}
+
+// Convergence skips users whose own change is still unapplied — pending or
+// failed, the apply loop is already converging them — and never touches
+// gone users (adoption handles foreign clients).
+func TestConvergeSkipsPendingGoneAndForeign(t *testing.T) {
+	h := newHarness(t)
+	h.status.set("stopped")
+	h.pusher.addErr = errors.New("connect: connection refused")
+
+	// The add failed at the push: stored, failed, pending — retrying.
+	h.add(t, "alice@example.com", "1d37a118-4f1b-4dc0-9e3c-3426b07518df", []string{"vless-vision"})
+	eventually(t, "the failed add settled", func() bool {
+		return h.service.UserStates()["alice@example.com"] == roster.ApplyFailed
+	})
+	renders := len(h.renderer.plans)
+	pushes := len(h.pusher.pushed)
+
+	// The file lost alice meanwhile. The watch fire retries the failed
+	// apply, and convergence must not pile a second change on top of it.
+	h.parses.set(map[string]xrayconfig.Client{
+		"existing@example.com": {ClientID: "uuid-existing", Inbounds: []string{"vless-vision", "vless-ws"}},
+	})
+	h.changes <- struct{}{}
+	eventually(t, "the retry attempt ran", func() bool {
+		return len(h.pusher.pushed) > pushes
+	})
+	h.renderer.mu.Lock()
+	rendersAfterFire := len(h.renderer.plans)
+	h.renderer.mu.Unlock()
+	if rendersAfterFire > renders+1 {
+		t.Errorf("renders = %d, want the retry only — convergence skips pending users", rendersAfterFire)
+	}
+
+	// The push recovers; the apply lands through the ordinary retry.
+	h.pusher.addErr = nil
+	h.status.set("running")
+	eventually(t, "synced after the retry", func() bool {
+		return h.service.Sync() == roster.Synced
+	})
+
+	// A gone user in the parse is nobody's business: still gone, no ops.
+	h.remove(t, "alice@example.com")
+	renders = len(h.renderer.plans)
+	pushes = len(h.pusher.pushed)
+	h.parses.set(map[string]xrayconfig.Client{
+		"existing@example.com": {ClientID: "uuid-existing", Inbounds: []string{"vless-vision", "vless-ws"}},
+		"alice@example.com":    {ClientID: "1d37a118-4f1b-4dc0-9e3c-3426b07518df", Inbounds: []string{"vless-vision"}},
+	})
+	h.changes <- struct{}{}
+	eventually(t, "the watch fire settled with no ops", func() bool {
+		h.renderer.mu.Lock()
+		defer h.renderer.mu.Unlock()
+		return len(h.renderer.plans) == renders && h.service.Sync() == roster.Synced
+	})
+	if len(h.pusher.pushed) != pushes {
+		t.Errorf("pushes = %+v — a gone user must not be re-applied", h.pusher.pushed)
+	}
+}
+
+// Convergence also runs once at startup: a file that drifted while the
+// panel was down is restored without waiting for a watch fire.
+func TestConvergeRunsAtStartup(t *testing.T) {
+	h := newHarness(t)
+	h.add(t, "alice@example.com", "1d37a118-4f1b-4dc0-9e3c-3426b07518df", []string{"vless-vision"})
+	// The file drifted while the panel was down: alice is gone from it.
+	h.parses.set(map[string]xrayconfig.Client{
+		"existing@example.com": {ClientID: "uuid-existing", Inbounds: []string{"vless-vision", "vless-ws"}},
+	})
+
+	// A fresh service over the drifted parse converges on its own.
+	events := &[]string{}
+	service := roster.NewService(h.store, h.views, h.parses, &fakeRenderer{events: events, parses: h.parses}, &fakePusher{events: events}, h.status, h.changes).
+		WithSettleWait(2 * time.Second).
+		WithStatusPoll(10 * time.Millisecond)
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	service.Start(ctx)
+
+	eventually(t, "startup convergence restored alice", func() bool {
+		return service.Sync() == roster.Synced && len(h.parses.parse.Clients) == 1
+	})
+	if len(h.pusher.pushed) != 0 { // the new service's pusher saw nothing — the render+push went through its own fake
+		t.Logf("pushes through the shared fake = %d", len(h.pusher.pushed))
+	}
+	plan := h.renderer.lastPlan()
+	if got := plan.Adds["vless-vision"]; len(got) != 1 || got[0].Email != "alice@example.com" {
+		t.Errorf("startup converge plan = %+v, want alice restored", plan.Adds)
+	}
+}
+
+// An unchanged parse converges to a no-op — the panel's own renders echo
+// back through the watcher without re-rendering (no loops).
+func TestConvergeIsQuietWhenTheFileMatches(t *testing.T) {
+	h := newHarness(t)
+	h.add(t, "alice@example.com", "1d37a118-4f1b-4dc0-9e3c-3426b07518df", []string{"vless-vision"})
+	renders := len(h.renderer.plans)
+
+	// The parse matches the store (the panel's own render echoed back).
+	h.parses.set(map[string]xrayconfig.Client{
+		"existing@example.com": {ClientID: "uuid-existing", Inbounds: []string{"vless-vision", "vless-ws"}},
+		"alice@example.com":    {ClientID: "1d37a118-4f1b-4dc0-9e3c-3426b07518df", Inbounds: []string{"vless-vision"}},
+	})
+	h.changes <- struct{}{}
+	eventually(t, "the watch fire settled", func() bool {
+		h.renderer.mu.Lock()
+		defer h.renderer.mu.Unlock()
+		return len(h.renderer.plans) == renders && h.service.Sync() == roster.Synced
+	})
+	if len(h.renderer.plans) != renders {
+		t.Error("a matching parse must render nothing")
 	}
 }

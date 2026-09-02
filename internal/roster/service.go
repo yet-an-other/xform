@@ -93,6 +93,7 @@ type InboundOption struct {
 type Store interface {
 	AddRosterUser(ctx context.Context, user users.NewRosterUser, now time.Time) (users.RosterRecord, error)
 	RosterRecord(ctx context.Context, email string) (users.RosterRecord, error)
+	RosterRecords(ctx context.Context) ([]users.RosterRecord, error)
 	EditRosterUser(ctx context.Context, email string, edit users.RosterEdit, now time.Time) (users.RosterRecord, error)
 	RemoveRosterUser(ctx context.Context, email string, now time.Time) error
 }
@@ -101,6 +102,14 @@ type Store interface {
 // xray config watcher.
 type ViewSource interface {
 	View() xrayconfig.View
+}
+
+// RosterParseSource supplies the config file's roster as last parsed —
+// clients with their inbound attachments — plus a version that bumps on
+// every parse (0: nothing parsed yet). The seam for convergence over the
+// xray config watcher.
+type RosterParseSource interface {
+	Roster() (xrayconfig.RosterParse, uint64)
 }
 
 // Renderer is the file half of the apply path: apply the plan to the config
@@ -156,6 +165,7 @@ type pushOp struct {
 type Service struct {
 	store    Store
 	views    ViewSource
+	parses   RosterParseSource
 	renderer Renderer
 	pusher   Pusher
 	status   StatusSource
@@ -176,11 +186,12 @@ type Service struct {
 }
 
 // NewService creates the roster write path. changes is the config watcher's
-// successful-load channel — a retry trigger.
-func NewService(store Store, views ViewSource, renderer Renderer, pusher Pusher, status StatusSource, changes <-chan struct{}) *Service {
+// successful-load channel — a retry and convergence trigger.
+func NewService(store Store, views ViewSource, parses RosterParseSource, renderer Renderer, pusher Pusher, status StatusSource, changes <-chan struct{}) *Service {
 	return &Service{
 		store:    store,
 		views:    views,
+		parses:   parses,
 		renderer: renderer,
 		pusher:   pusher,
 		status:   status,
@@ -490,6 +501,13 @@ func diffOps(before, after users.RosterRecord, flows map[string]string, prev pen
 // queueOps queues the operations, kicks the apply loop, and waits for the
 // first pass to settle (§4–§5).
 func (s *Service) queueOps(record users.RosterRecord, ops []pushOp) MutationResult {
+	s.enqueue(record, ops)
+	return MutationResult{User: record, Sync: s.waitSettled(record.Email)}
+}
+
+// enqueue queues the operations and kicks the apply loop without waiting —
+// the background path (convergence) never blocks the loop it runs in.
+func (s *Service) enqueue(record users.RosterRecord, ops []pushOp) {
 	email := record.Email
 	s.mu.Lock()
 	s.nextGen++
@@ -500,7 +518,6 @@ func (s *Service) queueOps(record users.RosterRecord, ops []pushOp) MutationResu
 	case s.kick <- struct{}{}:
 	default:
 	}
-	return MutationResult{User: record, Sync: s.waitSettled(email)}
 }
 
 // Sync is the current Roster sync state.
@@ -563,6 +580,7 @@ func (s *Service) run(ctx context.Context) {
 	if status, err := s.status.Latest(ctx); err == nil {
 		lastRunning = status.Status == "running"
 	}
+	s.converge(ctx) // a file that drifted while the panel was down
 	ticker := time.NewTicker(s.statusPoll)
 	defer ticker.Stop()
 	for {
@@ -577,6 +595,7 @@ func (s *Service) run(ctx context.Context) {
 				continue
 			}
 			s.retry(ctx)
+			s.converge(ctx)
 		case <-ticker.C:
 			status, err := s.status.Latest(ctx)
 			if err != nil {
@@ -600,6 +619,98 @@ func (s *Service) retry(ctx context.Context) {
 	if !empty {
 		s.apply(ctx)
 	}
+}
+
+// converge reconciles one config parse against the Roster (user-management
+// spec §4, store wins with adoption): a store user the file lost is
+// re-rendered and re-pushed — a hand edit or an ansible re-run that strips
+// clients never deletes; an inbound the file lost has its attachments
+// pruned from the store (the inbound is gone from xray too), users left
+// with none staying profile-less. Extra config clients are adoption's
+// business and gone users stay gone; users with an unapplied change of
+// their own are left to it — the file catching up settles them.
+func (s *Service) converge(ctx context.Context) {
+	parse, version := s.parses.Roster()
+	if version == 0 {
+		return // nothing parsed yet: nothing to reconcile against
+	}
+	view := s.views.View()
+	live := make(map[string]bool)
+	for _, inbound := range view.Inbounds() {
+		if xrayconfig.Managed(inbound) {
+			live[inbound.Tag] = true
+		}
+	}
+
+	records, err := s.store.RosterRecords(ctx)
+	if err != nil {
+		s.logFailure("cannot read the roster for convergence; the pass retries on the next watch fire", err)
+		return
+	}
+
+	for _, record := range records {
+		if s.hasPending(record.Email) {
+			continue // their own change is the convergence in flight
+		}
+
+		// Attachments to inbounds the config dropped: pruned from the store
+		// — a store-only write, never a push to a dead tag.
+		kept := make([]string, 0, len(record.Inbounds))
+		for _, tag := range record.Inbounds {
+			if live[tag] {
+				kept = append(kept, tag)
+			}
+		}
+		if len(kept) < len(record.Inbounds) {
+			attachOps := make([]pushOp, 0, len(kept))
+			for _, tag := range kept {
+				if inbound, ok := findManaged(view, tag); ok {
+					attachOps = append(attachOps, pushOp{kind: opAttach, tag: tag, flow: xrayconfig.DefaultFlow(inbound)})
+				}
+			}
+			record, err = s.store.EditRosterUser(ctx, record.Email, users.RosterEdit{
+				Inbounds: kept,
+				Protocol: labelProtocol(view, attachOps),
+				Security: labelSecurity(view, attachOps),
+			}, s.now())
+			if errors.Is(err, users.ErrRosterNotFound) {
+				continue // removed while we worked
+			}
+			if err != nil {
+				s.logFailure("cannot prune drifted attachments; the pass retries on the next watch fire", err)
+				continue
+			}
+		}
+
+		// Presence drift: attachments the file lost come back — store wins.
+		fileTags := make(map[string]bool, len(record.Inbounds))
+		for _, tag := range parse.Clients[record.Email].Inbounds {
+			fileTags[tag] = true
+		}
+		var ops []pushOp
+		for _, tag := range record.Inbounds {
+			if fileTags[tag] || !live[tag] {
+				continue // present in the file, or a vanished inbound pruned above
+			}
+			inbound, ok := findManaged(view, tag)
+			if !ok {
+				continue // raced with a config change; the next fire settles it
+			}
+			ops = append(ops, pushOp{kind: opAttach, tag: tag, flow: xrayconfig.DefaultFlow(inbound)})
+		}
+		if len(ops) > 0 {
+			s.enqueue(record, ops)
+		}
+	}
+}
+
+// hasPending reports whether the email carries an unapplied change —
+// convergence leaves those to their own apply.
+func (s *Service) hasPending(email string) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	_, ok := s.pending[email]
+	return ok
 }
 
 // apply runs one pass on one snapshot of the pending changes — the render
@@ -698,6 +809,12 @@ func (s *Service) supersededLocked(email string, gen uint64) bool {
 // whatever credential the inbound holds for the email, then add the new
 // one.
 func (s *Service) pushOp(ctx context.Context, email string, change pendingChange, op pushOp) error {
+	if _, ok := findManaged(s.views.View(), op.tag); !ok {
+		// The inbound left the config between planning and pushing — the
+		// render already skipped it, and convergence prunes the attachment.
+		// A push would only answer "failed to get handler".
+		return nil
+	}
 	switch op.kind {
 	case opAttach:
 		return s.pusher.AddUser(ctx, op.tag, xraygrpc.ManagedUser{Email: email, ID: change.id, Flow: op.flow})
