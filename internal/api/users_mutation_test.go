@@ -42,6 +42,12 @@ type stubRoster struct {
 	enableCalled   bool
 	gotEnableEmail string
 
+	deleteResult   roster.SyncState
+	deleteErr      error
+	deleteCalled   bool
+	deleteDeleted  bool
+	gotDeleteEmail string
+
 	sync      roster.SyncState
 	userState map[string]roster.ApplyState
 	options   []roster.InboundOption
@@ -75,6 +81,15 @@ func (s *stubRoster) Enable(_ context.Context, email string) (roster.MutationRes
 		return roster.MutationResult{User: roster.Record{Email: email}, Sync: roster.Synced}, s.enableErr
 	}
 	return s.enableResult, s.enableErr
+}
+
+func (s *stubRoster) Delete(_ context.Context, email string) (roster.SyncState, bool, error) {
+	s.deleteCalled = true
+	s.gotDeleteEmail = email
+	if s.deleteResult == "" {
+		return roster.Synced, s.deleteDeleted, s.deleteErr
+	}
+	return s.deleteResult, s.deleteDeleted, s.deleteErr
 }
 
 func (s *stubRoster) Sync() roster.SyncState {
@@ -491,12 +506,60 @@ func TestEnableUserRevivesAndAnswersWithTheRecord(t *testing.T) {
 	}
 }
 
-// The disable and enable mutations sit behind the same guards as add and
-// edit: session and the CSRF Origin check.
+// The delete mutation (ADR-0007 two-phase delete, issue #59): a stored
+// delete answers 200 with the Roster sync state — the purge lands once the
+// removal applies; an unknown (never-known or already-purged) email
+// answers 204 — idempotent, nothing to say.
+func TestDeleteUserStoresAndAnswersWithTheSyncState(t *testing.T) {
+	rosterSource := &stubRoster{deleteDeleted: true, deleteResult: roster.Pending}
+	handler := newRosterHandler(rosterSource)
+	cookie := login(t, handler, testPassword)
+
+	request := httptest.NewRequest(http.MethodDelete, "/api/v1/users/alice@example.com", nil)
+	request.AddCookie(cookie)
+	response := httptest.NewRecorder()
+	handler.ServeHTTP(response, request)
+	if response.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body = %s", response.Code, response.Body)
+	}
+	if !rosterSource.deleteCalled || rosterSource.gotDeleteEmail != "alice@example.com" {
+		t.Errorf("the mutation got %q", rosterSource.gotDeleteEmail)
+	}
+	var body struct {
+		RosterSync string `json:"roster_sync"`
+	}
+	if err := json.Unmarshal(response.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if body.RosterSync != "pending" {
+		t.Errorf("roster_sync = %q, want the stored delete's sync state", body.RosterSync)
+	}
+
+	// Idempotent: an unknown email answers 204, no body.
+	rosterSource.deleteCalled = false
+	rosterSource.deleteDeleted = false
+	request = httptest.NewRequest(http.MethodDelete, "/api/v1/users/never-was@example.com", nil)
+	request.AddCookie(cookie)
+	response = httptest.NewRecorder()
+	handler.ServeHTTP(response, request)
+	if response.Code != http.StatusNoContent {
+		t.Errorf("unknown email status = %d, want 204", response.Code)
+	}
+	if !rosterSource.deleteCalled {
+		t.Error("the idempotent delete still reaches the roster")
+	}
+}
+
+// The disable, enable, and delete mutations sit behind the same guards as
+// add and edit: session and the CSRF Origin check.
 func TestDisableAndEnableRejectUnauthenticatedAndCrossSiteRequests(t *testing.T) {
 	handler := newRosterHandler(&stubRoster{})
-	for _, path := range []string{"/api/v1/users/a@b.c/disable", "/api/v1/users/a@b.c/enable"} {
-		request := httptest.NewRequest(http.MethodPost, path, nil)
+	for _, path := range []string{"/api/v1/users/a@b.c/disable", "/api/v1/users/a@b.c/enable", "/api/v1/users/a@b.c"} {
+		method := http.MethodPost
+		if path == "/api/v1/users/a@b.c" {
+			method = http.MethodDelete
+		}
+		request := httptest.NewRequest(method, path, nil)
 		response := httptest.NewRecorder()
 		handler.ServeHTTP(response, request)
 		if response.Code != http.StatusUnauthorized {
@@ -504,7 +567,7 @@ func TestDisableAndEnableRejectUnauthenticatedAndCrossSiteRequests(t *testing.T)
 		}
 
 		cookie := login(t, handler, testPassword)
-		request = httptest.NewRequest(http.MethodPost, path, nil)
+		request = httptest.NewRequest(method, path, nil)
 		request.Host = "panel.example.com"
 		request.AddCookie(cookie)
 		request.Header.Set("Origin", "http://evil.example.com")

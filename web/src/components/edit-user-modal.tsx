@@ -6,6 +6,7 @@ import {
   ConflictError,
   UnauthenticatedError,
   UserNotFoundError,
+  deleteUser,
   disableUser,
   editUser,
   enableUser,
@@ -29,10 +30,12 @@ interface EditUserModalProps {
 // plus the destructive acts, which live here rather than on the rows
 // (ADR-0007). A live user's dialog offers Disable user behind a confirm that
 // names what disabling means; a disabled user's dialog offers Re-enable,
-// which re-applies the stored credential and attachments. Saving stores the
-// edit; the apply runs from there and its first outcome lands in the answer
-// — synced (or still pending) closes the dialog, failed keeps it open on
-// the banner, the change stored and retrying.
+// which re-applies the stored credential and attachments. Both live and
+// disabled users can be deleted (issue #59): the confirm names the purge —
+// every trace erased, irreversible. Saving stores the edit; the apply runs
+// from there and its first outcome lands in the answer — synced (or still
+// pending) closes the dialog, failed keeps it open on the banner, the change
+// stored and retrying.
 export function EditUserModal({ user, inbounds, opener, onClose, onExpired }: EditUserModalProps) {
   const stored = user.inbounds ?? [];
   const known = inbounds.map((option) => option.tag);
@@ -44,7 +47,11 @@ export function EditUserModal({ user, inbounds, opener, onClose, onExpired }: Ed
   const [clientId, setClientId] = useState<string>(user.client_id ?? "");
   // confirmingDisable is the disable act's confirm state: the form gives
   // way to the one list that says exactly what disabling means.
+  // confirmingDelete is the delete act's (issue #59): the one list that
+  // says the purge is total and irreversible. The two confirmations are
+  // mutually exclusive — one open act at a time.
   const [confirmingDisable, setConfirmingDisable] = useState(false);
+  const [confirmingDelete, setConfirmingDelete] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   // failed is set once the stored change's first apply failed: the dialog
@@ -101,8 +108,24 @@ export function EditUserModal({ user, inbounds, opener, onClose, onExpired }: Ed
     return runSubmit(() => disableUser(user.email));
   }
 
+  function confirmDelete() {
+    return runSubmit(() => deleteUser(user.email));
+  }
+
   function reEnable() {
     return runSubmit(() => enableUser(user.email));
+  }
+
+  // askDisable / askDelete swap the form for one destructive confirm;
+  // opening one closes the other.
+  function askDisable() {
+    setConfirmingDelete(false);
+    setConfirmingDisable(true);
+  }
+
+  function askDelete() {
+    setConfirmingDisable(false);
+    setConfirmingDelete(true);
   }
 
   return (
@@ -141,7 +164,18 @@ export function EditUserModal({ user, inbounds, opener, onClose, onExpired }: Ed
         {/* The write-side failure surface (user-management spec §6): the
             change stays stored and retries — the banner says so. */}
         {user.apply_state === "failed" || failed ? <ApplyFailedBanner /> : null}
-        {confirmingDisable ? (
+        {confirmingDelete ? (
+          <>
+            <p className="text-sm leading-relaxed">
+              <strong className="font-mono text-xs">{user.email}</strong> is deleted: removed from
+              every inbound and out of the running xray immediately.
+            </p>
+            <ul className="text-muted-foreground mt-3 space-y-1.5 text-xs leading-relaxed">
+              <li>Their traffic history is permanently erased — this is irreversible.</li>
+              <li>Adding the same email again starts a brand-new user with fresh history.</li>
+            </ul>
+          </>
+        ) : confirmingDisable ? (
           <>
             <p className="text-sm leading-relaxed">
               <strong className="font-mono text-xs">{user.email}</strong> is disabled: off every
@@ -245,6 +279,24 @@ export function EditUserModal({ user, inbounds, opener, onClose, onExpired }: Ed
           >
             Close
           </button>
+        ) : confirmingDelete ? (
+          <>
+            <button
+              type="button"
+              onClick={() => setConfirmingDelete(false)}
+              className="border-border text-muted-foreground hover:text-foreground rounded-lg border px-3 py-1.5 text-[0.78rem] font-bold tracking-[0.08em] uppercase"
+            >
+              Cancel
+            </button>
+            <button
+              type="button"
+              onClick={() => void confirmDelete()}
+              disabled={submitting}
+              className="bg-destructive text-destructive-foreground rounded-lg px-3 py-1.5 text-[0.78rem] font-bold tracking-[0.08em] uppercase disabled:opacity-50"
+            >
+              Delete user
+            </button>
+          </>
         ) : confirmingDisable ? (
           <>
             <button
@@ -267,6 +319,13 @@ export function EditUserModal({ user, inbounds, opener, onClose, onExpired }: Ed
           <>
             <button
               type="button"
+              onClick={askDelete}
+              className="bg-destructive text-destructive-foreground mr-auto rounded-lg px-3 py-1.5 text-[0.78rem] font-bold tracking-[0.08em] uppercase"
+            >
+              Delete user
+            </button>
+            <button
+              type="button"
               onClick={onClose}
               className="border-border text-muted-foreground hover:text-foreground rounded-lg border px-3 py-1.5 text-[0.78rem] font-bold tracking-[0.08em] uppercase"
             >
@@ -283,13 +342,22 @@ export function EditUserModal({ user, inbounds, opener, onClose, onExpired }: Ed
           </>
         ) : (
           <>
-            <button
-              type="button"
-              onClick={() => setConfirmingDisable(true)}
-              className="text-destructive hover:bg-destructive/10 mr-auto rounded-lg px-3 py-1.5 text-[0.78rem] font-bold tracking-[0.08em] uppercase"
-            >
-              Disable user
-            </button>
+            <div className="mr-auto flex gap-2">
+              <button
+                type="button"
+                onClick={askDisable}
+                className="text-destructive hover:bg-destructive/10 rounded-lg px-3 py-1.5 text-[0.78rem] font-bold tracking-[0.08em] uppercase"
+              >
+                Disable user
+              </button>
+              <button
+                type="button"
+                onClick={askDelete}
+                className="bg-destructive text-destructive-foreground rounded-lg px-3 py-1.5 text-[0.78rem] font-bold tracking-[0.08em] uppercase"
+              >
+                Delete user
+              </button>
+            </div>
             <button
               type="button"
               onClick={onClose}

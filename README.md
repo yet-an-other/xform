@@ -109,6 +109,10 @@ Doing step 2 as one change is deliberate: once ansible strips `clients` and rest
 
 On a **fresh host** everything lands together at first provisioning: template without `clients`, ACL + `ReadWritePaths` + `HandlerService` in place before first start, users created through the panel — nothing to adopt.
 
+### Deleting users, and the resurrection caveat
+
+Delete (the edit dialog's destructive act, ADR-0007) is two-phase: the user is cut off like a disable, and once that has applied everywhere the panel erases every trace — the roster row, the users row with its traffic history, the config file's clients, and the running xray's in-memory handler user. Nothing keyed by the email remains, so nothing can warn about it later. **Caveat: a deleted email can come back.** A stale `config.json` (a snapshot from before the delete rendered, a hand edit, or an ansible run carrying `clients` again) lists the deleted client, and adoption treats it as any foreign client — a brand-new user with fresh history and working credentials. The same is true if you hand it to xray yourself. The provisioning contract is the guard: templates never render `clients` lists, and a delete is only as final as the config it leaves behind.
+
 ### Journal namespace (log snapshots)
 
 The panel's Log snapshot viewers read the journal as the unprivileged `xform`

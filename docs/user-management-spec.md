@@ -5,9 +5,11 @@ Ready to fold into SPEC.md. Compiled from the map's closed tickets: charting dec
 > **Superseded in part by ADR-0007** (map's successor, issue #58): the single
 > "remove" act split into **Disable** (this document's remove, renamed, with
 > the destructive act rehomed into the edit view — `POST
-> /api/v1/users/{email}/disable` and `.../enable` replace `DELETE`) and
-> **Delete**, which purges. "Gone user" is now "Disabled user" everywhere —
-> store column, API field, UI. SPEC.md is the live authority.
+> /api/v1/users/{email}/disable` and `.../enable` replace the old remove
+> `DELETE`) and **Delete** (`DELETE /api/v1/users/{email}`, issue #59),
+> which purges the user from every storage. "Gone user" is now "Disabled
+> user" everywhere — store column, API field, UI. SPEC.md is the live
+> authority.
 
 ## 1. Summary
 

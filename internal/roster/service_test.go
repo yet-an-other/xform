@@ -24,6 +24,9 @@ type fakeStore struct {
 	byMail   map[string]users.RosterRecord // lower(email) → record
 	byID     map[string]string             // lower(client_id) → email
 	disabled map[string]bool               // lower(email) → off the roster (ADR-0007)
+	deleting map[string]bool               // lower(email) → purge in progress (issue #59)
+	purgeErr error                         // the purge write fails while set
+	purged   []string                      // emails actually purged, in order
 	// vanishOnList makes the next RosterRecords flag every row disabled —
 	// a Disable racing the caller between the listing and its next read.
 	vanishOnList bool
@@ -35,6 +38,7 @@ func newFakeStore() *fakeStore {
 		byMail:   map[string]users.RosterRecord{},
 		byID:     map[string]string{},
 		disabled: map[string]bool{},
+		deleting: map[string]bool{},
 	}
 }
 
@@ -42,6 +46,9 @@ func (f *fakeStore) AddRosterUser(_ context.Context, user users.NewRosterUser, n
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	email := strings.ToLower(user.Email)
+	if f.deleting[email] {
+		return users.RosterRecord{}, users.ErrEmailTaken // delete in progress: claims held until the purge
+	}
 	if _, ok := f.byMail[email]; ok && !f.disabled[email] {
 		return users.RosterRecord{}, users.ErrEmailTaken
 	}
@@ -52,7 +59,7 @@ func (f *fakeStore) AddRosterUser(_ context.Context, user users.NewRosterUser, n
 		user.Inbounds = []string{}
 	}
 	created := now.Unix()
-	if record, ok := f.byMail[email]; ok { // revive keeps the creation
+	if record, ok := f.byMail[email]; ok && !f.deleting[email] { // revive keeps the creation
 		created = record.CreatedAt
 	}
 	record := users.RosterRecord{
@@ -69,14 +76,14 @@ func (f *fakeStore) RosterRecord(_ context.Context, email string) (users.RosterR
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	email = strings.ToLower(email)
-	if f.disabled[email] {
+	if f.disabled[email] || f.deleting[email] {
 		return users.RosterRecord{}, users.ErrRosterNotFound
 	}
 	record, ok := f.byMail[email]
-	if !ok {
-		return users.RosterRecord{}, users.ErrRosterNotFound
+	if ok {
+		return record, nil
 	}
-	return record, nil
+	return users.RosterRecord{}, users.ErrRosterNotFound
 }
 
 func (f *fakeStore) RosterRecords(_ context.Context) ([]users.RosterRecord, error) {
@@ -84,7 +91,7 @@ func (f *fakeStore) RosterRecords(_ context.Context) ([]users.RosterRecord, erro
 	defer f.mu.Unlock()
 	emails := make([]string, 0, len(f.byMail))
 	for email := range f.byMail {
-		if !f.disabled[email] {
+		if !f.disabled[email] && !f.deleting[email] {
 			emails = append(emails, email)
 		}
 	}
@@ -105,7 +112,7 @@ func (f *fakeStore) DisableRosterUser(_ context.Context, email string, now time.
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	email = strings.ToLower(email)
-	if record, ok := f.byMail[email]; ok && !f.disabled[email] {
+	if record, ok := f.byMail[email]; ok && !f.disabled[email] && !f.deleting[email] {
 		record.UpdatedAt = now.Unix()
 		f.byMail[email] = record
 		f.disabled[email] = true
@@ -113,11 +120,79 @@ func (f *fakeStore) DisableRosterUser(_ context.Context, email string, now time.
 	return nil
 }
 
+func (f *fakeStore) MarkRosterDeleting(_ context.Context, email string, now time.Time) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	email = strings.ToLower(email)
+	if record, ok := f.byMail[email]; ok && !f.deleting[email] {
+		record.UpdatedAt = now.Unix()
+		f.byMail[email] = record
+		f.disabled[email] = true
+		f.deleting[email] = true
+	}
+	return nil
+}
+
+func (f *fakeStore) PurgeRosterUser(_ context.Context, email string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	email = strings.ToLower(email)
+	if f.purgeErr != nil {
+		return f.purgeErr
+	}
+	record, ok := f.byMail[email]
+	if ok && f.deleting[email] {
+		for id, holder := range f.byID {
+			if holder == record.Email {
+				delete(f.byID, id)
+			}
+		}
+		delete(f.byMail, email)
+		delete(f.disabled, email)
+		delete(f.deleting, email)
+		f.purged = append(f.purged, record.Email)
+	}
+	return nil
+}
+
+// purgedList returns the emails actually purged, in order (test
+// assertions).
+func (f *fakeStore) purgedList() []string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return slices.Clone(f.purged)
+}
+
+// isDeleting reports whether the email's row is marked deleting.
+func (f *fakeStore) isDeleting(email string) bool {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.deleting[strings.ToLower(email)]
+}
+
+func (f *fakeStore) DeletingRosterRecords(_ context.Context) ([]users.RosterRecord, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	emails := make([]string, 0, len(f.byMail))
+	for email := range f.byMail {
+		if f.deleting[email] {
+			emails = append(emails, email)
+		}
+	}
+	sort.Strings(emails)
+	records := make([]users.RosterRecord, 0, len(emails))
+	for _, email := range emails {
+		records = append(records, f.byMail[email])
+	}
+	return records, nil
+}
+
 func (f *fakeStore) DisabledRosterRecord(_ context.Context, email string) (users.RosterRecord, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	record, ok := f.byMail[strings.ToLower(email)]
-	if !ok || !f.disabled[strings.ToLower(email)] {
+	email = strings.ToLower(email)
+	record, ok := f.byMail[email]
+	if !ok || !f.disabled[email] || f.deleting[email] {
 		return users.RosterRecord{}, users.ErrRosterNotFound
 	}
 	return record, nil
@@ -128,7 +203,7 @@ func (f *fakeStore) EnableRosterUser(_ context.Context, email string, now time.T
 	defer f.mu.Unlock()
 	email = strings.ToLower(email)
 	record, ok := f.byMail[email]
-	if !ok {
+	if !ok || f.deleting[email] {
 		return users.RosterRecord{}, false, users.ErrRosterNotFound
 	}
 	if !f.disabled[email] {
@@ -144,7 +219,7 @@ func (f *fakeStore) EditRosterUser(_ context.Context, email string, edit users.R
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	key := strings.ToLower(email)
-	if f.disabled[key] {
+	if f.disabled[key] || f.deleting[key] {
 		return users.RosterRecord{}, users.ErrRosterNotFound
 	}
 	before, ok := f.byMail[key]
@@ -253,6 +328,13 @@ func (f *fakePusher) removedList() []string {
 	return slices.Clone(f.removed)
 }
 
+// pushedList returns the users pushed by adds, in order (test assertions).
+func (f *fakePusher) pushedList() []xraygrpc.ManagedUser {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return slices.Clone(f.pushed)
+}
+
 func (f *fakePusher) counts() (adds, removes int) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -346,6 +428,25 @@ func (f *fakeStatus) set(status string) {
 	f.status = status
 }
 
+// fakePurger is the collector seam (issue #59): records whose in-memory
+// traffic state the service dropped before a purge.
+type fakePurger struct {
+	mu     sync.Mutex
+	purged []string
+}
+
+func (f *fakePurger) Purge(email string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.purged = append(f.purged, email)
+}
+
+func (f *fakePurger) list() []string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return slices.Clone(f.purged)
+}
+
 // --- harness ---
 
 const testDocument = `{
@@ -369,6 +470,7 @@ type harness struct {
 	views    *fakeViews
 	parses   *fakeParseSource
 	status   *fakeStatus
+	purges   *fakePurger
 	changes  chan struct{}
 	events   *[]string
 }
@@ -396,12 +498,14 @@ func newHarness(t *testing.T) *harness {
 		views:    views,
 		parses:   parses,
 		status:   &fakeStatus{status: "running"},
+		purges:   &fakePurger{},
 		changes:  make(chan struct{}, 1),
 		events:   events,
 	}
 	h.service = roster.NewService(h.store, views, parses, h.renderer, h.pusher, h.status, h.changes).
 		WithSettleWait(2 * time.Second).
-		WithStatusPoll(10 * time.Millisecond)
+		WithStatusPoll(10 * time.Millisecond).
+		WithPurgeNotifier(h.purges)
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
 	h.service.Start(ctx)

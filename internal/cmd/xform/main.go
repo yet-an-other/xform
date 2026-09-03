@@ -102,7 +102,7 @@ func main() {
 		xraygrpc.HandlerClient{Address: cfg.XrayAPIAddress},
 		xrayStatus,
 		configWatcher.Changes(),
-	)
+	).WithPurgeNotifier(usersCollector)
 	rosterService.Start(shutdownSignal)
 	sessions := session.NewManager(cfg.Password, time.Now)
 

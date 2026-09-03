@@ -98,6 +98,9 @@ type Store interface {
 	EditRosterUser(ctx context.Context, email string, edit users.RosterEdit, now time.Time) (users.RosterRecord, error)
 	DisableRosterUser(ctx context.Context, email string, now time.Time) error
 	EnableRosterUser(ctx context.Context, email string, now time.Time) (users.RosterRecord, bool, error)
+	MarkRosterDeleting(ctx context.Context, email string, now time.Time) error
+	PurgeRosterUser(ctx context.Context, email string) error
+	DeletingRosterRecords(ctx context.Context) ([]users.RosterRecord, error)
 }
 
 // ViewSource supplies the current parsed inbound view — the seam over the
@@ -133,6 +136,13 @@ type StatusSource interface {
 	Latest(context.Context) (xraystatus.Status, error)
 }
 
+// PurgeNotifier is told when a user's stored traces are about to be purged
+// (issue #59) — the collector drops its in-memory traffic state so no
+// unapplied delta resurrects the erased rows.
+type PurgeNotifier interface {
+	Purge(email string)
+}
+
 // opKind is what one apply operation does to one inbound.
 type opKind int
 
@@ -147,11 +157,13 @@ const (
 // pair sits adjacent in ops, per the spec's not-atomic auth gap. The gen
 // guards the apply loop: a pass may only settle (or fail) the change it
 // snapshotted — a newer edit that superseded it mid-pass stays queued for
-// its own pass.
+// its own pass. purge marks the delete mutation's change: once its removal
+// settles, every stored trace of the user is purged (issue #59).
 type pendingChange struct {
-	id  string
-	ops []pushOp
-	gen uint64
+	id    string
+	ops   []pushOp
+	gen   uint64
+	purge bool
 }
 
 type pushOp struct {
@@ -177,6 +189,7 @@ type Service struct {
 	settleWait time.Duration
 	statusPoll time.Duration
 	nextGen    uint64 // pending-change generation counter
+	purges     PurgeNotifier
 
 	mu      sync.Mutex
 	pending map[string]pendingChange // email → unapplied change
@@ -227,6 +240,13 @@ func (s *Service) WithStatusPoll(interval time.Duration) *Service {
 // WithClock overrides the store timestamp source (tests).
 func (s *Service) WithClock(now func() time.Time) *Service {
 	s.now = now
+	return s
+}
+
+// WithPurgeNotifier wires the purge observer — the users collector in
+// production (issue #59). A nil notifier (tests) purges without it.
+func (s *Service) WithPurgeNotifier(purges PurgeNotifier) *Service {
+	s.purges = purges
 	return s
 }
 
@@ -429,6 +449,60 @@ func (s *Service) Disable(ctx context.Context, email string) (sync SyncState, di
 	return s.queueOps(before, ops).Sync, true, nil
 }
 
+// Delete erases one user from every storage (ADR-0007, CONTEXT.md Deleted
+// user, issue #59). Two-phase: the row is marked deleting — disabled with
+// it, so the dashboard renders the row disabled while the removal applies —
+// then the removal applies exactly like a disable: rendered out of every
+// inbound that might still carry them (an unfinished change's tags included:
+// a failed apply never strands a live credential) and pushed off the running
+// xray. Once it settles, the roster row and the users row with its history
+// purge, and the collector drops its memory of the user. Nothing keyed by
+// the email remains; the email and its Client ID claim stay held until the
+// purge lands. Works on live and disabled users alike. Idempotent: an
+// unknown — never-known or already-purged — email deletes nothing. The
+// mutation succeeds once stored: a failed apply answers failed.
+func (s *Service) Delete(ctx context.Context, email string) (sync SyncState, deleted bool, err error) {
+	email = strings.TrimSpace(email)
+	if email == "" {
+		return s.Sync(), false, nil
+	}
+	// Delete reaches both flag states: a live member's row, and a disabled
+	// user's kept row. A deleting row reads as absent (both reads exclude
+	// it) — idempotent.
+	record, err := s.store.RosterRecord(ctx, email)
+	if errors.Is(err, users.ErrRosterNotFound) {
+		record, err = s.store.DisabledRosterRecord(ctx, email)
+	}
+	if errors.Is(err, users.ErrRosterNotFound) {
+		return s.Sync(), false, nil // unknown or purged already — idempotent success
+	}
+	if err != nil {
+		return "", false, err
+	}
+
+	// Every tag that might hold them live: the record's attachments plus
+	// every tag an unfinished change touched — its pushes may have
+	// half-landed, and the purge must not strand a live credential.
+	prev := s.takePending(email)
+	tags := slices.Clone(record.Inbounds)
+	for _, op := range prev.ops {
+		if !slices.Contains(tags, op.tag) {
+			tags = append(tags, op.tag)
+		}
+	}
+
+	if err := s.store.MarkRosterDeleting(ctx, record.Email, s.now()); err != nil {
+		return "", false, err
+	}
+
+	ops := make([]pushOp, 0, len(tags))
+	for _, tag := range tags {
+		ops = append(ops, pushOp{kind: opDetach, tag: tag})
+	}
+	s.enqueueDelete(record, ops)
+	return s.waitSettled(record.Email), true, nil
+}
+
 // Enable revives one disabled user (ADR-0007): the store sheds the
 // disabled flag — credential, attachments, and history kept — and the
 // stored attachments re-apply like any roster change: rendered into the
@@ -577,10 +651,20 @@ func (s *Service) enqueueIfLive(ctx context.Context, record users.RosterRecord, 
 // enqueue queues the operations and kicks the apply loop without waiting —
 // the background path (convergence) never blocks the loop it runs in.
 func (s *Service) enqueue(record users.RosterRecord, ops []pushOp) {
+	s.enqueueGen(record, ops, false)
+}
+
+// enqueueDelete queues the delete mutation's change: the removal carries a
+// purge-on-settle mark (issue #59).
+func (s *Service) enqueueDelete(record users.RosterRecord, ops []pushOp) {
+	s.enqueueGen(record, ops, true)
+}
+
+func (s *Service) enqueueGen(record users.RosterRecord, ops []pushOp, purge bool) {
 	email := record.Email
 	s.mu.Lock()
 	s.nextGen++
-	s.pending[email] = pendingChange{id: record.ClientID, ops: ops, gen: s.nextGen}
+	s.pending[email] = pendingChange{id: record.ClientID, ops: ops, gen: s.nextGen, purge: purge}
 	delete(s.failed, email) // a fresh change starts a fresh apply
 	s.mu.Unlock()
 	select {
@@ -649,7 +733,8 @@ func (s *Service) run(ctx context.Context) {
 	if status, err := s.status.Latest(ctx); err == nil {
 		lastRunning = status.Status == "running"
 	}
-	s.converge(ctx) // a file that drifted while the panel was down
+	s.recoverDeletes(ctx) // a delete interrupted by a restart re-queues
+	s.converge(ctx)       // a file that drifted while the panel was down
 	ticker := time.NewTicker(s.statusPoll)
 	defer ticker.Stop()
 	for {
@@ -687,6 +772,26 @@ func (s *Service) retry(ctx context.Context) {
 	s.mu.Unlock()
 	if !empty {
 		s.apply(ctx)
+	}
+}
+
+// recoverDeletes re-queues the purges of rows marked deleting (issue #59):
+// a restart between the deleting mark and the purge leaves the removal
+// half-applied — the stored attachments are what might still carry the
+// user, detached again (a remove of an absent user reads as applied), and
+// the purge lands once the pass settles.
+func (s *Service) recoverDeletes(ctx context.Context) {
+	records, err := s.store.DeletingRosterRecords(ctx)
+	if err != nil {
+		slog.Warn("cannot read the roster's deleting rows; their purge retries on the next watch fire", "error", err)
+		return
+	}
+	for _, record := range records {
+		ops := make([]pushOp, 0, len(record.Inbounds))
+		for _, tag := range record.Inbounds {
+			ops = append(ops, pushOp{kind: opDetach, tag: tag})
+		}
+		s.enqueueDelete(record, ops)
 	}
 }
 
@@ -842,6 +947,7 @@ func (s *Service) apply(ctx context.Context) {
 				break
 			}
 		}
+		var purgeFailure error
 		s.mu.Lock()
 		if failed {
 			if !s.supersededLocked(email, change.gen) {
@@ -850,8 +956,21 @@ func (s *Service) apply(ctx context.Context) {
 		} else if current, still := s.pending[email]; still && current.gen == change.gen {
 			delete(s.pending, email)
 			delete(s.failed, email)
+			if change.purge {
+				if err := s.finishDelete(ctx, email); err != nil {
+					// The erase could not write: the delete stays queued —
+					// re-applied by the usual retry triggers — and the sync
+					// surface reports failed until it lands (issue #59).
+					purgeFailure = err
+					s.failed[email] = true
+					s.pending[email] = pendingChange{id: change.id, ops: nil, purge: true, gen: change.gen}
+				}
+			}
 		}
 		s.mu.Unlock()
+		if purgeFailure != nil { // logged unlocked: logFailure shares s.mu
+			s.logFailure("cannot purge a deleted user's rows; the erase retries on the next watch fire", purgeFailure)
+		}
 	}
 	s.mu.Lock()
 	if len(s.pending) == 0 && len(s.failed) == 0 {
@@ -867,6 +986,18 @@ func (s *Service) superseded(email string, gen uint64) bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.supersededLocked(email, gen)
+}
+
+// finishDelete is the delete's phase two (issue #59): the removal settled
+// everywhere, so the collector's memory of the user drops first — an
+// unapplied delta must not resurrect the row — and every stored trace
+// purges. The xray-wide totals are panel state, not the user's: untouched.
+// Called with s.mu held: it must not log or re-enter the service.
+func (s *Service) finishDelete(ctx context.Context, email string) error {
+	if s.purges != nil {
+		s.purges.Purge(email)
+	}
+	return s.store.PurgeRosterUser(ctx, email)
 }
 
 func (s *Service) supersededLocked(email string, gen uint64) bool {

@@ -48,6 +48,7 @@ type rosterMutations interface {
 	Edit(ctx context.Context, email string, req roster.EditRequest) (roster.MutationResult, error)
 	Disable(ctx context.Context, email string) (roster.SyncState, bool, error)
 	Enable(ctx context.Context, email string) (roster.MutationResult, error)
+	Delete(ctx context.Context, email string) (roster.SyncState, bool, error)
 	Sync() roster.SyncState
 	UserStates() map[string]roster.ApplyState
 	InboundOptions() []roster.InboundOption
@@ -272,6 +273,20 @@ func New(snapshots hostStatsSnapshots, xray xrayStatuses, usersSource usersSnaps
 			return
 		}
 		writeJSON(response, http.StatusOK, mutationResponse{User: result.User, RosterSync: result.Sync})
+	}))))
+	mux.HandleFunc("DELETE /api/v1/users/{email}", noStore(requireSession(sameSiteOnly(func(response http.ResponseWriter, request *http.Request) {
+		sync, deleted, err := rosterSource.Delete(request.Context(), request.PathValue("email"))
+		if writeMutationError(response, err) {
+			return
+		}
+		if !deleted {
+			// Unknown or already-purged: idempotent, nothing to say.
+			response.WriteHeader(http.StatusNoContent)
+			return
+		}
+		// A stored delete answers with the Roster sync state — the purge
+		// lands once the removal applies (ADR-0007, issue #59).
+		writeJSON(response, http.StatusOK, syncResponse{RosterSync: sync})
 	}))))
 	mux.HandleFunc("GET /api/v1/users/{email}", noStore(requireSession(func(response http.ResponseWriter, request *http.Request) {
 		if malformedUserEmailEscape(request.RequestURI) {

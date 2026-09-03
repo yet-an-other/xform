@@ -259,6 +259,20 @@ func (c *Collector) flushRoster(ctx context.Context) {
 	c.mu.Unlock()
 }
 
+// Purge drops every in-memory trace the collector holds for one email —
+// traffic trackers, speed windows, the seeded baseline, and unapplied
+// deltas — so nothing the panel still remembers can resurrect a purged
+// user's row (ADR-0007 delete, issue #59): a delta carried across the
+// purge would re-insert the erased users row on the next flush.
+func (c *Collector) Purge(email string) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	delete(c.up, email)
+	delete(c.down, email)
+	delete(c.seeded, email)
+	delete(c.pending, email)
+}
+
 // snapshot reads the last-known users from the store and overlays the
 // in-memory speeds (nil when stale — speeds zero out per SPEC.md §3) and
 // the live online set. A stale snapshot serves the store rows untouched, so

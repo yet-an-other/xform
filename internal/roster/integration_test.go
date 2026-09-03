@@ -2,6 +2,7 @@ package roster_test
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"slices"
@@ -370,6 +371,156 @@ func TestRemoveEndToEndOverTheRealStoreAndRenderer(t *testing.T) {
 	// Idempotent: a second remove is a no-op success.
 	if sync, removedAgain, err := service.Disable(ctx, "alice@example.com"); err != nil || sync != roster.Synced || removedAgain {
 		t.Errorf("re-remove = %q / %v / %t, want synced, removed nothing", sync, err, removedAgain)
+	}
+}
+
+// The delete acceptance path end to end over the real seams (ADR-0007,
+// issue #59): the DELETE's store, the real SQLite roster, the real file
+// render — only the gRPC push is faked. Deleting erases every trace keyed
+// by the email — roster row, users row with its history, file clients,
+// live handler user — and a re-add of the same email starts a brand-new
+// user with fresh history.
+func TestDeleteEndToEndOverTheRealStoreAndRenderer(t *testing.T) {
+	dir := t.TempDir()
+	configPath := filepath.Join(dir, "config.json")
+	document := `{
+  "inbounds": [
+    {"tag": "vless-vision", "protocol": "vless",
+     "settings": {"clients": [
+       {"email": "alice@example.com", "id": "uuid-alice"},
+       {"email": "existing@example.com", "id": "uuid-existing", "flow": "xtls-rprx-vision"}
+     ]}},
+    {"tag": "vless-ws", "protocol": "vless",
+     "settings": {"clients": [{"email": "alice@example.com", "id": "uuid-alice"}]}}
+  ]
+}`
+	if err := os.WriteFile(configPath, []byte(document), 0o600); err != nil {
+		t.Fatalf("write fixture: %v", err)
+	}
+	view, err := xrayconfig.ParseView([]byte(document))
+	if err != nil {
+		t.Fatalf("parse view: %v", err)
+	}
+
+	store, err := users.Open(":memory:")
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+
+	ctx := context.Background()
+	// Seed: alice carries traffic history, and the config parse adopts her
+	// into the roster with both attachments.
+	if err := store.ApplyPoll(ctx, []users.Delta{
+		{Email: "alice@example.com", Up: 100, Down: 1_000, SeenNow: true},
+	}, nil, &users.RosterParse{
+		Labels: map[string]users.RosterUser{
+			"alice@example.com": {Protocol: "VLESS", Security: "Reality"},
+		},
+		Clients: map[string]users.RosterClient{
+			"alice@example.com": {ClientID: "uuid-alice", Inbounds: []string{"vless-vision", "vless-ws"}},
+		},
+	}, time.Unix(1_780_000_000, 0)); err != nil {
+		t.Fatalf("seed poll: %v", err)
+	}
+	events := &[]string{}
+	pusher := &fakePusher{events: events}
+	service := roster.NewService(
+		store,
+		&fakeViews{view: view},
+		&fakeParseSource{version: 1, parse: xrayconfig.RosterParse{Labels: map[string]xrayconfig.User{}, Clients: map[string]xrayconfig.Client{}}},
+		roster.FileRenderer{Path: configPath},
+		pusher,
+		&fakeStatus{status: "running"},
+		make(chan struct{}, 1),
+	)
+	cancelCtx, cancel := context.WithCancel(ctx)
+	t.Cleanup(cancel)
+	service.Start(cancelCtx)
+
+	sync, deleted, err := service.Delete(ctx, "alice@example.com")
+	if err != nil {
+		t.Fatalf("delete: %v", err)
+	}
+	if !deleted || sync != roster.Synced {
+		t.Fatalf("delete = %t / %q, want a live synced delete", deleted, sync)
+	}
+
+	// The file no longer lists her anywhere, and the neighbours stay
+	// byte-stable.
+	rendered, err := os.ReadFile(configPath)
+	if err != nil {
+		t.Fatalf("read config: %v", err)
+	}
+	if strings.Contains(string(rendered), "alice@example.com") {
+		t.Errorf("the file must no longer list alice:\n%s", rendered)
+	}
+	clients, err := xrayconfig.Parse(rendered)
+	if err != nil {
+		t.Fatalf("rendered config does not parse: %v\n%s", err, rendered)
+	}
+	if _, ok := clients["existing@example.com"]; !ok {
+		t.Errorf("the existing client must survive:\n%s", rendered)
+	}
+
+	// The live removals covered both inbounds.
+	if !slices.Equal(pusher.removedList(), []string{
+		"alice@example.com off vless-vision",
+		"alice@example.com off vless-ws",
+	}) {
+		t.Errorf("live removals = %v", pusher.removedList())
+	}
+
+	// Nothing keyed by the email remains: no users row with its history,
+	// no roster row, and the xray-wide totals are untouched.
+	list, err := store.Users(ctx)
+	if err != nil {
+		t.Fatalf("users: %v", err)
+	}
+	for _, user := range list {
+		if user.Email == "alice@example.com" {
+			t.Errorf("alice must be erased from the store, found %+v", user)
+		}
+	}
+	if _, err := store.RosterRecord(ctx, "alice@example.com"); !errors.Is(err, users.ErrRosterNotFound) {
+		t.Errorf("roster record after delete = %v, want ErrRosterNotFound", err)
+	}
+
+	// A delete of a purged email is idempotent.
+	if sync, deletedAgain, err := service.Delete(ctx, "alice@example.com"); err != nil || sync != roster.Synced || deletedAgain {
+		t.Errorf("re-delete = %q / %v / %t, want synced, deleted nothing", sync, err, deletedAgain)
+	}
+
+	// Re-adding the deleted email starts a brand-new user: fresh
+	// created_at, zero totals, no history — and the file carries her again.
+	// (The store-level release of the old Client ID claim is covered in the
+	// users store tests; the mutation API requires a valid UUID spelling.)
+	result, err := service.Add(ctx, "alice@example.com", "1d37a118-4f1b-4dc0-9e3c-3426b07518df", []string{"vless-vision"})
+	if err != nil {
+		t.Fatalf("re-add: %v", err)
+	}
+	if result.User.CreatedAt < time.Now().Unix()-60 {
+		t.Errorf("re-add created_at = %d, want fresh — nothing was remembered", result.User.CreatedAt)
+	}
+	list, err = store.Users(ctx)
+	if err != nil {
+		t.Fatalf("users after re-add: %v", err)
+	}
+	var fresh users.User
+	for _, user := range list {
+		if user.Email == "alice@example.com" {
+			fresh = user
+		}
+	}
+	if fresh.Disabled || fresh.UpBytesTotal != 0 || fresh.DownBytesTotal != 0 || fresh.LastSeen != nil {
+		t.Errorf("re-added alice = %+v, want a fresh user with empty history", fresh)
+	}
+	rendered, err = os.ReadFile(configPath)
+	if err != nil {
+		t.Fatalf("read config after re-add: %v", err)
+	}
+	if !strings.Contains(string(rendered), "alice@example.com") {
+		t.Errorf("the file must list the re-added alice:\n%s", rendered)
 	}
 }
 

@@ -246,6 +246,27 @@ export function enableUser(email: string): Promise<MutationResult> {
   return mutate("POST", `api/v1/users/${encodeURIComponent(email)}/enable`, {});
 }
 
+// deleteUser purges one user from every storage (ADR-0007): roster row,
+// durable traffic history, rendered clients, and the running xray's handler.
+// Permanently erased and irreversible; adding the same email again starts a
+// brand-new user with fresh history. A started delete answers 200 with the
+// Roster sync state — the purge applies asynchronously — an unknown or
+// already-purged email a bare 204, idempotent either way.
+export async function deleteUser(email: string): Promise<RosterSync> {
+  const response = await fetch(`api/v1/users/${encodeURIComponent(email)}`, {
+    method: "DELETE",
+    headers: { Accept: "application/json" },
+  });
+  if (response.status === 401) {
+    throw new UnauthenticatedError();
+  }
+  if (!response.ok) {
+    throw new Error(`panel returned ${response.status}`);
+  }
+  const body = (await response.json().catch(() => null)) as { roster_sync?: RosterSync } | null;
+  return body?.roster_sync ?? "synced";
+}
+
 export type ConnectionProfileState =
   | "ready"
   | "disabled_user"

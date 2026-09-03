@@ -64,6 +64,7 @@ func Open(path string) (*Store, error) {
 			client_id  TEXT NOT NULL,           -- UUID credential
 			inbounds   TEXT NOT NULL,           -- JSON array of VLESS inbound tags
 			disabled   INTEGER NOT NULL DEFAULT 0,  -- off the Roster (ADR-0007); history kept
+			deleting   INTEGER NOT NULL DEFAULT 0,  -- purge in progress (ADR-0007): apply, then erase (issue #59)
 			created_at INTEGER NOT NULL,
 			updated_at INTEGER NOT NULL
 		)`); err != nil {
@@ -77,6 +78,12 @@ func Open(path string) (*Store, error) {
 			_ = db.Close()
 			return nil, err
 		}
+	}
+	// Databases from before the delete act carry no deleting column; it is
+	// added in place, every row defaulting to not-deleting (ADR-0007, issue #59).
+	if err := migrateAddDeleting(db); err != nil {
+		_ = db.Close()
+		return nil, err
 	}
 	// The xray row's durable aggregate totals — panel-level state hosted here
 	// because the Store owns the database file. Exactly one row (id = 1).
@@ -140,6 +147,43 @@ func migrateGoneToDisabled(db *sql.DB, table string) error {
 	return nil
 }
 
+// migrateAddDeleting adds the roster's deleting column when a database
+// predates the delete act (issue #59); a table already carrying it is
+// untouched.
+func migrateAddDeleting(db *sql.DB) error {
+	rows, err := db.Query(`PRAGMA table_info(roster)`)
+	if err != nil {
+		return fmt.Errorf("inspect roster schema: %w", err)
+	}
+	hasDeleting := false
+	for rows.Next() {
+		var cid int
+		var name, colType string
+		var notNull, pk int
+		var dflt any
+		if err := rows.Scan(&cid, &name, &colType, &notNull, &dflt, &pk); err != nil {
+			_ = rows.Close()
+			return fmt.Errorf("inspect roster schema: %w", err)
+		}
+		if name == "deleting" {
+			hasDeleting = true
+		}
+	}
+	if err := rows.Err(); err != nil {
+		_ = rows.Close()
+		return fmt.Errorf("inspect roster schema: %w", err)
+	}
+	if err := rows.Close(); err != nil {
+		return fmt.Errorf("inspect roster schema: %w", err)
+	}
+	if !hasDeleting {
+		if _, err := db.Exec(`ALTER TABLE roster ADD COLUMN deleting INTEGER NOT NULL DEFAULT 0`); err != nil {
+			return fmt.Errorf("migrate roster schema: %w", err)
+		}
+	}
+	return nil
+}
+
 // ErrEmailTaken / ErrClientIDTaken are the roster's two uniqueness rules
 // (user-management spec §5): email conflicts case-insensitively because the
 // email IS the identity, Client IDs case-insensitively too because xray's
@@ -190,12 +234,23 @@ func (s *Store) AddRosterUser(ctx context.Context, user NewRosterUser, now time.
 		disabled bool
 	}
 	switch err := tx.QueryRowContext(ctx,
-		`SELECT email, disabled FROM roster WHERE lower(email) = lower(?)`, user.Email,
+		`SELECT email, disabled FROM roster WHERE lower(email) = lower(?) AND deleting = 0`, user.Email,
 	).Scan(&existing.email, &existing.disabled); {
 	case err == nil && !existing.disabled:
 		return RosterRecord{}, fmt.Errorf("%w: %s", ErrEmailTaken, existing.email)
 	case !errors.Is(err, sql.ErrNoRows) && err != nil:
 		return RosterRecord{}, fmt.Errorf("check email uniqueness: %w", err)
+	}
+	// A delete in progress keeps its claims until the purge lands — a
+	// failed apply may still have a live credential out there, so re-adding
+	// the email waits (ADR-0007 two-phase delete, issue #59).
+	switch err := tx.QueryRowContext(ctx,
+		`SELECT email FROM roster WHERE lower(email) = lower(?) AND deleting = 1`, user.Email,
+	).Scan(&taken); {
+	case err == nil:
+		return RosterRecord{}, fmt.Errorf("%w: %s (delete in progress)", ErrEmailTaken, taken)
+	case !errors.Is(err, sql.ErrNoRows):
+		return RosterRecord{}, fmt.Errorf("check deleting email: %w", err)
 	}
 	switch err := tx.QueryRowContext(ctx, `SELECT email FROM roster WHERE lower(client_id) = lower(?)`, user.ClientID).Scan(&taken); {
 	case err == nil:
@@ -265,7 +320,7 @@ func (s *Store) DisableRosterUser(ctx context.Context, email string, now time.Ti
 	defer func() { _ = tx.Rollback() }()
 
 	if _, err := tx.ExecContext(ctx, `
-		UPDATE roster SET disabled = 1, updated_at = ? WHERE lower(email) = lower(?) AND disabled = 0`,
+		UPDATE roster SET disabled = 1, updated_at = ? WHERE lower(email) = lower(?) AND disabled = 0 AND deleting = 0`,
 		now.Unix(), email); err != nil {
 		return fmt.Errorf("flag roster row disabled: %w", err)
 	}
@@ -279,6 +334,90 @@ func (s *Store) DisableRosterUser(ctx context.Context, email string, now time.Ti
 	return nil
 }
 
+// MarkRosterDeleting flags one roster row deleting (ADR-0007 two-phase
+// delete, phase one — issue #59): disabled at once — off the Roster, the
+// dashboard row renders disabled — and marked so the purge follows once
+// the removal applies. The email and its Client ID stay claimed until the
+// purge erases the rows. Idempotent: an already-deleting (or never-known)
+// email writes nothing.
+func (s *Store) MarkRosterDeleting(ctx context.Context, email string, now time.Time) error {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("begin delete transaction: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	if _, err := tx.ExecContext(ctx, `
+		UPDATE roster SET disabled = 1, deleting = 1, updated_at = ?
+		WHERE lower(email) = lower(?) AND deleting = 0`,
+		now.Unix(), email); err != nil {
+		return fmt.Errorf("flag roster row deleting: %w", err)
+	}
+	if _, err := tx.ExecContext(ctx, `
+		UPDATE users SET disabled = 1 WHERE lower(email) = lower(?) AND disabled = 0`, email); err != nil {
+		return fmt.Errorf("mark user row disabled: %w", err)
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit delete transaction: %w", err)
+	}
+	return nil
+}
+
+// PurgeRosterUser erases every stored trace keyed by one email (ADR-0007
+// two-phase delete, phase two — issue #59): the roster row and the users
+// row with its durable totals, last seen, and presence. The xray-wide
+// totals are panel state, not the user's — untouched. Deleting rows only:
+// a live or disabled row is not a purge target. Idempotent: a purged (or
+// never-known) email writes nothing.
+func (s *Store) PurgeRosterUser(ctx context.Context, email string) error {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("begin purge transaction: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	if _, err := tx.ExecContext(ctx,
+		`DELETE FROM roster WHERE lower(email) = lower(?) AND deleting = 1`, email); err != nil {
+		return fmt.Errorf("purge roster row: %w", err)
+	}
+	if _, err := tx.ExecContext(ctx,
+		`DELETE FROM users WHERE lower(email) = lower(?)`, email); err != nil {
+		return fmt.Errorf("purge user row: %w", err)
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit purge transaction: %w", err)
+	}
+	return nil
+}
+
+// DeletingRosterRecords returns every roster row awaiting its purge — the
+// startup recovery read that re-queues a delete interrupted by a restart
+// (issue #59). Ordered by email for deterministic writes.
+func (s *Store) DeletingRosterRecords(ctx context.Context) ([]RosterRecord, error) {
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT email, client_id, inbounds FROM roster WHERE deleting = 1 ORDER BY email`)
+	if err != nil {
+		return nil, fmt.Errorf("query deleting records: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+
+	var records []RosterRecord
+	for rows.Next() {
+		var record RosterRecord
+		var inbounds string
+		if err := rows.Scan(&record.Email, &record.ClientID, &inbounds); err != nil {
+			return nil, fmt.Errorf("scan deleting record: %w", err)
+		}
+		record.Inbounds = []string{}
+		_ = json.Unmarshal([]byte(inbounds), &record.Inbounds) // tolerate malformed rows
+		records = append(records, record)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("read deleting records: %w", err)
+	}
+	return records, nil
+}
+
 // rosterRecord reads one roster row by its flag state — the shared shape
 // behind the live read (RosterRecord) and the disabled read
 // (DisabledRosterRecord). Emails match case-insensitively; a row not
@@ -288,7 +427,7 @@ func (s *Store) rosterRecord(ctx context.Context, email string, disabled bool) (
 	var inbounds string
 	err := s.db.QueryRowContext(ctx,
 		`SELECT email, client_id, inbounds, created_at, updated_at
-		 FROM roster WHERE lower(email) = lower(?) AND disabled = ?`, email, disabled,
+		 FROM roster WHERE lower(email) = lower(?) AND disabled = ? AND deleting = 0`, email, disabled,
 	).Scan(&record.Email, &record.ClientID, &inbounds, &record.CreatedAt, &record.UpdatedAt)
 	if errors.Is(err, sql.ErrNoRows) {
 		return RosterRecord{}, ErrRosterNotFound
@@ -373,7 +512,7 @@ func (s *Store) RosterRecord(ctx context.Context, email string) (RosterRecord, e
 // (user-management spec §4). Ordered by email for deterministic writes.
 func (s *Store) RosterRecords(ctx context.Context) ([]RosterRecord, error) {
 	rows, err := s.db.QueryContext(ctx, `
-		SELECT email, client_id, inbounds FROM roster WHERE disabled = 0 ORDER BY email`)
+		SELECT email, client_id, inbounds FROM roster WHERE disabled = 0 AND deleting = 0 ORDER BY email`)
 	if err != nil {
 		return nil, fmt.Errorf("query roster records: %w", err)
 	}

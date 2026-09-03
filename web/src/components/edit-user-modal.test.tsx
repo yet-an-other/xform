@@ -199,6 +199,53 @@ describe("edit user dialog", () => {
     expect(fetch).not.toHaveBeenCalled();
   });
 
+  // The delete act also lives in the edit view (ADR-0007): the confirm
+  // names the purge — history permanently erased, irreversible.
+  it("deletes behind a confirm that names the purge", async () => {
+    const fetchMock = vi.fn(async () => json({ roster_sync: "synced" }, 200));
+    vi.stubGlobal("fetch", fetchMock);
+    const { onClose } = renderModal();
+
+    const dialog = screen.getByRole("dialog", { name: "Edit alice@example.com" });
+    fireEvent.click(within(dialog).getByRole("button", { name: /delete user/i }));
+
+    const intro = within(dialog).getByText(/removed from every inbound/i);
+    expect(intro.textContent).toContain("alice@example.com");
+    expect(within(dialog).getByText(/permanently erased/i)).toBeInTheDocument();
+    expect(within(dialog).getByText(/irreversible/i)).toBeInTheDocument();
+    expect(within(dialog).getByText(/brand-new user/i)).toBeInTheDocument();
+
+    fireEvent.click(within(dialog).getByRole("button", { name: /delete user/i }));
+    await waitFor(() => expect(onClose).toHaveBeenCalled());
+    const [url, init] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
+    expect(url).toBe("api/v1/users/alice%40example.com");
+    expect(init.method).toBe("DELETE");
+  });
+
+  it("cancels the delete confirm back to the form", async () => {
+    vi.stubGlobal("fetch", vi.fn());
+    renderModal();
+
+    const dialog = screen.getByRole("dialog", { name: "Edit alice@example.com" });
+    fireEvent.click(within(dialog).getByRole("button", { name: /delete user/i }));
+    fireEvent.click(within(dialog).getByRole("button", { name: "Cancel" }));
+
+    // Back on the form, nothing was sent.
+    expect(within(dialog).getByRole("button", { name: /save/i })).toBeEnabled();
+    expect(fetch).not.toHaveBeenCalled();
+  });
+
+  it("treats a bare 204 — nothing left to purge — as a closed delete", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () => new Response(null, { status: 204 })));
+    const { onClose } = renderModal();
+
+    const dialog = screen.getByRole("dialog", { name: "Edit alice@example.com" });
+    fireEvent.click(within(dialog).getByRole("button", { name: /delete user/i }));
+    fireEvent.click(within(dialog).getByRole("button", { name: /delete user/i }));
+
+    await waitFor(() => expect(onClose).toHaveBeenCalled());
+  });
+
   it("shows the failure banner when the disable stored but the apply failed", async () => {
     vi.stubGlobal("fetch", vi.fn(async () => json({ roster_sync: "failed" }, 200)));
     const { onClose } = renderModal();
@@ -269,5 +316,38 @@ describe("disabled user's edit dialog", () => {
 
     expect(await within(dialog).findByRole("alert")).toHaveTextContent(/stored.*retries/i);
     expect(onClose).not.toHaveBeenCalled();
+  });
+
+  // Delete works on disabled users too (ADR-0007): the purge is the only
+  // way out of a disabled row an admin does not want to keep.
+  it("offers Delete user, purging every trace of the disabled user", async () => {
+    const fetchMock = vi.fn(async () => json({ roster_sync: "synced" }, 200));
+    vi.stubGlobal("fetch", fetchMock);
+    const onClose = vi.fn();
+    renderDisabled(onClose);
+
+    const dialog = screen.getByRole("dialog", { name: "Edit alice@example.com" });
+    expect(within(dialog).getByRole("button", { name: /delete user/i })).toBeEnabled();
+    fireEvent.click(within(dialog).getByRole("button", { name: /delete user/i }));
+    expect(within(dialog).getByText(/permanently erased/i)).toBeInTheDocument();
+
+    fireEvent.click(within(dialog).getByRole("button", { name: /delete user/i }));
+    await waitFor(() => expect(onClose).toHaveBeenCalled());
+    const [url, init] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
+    expect(url).toBe("api/v1/users/alice%40example.com");
+    expect(init.method).toBe("DELETE");
+  });
+
+  it("cancels the disabled user's delete confirm back to the re-enable view", async () => {
+    vi.stubGlobal("fetch", vi.fn());
+    renderDisabled();
+
+    const dialog = screen.getByRole("dialog", { name: "Edit alice@example.com" });
+    fireEvent.click(within(dialog).getByRole("button", { name: /delete user/i }));
+    fireEvent.click(within(dialog).getByRole("button", { name: "Cancel" }));
+
+    // Back on the disabled view, nothing was sent.
+    expect(within(dialog).getByRole("button", { name: /re-enable user/i })).toBeEnabled();
+    expect(fetch).not.toHaveBeenCalled();
   });
 });
