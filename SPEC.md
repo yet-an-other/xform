@@ -1,6 +1,6 @@
 # xform — panel specification
 
-A read-only web panel monitoring a single xray-core server: host CPU/RAM/storage, xray service status (uptime, total traffic, overall speed), and per-user statistics (durable traffic totals, online status, online IPs, last seen, current speed estimate). Each user can be inspected in a details dialog with current observations and VLESS connection profiles; the header opens bounded, manually refreshed snapshots of the panel and xray journals and of the exact xray config file.
+A web panel monitoring a single xray-core server — host CPU/RAM/storage, xray service status (uptime, total traffic, overall speed), and per-user statistics (durable traffic totals, online status, online IPs, last seen, current speed estimate) — and managing its user roster: add, edit, and remove applied to the running xray immediately (§4, §5, §9). Each user can be inspected in a details dialog with current observations and VLESS connection profiles; the header opens bounded, manually refreshed snapshots of the panel and xray journals and of the exact xray config file.
 
 Normative words: **SHALL** marks required behavior, **SHALL NOT** marks prohibited behavior, **MAY** marks an allowed choice that does not affect compatibility. Canonical domain terms come from [`CONTEXT.md`](CONTEXT.md).
 
@@ -451,9 +451,9 @@ The panel writes the xray config: a roster apply rewrites each managed inbound's
 
 Applies push to the running xray over `HandlerService` (`AddUserOperation` / `RemoveUserOperation`), so the xray `api` object must list it beside `StatsService` — loopback-only still. A closed wall or missing HandlerService never loses a change: it stays stored (pending/failed roster sync) and retries on config-watch fires and xray status transitions to running; an xray restart comes up correct from the rendered file on its own.
 
-**Provisioning contract**: config templates never render `clients` lists. The roster store is the single writer of `settings.clients`; the provisioner keeps inbounds, transports, TLS, ports, and routing. A template-rendered client is indistinguishable from drift and gets adopted into the roster — a removed user re-provisioned that way comes back.
+**Provisioning contract**: config templates never render `clients` lists. The roster store is the single writer of `settings.clients`; the provisioner keeps inbounds, transports, TLS, ports, and routing. Any client a template renders is foreign to the store and gets adopted into the roster — ansible stops owning its users once the panel re-renders the file.
 
-**Rollout order** (existing hosts): upgrade the panel first — first-run adoption imports every existing config user on the first watch tick; then strip `clients` from the template and open both walls + `HandlerService` in the same re-provision (until then the rendered roster is the store's to re-apply, which needs those walls). Fresh hosts get all of it at first provisioning; users are created through the panel.
+**Rollout order** (existing hosts): upgrade the panel first — first-run adoption imports every client already in the config on the first watch tick; then strip `clients` from the template and open both walls + `HandlerService` in the same re-provision (until then the rendered roster is the store's to re-apply, which needs those walls). Fresh hosts get all of it at first provisioning; users are created through the panel.
 
 ## 10. Non-goals
 

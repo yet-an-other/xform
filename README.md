@@ -98,11 +98,11 @@ Either wall alone blocks the apply — the add-user dialog answers "Apply failed
 
 ### Provisioning contract and rollout order
 
-The panel renders the roster into every managed VLESS inbound's `settings.clients` array itself — byte-stable surgery on the surrounding config, atomic temp-file + rename. A config provisioner (ansible, or any templating that owns `config.json`) keeps owning everything else — inbound tags, protocols, transports, TLS, ports, routing — and must **stop rendering `clients` lists**. Two writers to the same arrays fight each other, and a template-rendered client is indistinguishable from drift: the panel adopts foreign clients into the roster, so a removed user re-provisioned by ansible comes back through the side door.
+The panel renders the roster into every managed VLESS inbound's `settings.clients` array itself — raw-span surgery on the surrounding config, atomic temp-file + rename. A config provisioner (ansible, or any templating that owns `config.json`) keeps owning everything else — inbound tags, protocols, transports, TLS, ports, routing — and must **stop rendering `clients` lists**. Two writers to the same arrays fight each other, and the panel adopts foreign clients into the roster — any client a template renders becomes a managed user, so ansible stops owning its users the moment the panel re-renders the file.
 
 Rollout on an **existing host** — the order matters:
 
-1. **Upgrade the panel first**, template unchanged. First-run adoption imports every existing config user into the roster store on the first watch tick — no migration step. Verify the users table lists them before moving on.
+1. **Upgrade the panel first**, template unchanged. First-run adoption imports every client already in the config into the roster store on the first watch tick — no migration step. Verify the users table lists them before moving on.
 2. **Strip `clients` from the template and open the apply walls in the same re-provision** — the `ReadWritePaths=` drop-in, the directory ACL, and `HandlerService` (above and under xray prerequisites). Before the walls are open, mutations store and apply stays failed (each wall's symptom and fix is above); before `HandlerService` lands, pushes answer `Unimplemented`. Everything self-heals once the last piece is in place.
 
 Doing step 2 as one change is deliberate: once ansible strips `clients` and restarts xray, users exist only in the roster store until the panel re-renders them into the file — an apply that needs the very walls this step installs.
