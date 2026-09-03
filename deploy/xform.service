@@ -8,6 +8,12 @@ ExecStart=/usr/local/bin/xform
 Restart=on-failure
 RestartSec=5
 
+# The panel prefixes each log line with its sd-daemon priority. journald strips
+# that prefix into PRIORITY, which keeps warning and error badges accurate.
+StandardOutput=journal
+StandardError=journal
+SyslogLevelPrefix=true
+
 # Runs unprivileged: create the system user first (see README — useradd
 # --system xform). Property reads on the D-Bus system bus and exec'ing the
 # world-readable xray binary need no privileges; only root may touch

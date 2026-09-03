@@ -19,6 +19,7 @@ import (
 	"github.com/yet-an-other/xform/internal/geoip"
 	"github.com/yet-an-other/xform/internal/hoststats"
 	"github.com/yet-an-other/xform/internal/journal"
+	"github.com/yet-an-other/xform/internal/logging"
 	"github.com/yet-an-other/xform/internal/profiles"
 	"github.com/yet-an-other/xform/internal/roster"
 	"github.com/yet-an-other/xform/internal/session"
@@ -38,6 +39,10 @@ var version = "dev"
 var processStart = time.Now()
 
 func main() {
+	// systemd reads stdout and stderr as journal streams. Prefix each line so
+	// journald records slog's severity instead of assigning every line info.
+	slog.SetDefault(slog.New(logging.NewJournalHandler(os.Stderr)))
+
 	cfg, err := config.Load()
 	if err != nil {
 		slog.Error("load configuration", "error", err)
