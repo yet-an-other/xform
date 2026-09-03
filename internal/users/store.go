@@ -279,48 +279,55 @@ func (s *Store) DisableRosterUser(ctx context.Context, email string, now time.Ti
 	return nil
 }
 
-// DisabledRosterRecord returns the stored roster record for a disabled
-// email — the before-state the enable mutation re-applies. The credential
-// and attachments survive the disable untouched. Emails match
-// case-insensitively; a live or unknown email is ErrRosterNotFound.
-func (s *Store) DisabledRosterRecord(ctx context.Context, email string) (RosterRecord, error) {
+// rosterRecord reads one roster row by its flag state — the shared shape
+// behind the live read (RosterRecord) and the disabled read
+// (DisabledRosterRecord). Emails match case-insensitively; a row not
+// matching the flag is ErrRosterNotFound.
+func (s *Store) rosterRecord(ctx context.Context, email string, disabled bool) (RosterRecord, error) {
 	var record RosterRecord
 	var inbounds string
 	err := s.db.QueryRowContext(ctx,
 		`SELECT email, client_id, inbounds, created_at, updated_at
-		 FROM roster WHERE lower(email) = lower(?) AND disabled = 1`, email,
+		 FROM roster WHERE lower(email) = lower(?) AND disabled = ?`, email, disabled,
 	).Scan(&record.Email, &record.ClientID, &inbounds, &record.CreatedAt, &record.UpdatedAt)
 	if errors.Is(err, sql.ErrNoRows) {
 		return RosterRecord{}, ErrRosterNotFound
 	}
 	if err != nil {
-		return RosterRecord{}, fmt.Errorf("query disabled roster record: %w", err)
+		return RosterRecord{}, fmt.Errorf("query roster record: %w", err)
 	}
 	record.Inbounds = []string{}
 	_ = json.Unmarshal([]byte(inbounds), &record.Inbounds) // tolerate malformed rows
 	return record, nil
 }
 
+// DisabledRosterRecord returns the stored roster record for a disabled
+// email — the before-state the enable mutation re-applies. The credential
+// and attachments survive the disable untouched. Emails match
+// case-insensitively; a live or unknown email is ErrRosterNotFound.
+func (s *Store) DisabledRosterRecord(ctx context.Context, email string) (RosterRecord, error) {
+	return s.rosterRecord(ctx, email, true)
+}
+
 // EnableRosterUser revives one disabled user in place (ADR-0007): the
 // roster and dashboard rows shed the disabled flag — credential,
 // attachments, created_at, and history kept — and the record returns.
-// Idempotent: an already-live email writes nothing and returns its record.
-// An unknown email is ErrRosterNotFound.
-func (s *Store) EnableRosterUser(ctx context.Context, email string, now time.Time) (RosterRecord, error) {
-	record, err := s.RosterRecord(ctx, email)
-	switch {
-	case err == nil:
-		return record, nil // already live — idempotent
-	case !errors.Is(err, ErrRosterNotFound):
-		return RosterRecord{}, err
+// revived reports whether the flag actually flipped: an already-live email
+// is idempotent (its record returns, revived false). An unknown email is
+// ErrRosterNotFound.
+func (s *Store) EnableRosterUser(ctx context.Context, email string, now time.Time) (record RosterRecord, revived bool, err error) {
+	if record, err = s.RosterRecord(ctx, email); err == nil {
+		return record, false, nil // already live — idempotent
+	} else if !errors.Is(err, ErrRosterNotFound) {
+		return RosterRecord{}, false, err
 	}
-	if record, err = s.DisabledRosterRecord(ctx, email); err != nil {
-		return RosterRecord{}, err
+	if record, err = s.rosterRecord(ctx, email, true); err != nil {
+		return RosterRecord{}, false, err
 	}
 
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
-		return RosterRecord{}, fmt.Errorf("begin enable transaction: %w", err)
+		return RosterRecord{}, false, fmt.Errorf("begin enable transaction: %w", err)
 	}
 	defer func() { _ = tx.Rollback() }()
 
@@ -328,17 +335,17 @@ func (s *Store) EnableRosterUser(ctx context.Context, email string, now time.Tim
 	if _, err := tx.ExecContext(ctx, `
 		UPDATE roster SET disabled = 0, updated_at = ? WHERE lower(email) = lower(?)`,
 		stamp, record.Email); err != nil {
-		return RosterRecord{}, fmt.Errorf("revive roster row: %w", err)
+		return RosterRecord{}, false, fmt.Errorf("revive roster row: %w", err)
 	}
 	if _, err := tx.ExecContext(ctx, `
 		UPDATE users SET disabled = 0 WHERE lower(email) = lower(?)`, record.Email); err != nil {
-		return RosterRecord{}, fmt.Errorf("revive user row: %w", err)
+		return RosterRecord{}, false, fmt.Errorf("revive user row: %w", err)
 	}
 	if err := tx.Commit(); err != nil {
-		return RosterRecord{}, fmt.Errorf("commit enable transaction: %w", err)
+		return RosterRecord{}, false, fmt.Errorf("commit enable transaction: %w", err)
 	}
 	record.UpdatedAt = stamp
-	return record, nil
+	return record, true, nil
 }
 
 // RosterEdit is one edit mutation's stored fields (user-management spec
@@ -358,21 +365,7 @@ type RosterEdit struct {
 // absent: disabled users are history, not roster members. Emails match
 // case-insensitively.
 func (s *Store) RosterRecord(ctx context.Context, email string) (RosterRecord, error) {
-	var record RosterRecord
-	var inbounds string
-	err := s.db.QueryRowContext(ctx,
-		`SELECT email, client_id, inbounds, created_at, updated_at
-		 FROM roster WHERE lower(email) = lower(?) AND disabled = 0`, email,
-	).Scan(&record.Email, &record.ClientID, &inbounds, &record.CreatedAt, &record.UpdatedAt)
-	if errors.Is(err, sql.ErrNoRows) {
-		return RosterRecord{}, ErrRosterNotFound
-	}
-	if err != nil {
-		return RosterRecord{}, fmt.Errorf("query roster record: %w", err)
-	}
-	record.Inbounds = []string{}
-	_ = json.Unmarshal([]byte(inbounds), &record.Inbounds) // tolerate malformed rows
-	return record, nil
+	return s.rosterRecord(ctx, email, false)
 }
 
 // RosterRecords returns every live roster record, disabled rows excluded — the

@@ -43,7 +43,7 @@ The public endpoint and client-side transport and security values needed for a C
 _Avoid_: overrides, profile config, connection metadata
 
 **Disabled user**:
-A user removed from the Roster whose history the panel retains. Disabled users are hidden by default, never erased; erasing one is a separate act — see Deleted user. Re-adding the same email revives it and rejoins the history.
+A user removed from the Roster whose history the panel retains. Disabled users are hidden by default, never erased; erasing one is a separate act — see Deleted user. Re-enabling, or re-adding the same email, revives it and rejoins the history.
 _Avoid_: gone user, deleted user, inactive user, removed user
 
 **Deleted user**:

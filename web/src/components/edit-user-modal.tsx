@@ -10,6 +10,8 @@ import {
   editUser,
   enableUser,
   type InboundOption,
+  type MutationResult,
+  type RosterSync,
   type User,
 } from "@/lib/api";
 import { conflictText } from "@/lib/conflict-text";
@@ -58,36 +60,17 @@ export function EditUserModal({ user, inbounds, opener, onClose, onExpired }: Ed
     );
   }
 
-  async function save() {
+  // runSubmit is the one submit shape all three acts share: lock the
+  // buttons, map the panel's answers onto the dialog-facing errors, and
+  // close only on a settled (non-failed) first apply. The acts answer in
+  // their two shapes — a bare sync state (disable) or the full mutation
+  // result (save, enable).
+  async function runSubmit(action: () => Promise<RosterSync | MutationResult>) {
     setSubmitting(true);
     setError(null);
     try {
-      const result = await editUser(user.email, user.client_id !== null ? clientId.trim() : null, selected);
-      if (result.roster_sync === "failed") {
-        setFailed(true);
-        return;
-      }
-      onClose();
-    } catch (cause) {
-      if (cause instanceof UnauthenticatedError) {
-        onExpired();
-        return;
-      }
-      if (cause instanceof UserNotFoundError) {
-        setError("This user is no longer in the roster.");
-        return;
-      }
-      setError(cause instanceof ConflictError ? conflictText(cause.reason) : "Could not reach the panel.");
-    } finally {
-      setSubmitting(false);
-    }
-  }
-
-  async function confirmDisable() {
-    setSubmitting(true);
-    setError(null);
-    try {
-      const sync = await disableUser(user.email);
+      const answered = await action();
+      const sync = typeof answered === "string" ? answered : answered.roster_sync;
       if (sync === "failed") {
         setFailed(true);
         return;
@@ -98,27 +81,6 @@ export function EditUserModal({ user, inbounds, opener, onClose, onExpired }: Ed
         onExpired();
         return;
       }
-      setError("Could not reach the panel.");
-    } finally {
-      setSubmitting(false);
-    }
-  }
-
-  async function reEnable() {
-    setSubmitting(true);
-    setError(null);
-    try {
-      const result = await enableUser(user.email);
-      if (result.roster_sync === "failed") {
-        setFailed(true);
-        return;
-      }
-      onClose();
-    } catch (cause) {
-      if (cause instanceof UnauthenticatedError) {
-        onExpired();
-        return;
-      }
       if (cause instanceof UserNotFoundError) {
         setError("This user is no longer in the roster.");
         return;
@@ -127,6 +89,20 @@ export function EditUserModal({ user, inbounds, opener, onClose, onExpired }: Ed
     } finally {
       setSubmitting(false);
     }
+  }
+
+  function save() {
+    return runSubmit(() =>
+      editUser(user.email, user.client_id !== null ? clientId.trim() : null, selected),
+    );
+  }
+
+  function confirmDisable() {
+    return runSubmit(() => disableUser(user.email));
+  }
+
+  function reEnable() {
+    return runSubmit(() => enableUser(user.email));
   }
 
   return (

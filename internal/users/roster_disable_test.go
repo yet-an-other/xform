@@ -117,13 +117,16 @@ func TestEnableRosterUserRevivesInPlace(t *testing.T) {
 	if err := store.DisableRosterUser(ctx, "alice@example.com", now.Add(2*time.Second)); err != nil {
 		t.Fatalf("disable: %v", err)
 	}
-	if _, err := store.EnableRosterUser(ctx, "nobody@example.com", now.Add(3*time.Second)); !errors.Is(err, users.ErrRosterNotFound) {
+	if _, _, err := store.EnableRosterUser(ctx, "nobody@example.com", now.Add(3*time.Second)); !errors.Is(err, users.ErrRosterNotFound) {
 		t.Errorf("enable a stranger = %v, want ErrRosterNotFound", err)
 	}
 
-	record, err := store.EnableRosterUser(ctx, "Alice@Example.com", now.Add(4*time.Second))
+	record, revived, err := store.EnableRosterUser(ctx, "Alice@Example.com", now.Add(4*time.Second))
 	if err != nil {
 		t.Fatalf("enable: %v", err)
+	}
+	if !revived {
+		t.Error("revived = false, want a real flip")
 	}
 	if record.ClientID != "uuid-alice" || len(record.Inbounds) != 1 || record.Inbounds[0] != "vless-vision" {
 		t.Errorf("enabled record = %+v, want the stored credential and attachments", record)
@@ -137,9 +140,9 @@ func TestEnableRosterUserRevivesInPlace(t *testing.T) {
 		t.Errorf("row Client ID = %v, want the stored credential", alice.ClientID)
 	}
 
-	// Idempotent: an enable of a live user is a plain success.
-	if _, err := store.EnableRosterUser(ctx, "alice@example.com", now.Add(5*time.Second)); err != nil {
-		t.Errorf("re-enable = %v, want idempotent success", err)
+	// Idempotent: an enable of a live user is a plain success, no flip.
+	if _, revived, err := store.EnableRosterUser(ctx, "alice@example.com", now.Add(5*time.Second)); err != nil || revived {
+		t.Errorf("re-enable = %v / %t, want an idempotent success that flips nothing", err, revived)
 	}
 
 	// And adoption resumes: a config parse merges attachments again.

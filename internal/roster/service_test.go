@@ -123,21 +123,21 @@ func (f *fakeStore) DisabledRosterRecord(_ context.Context, email string) (users
 	return record, nil
 }
 
-func (f *fakeStore) EnableRosterUser(_ context.Context, email string, now time.Time) (users.RosterRecord, error) {
+func (f *fakeStore) EnableRosterUser(_ context.Context, email string, now time.Time) (users.RosterRecord, bool, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	email = strings.ToLower(email)
 	record, ok := f.byMail[email]
 	if !ok {
-		return users.RosterRecord{}, users.ErrRosterNotFound
+		return users.RosterRecord{}, false, users.ErrRosterNotFound
 	}
 	if !f.disabled[email] {
-		return record, nil // already live — idempotent
+		return record, false, nil // already live — idempotent
 	}
 	record.UpdatedAt = now.Unix()
 	f.byMail[email] = record
 	delete(f.disabled, email)
-	return record, nil
+	return record, true, nil
 }
 
 func (f *fakeStore) EditRosterUser(_ context.Context, email string, edit users.RosterEdit, now time.Time) (users.RosterRecord, error) {

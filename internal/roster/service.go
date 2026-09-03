@@ -97,7 +97,7 @@ type Store interface {
 	RosterRecords(ctx context.Context) ([]users.RosterRecord, error)
 	EditRosterUser(ctx context.Context, email string, edit users.RosterEdit, now time.Time) (users.RosterRecord, error)
 	DisableRosterUser(ctx context.Context, email string, now time.Time) error
-	EnableRosterUser(ctx context.Context, email string, now time.Time) (users.RosterRecord, error)
+	EnableRosterUser(ctx context.Context, email string, now time.Time) (users.RosterRecord, bool, error)
 }
 
 // ViewSource supplies the current parsed inbound view — the seam over the
@@ -441,17 +441,15 @@ func (s *Service) Enable(ctx context.Context, email string) (MutationResult, err
 	if email == "" {
 		return MutationResult{}, &NotFoundError{Email: email}
 	}
-	if live, err := s.store.RosterRecord(ctx, email); err == nil {
-		return MutationResult{User: live, Sync: s.Sync()}, nil // already live — idempotent
-	} else if !errors.Is(err, users.ErrRosterNotFound) {
-		return MutationResult{}, err
-	}
-	record, err := s.store.EnableRosterUser(ctx, email, s.now())
+	record, revived, err := s.store.EnableRosterUser(ctx, email, s.now())
 	if errors.Is(err, users.ErrRosterNotFound) {
 		return MutationResult{}, &NotFoundError{Email: email}
 	}
 	if err != nil {
 		return MutationResult{}, err
+	}
+	if !revived {
+		return MutationResult{User: record, Sync: s.Sync()}, nil // already live — idempotent
 	}
 
 	// Keep only attachments the current inbound view still carries — the

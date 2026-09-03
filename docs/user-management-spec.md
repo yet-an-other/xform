@@ -15,7 +15,7 @@ The panel manages the user roster: add, edit, and remove users from the dashboar
 
 ## 2. Domain model
 
-CONTEXT.md is updated: the Panel and API are no longer read-only ("it observes, and it manages the user roster"); the **Roster** is the panel-held source of truth applied to xray; a **Gone user** is one removed from the Roster with history retained; **Roster sync** (synced / pending / failed) names the write-side state, distinct from Stale (read-side).
+CONTEXT.md was updated: the Panel and API are no longer read-only ("it observes, and it manages the user roster"); the **Roster** is the panel-held source of truth applied to xray; a **Gone user** — one removed from the Roster with history retained — was added to the glossary (renamed **Disabled user** by ADR-0007); **Roster sync** (synced / pending / failed) names the write-side state, distinct from Stale (read-side).
 
 ## 3. Storage model
 
