@@ -3,10 +3,12 @@ package users_test
 import (
 	"context"
 	"errors"
+	"slices"
 	"testing"
 	"time"
 
 	"github.com/yet-an-other/xform/internal/users"
+	"github.com/yet-an-other/xform/internal/xrayconfig"
 )
 
 // The delete mutation's store half (ADR-0007, issue #59): phase one marks
@@ -214,5 +216,93 @@ func TestOpenMigratesRosterDeletionColumn(t *testing.T) {
 	}
 	if err := migrated.MarkRosterDeleting(ctx, "alice@example.com", now); err != nil {
 		t.Errorf("mark deleting after migration: %v", err)
+	}
+}
+
+// The purge targets deleting rows only: a live user's rows are untouched
+// even when the purge names their email (the roster's deleting mark gates
+// both tables).
+func TestPurgeRosterUserOnlyErasesDeletingRows(t *testing.T) {
+	store := openStore(t)
+	ctx := context.Background()
+	now := time.Unix(1_780_000_000, 0)
+
+	addRoster(t, store, "alice@example.com", "uuid-alice", []string{"vless-vision"}, now)
+	addRoster(t, store, "bob@example.com", "uuid-bob", []string{"vless-ws"}, now)
+	if err := store.ApplyPoll(ctx, []users.Delta{
+		{Email: "alice@example.com", Up: 100, Down: 1_000, SeenNow: true},
+	}, nil, nil, now.Add(time.Second)); err != nil {
+		t.Fatalf("apply traffic: %v", err)
+	}
+	if err := store.MarkRosterDeleting(ctx, "bob@example.com", now.Add(time.Second)); err != nil {
+		t.Fatalf("mark deleting: %v", err)
+	}
+
+	if err := store.PurgeRosterUser(ctx, "alice@example.com"); err != nil {
+		t.Fatalf("purge a live user: %v", err)
+	}
+	remaining := byEmail(mustUsers(t, store))
+	if remaining["alice@example.com"].Email == "" || remaining["alice@example.com"].UpBytesTotal != 100 {
+		t.Errorf("alice after a misaimed purge = %+v, want untouched — she is not deleting", remaining["alice@example.com"])
+	}
+	if _, err := store.RosterRecord(ctx, "alice@example.com"); err != nil {
+		t.Errorf("alice's roster record after a misaimed purge: %v, want intact", err)
+	}
+
+	if err := store.PurgeRosterUser(ctx, "Bob@Example.com"); err != nil {
+		t.Fatalf("purge a deleting user: %v", err)
+	}
+	if remaining := byEmail(mustUsers(t, store)); len(remaining) != 1 {
+		t.Errorf("users after bob's purge = %v, want alice only", remaining)
+	}
+}
+
+// Adoption treats a purged email as foreign (ADR-0007's accepted
+// consequence, issue #59's acceptance): a config parse still carrying a
+// deleted client adopts it as a brand-new user — live, fresh first_seen,
+// zero totals, roster record with the config's Client ID and attachments.
+func TestAdoptionTreatsAPurgedEmailAsForeign(t *testing.T) {
+	store := openStore(t)
+	ctx := context.Background()
+	now := time.Unix(1_780_000_000, 0)
+
+	addRoster(t, store, "alice@example.com", "uuid-alice", []string{"vless-vision"}, now)
+	if err := store.ApplyPoll(ctx, []users.Delta{
+		{Email: "alice@example.com", Up: 100, Down: 1_000, SeenNow: true},
+	}, nil, nil, now.Add(time.Second)); err != nil {
+		t.Fatalf("apply traffic: %v", err)
+	}
+	if err := store.MarkRosterDeleting(ctx, "alice@example.com", now.Add(2*time.Second)); err != nil {
+		t.Fatalf("mark deleting: %v", err)
+	}
+	if err := store.PurgeRosterUser(ctx, "alice@example.com"); err != nil {
+		t.Fatalf("purge: %v", err)
+	}
+
+	// A stale config carrying the deleted client (old Client ID and all)
+	// lands on the next parse: nothing remembers her.
+	later := now.Add(1_000 * time.Second)
+	if err := store.ApplyPoll(ctx, nil, nil, &users.RosterParse{
+		Labels: map[string]xrayconfig.User{"alice@example.com": {Protocol: "VLESS", Security: "Reality"}},
+		Clients: map[string]users.RosterClient{
+			"alice@example.com": {ClientID: "uuid-alice", Inbounds: []string{"vless-vision", "vless-ws"}},
+		},
+	}, later); err != nil {
+		t.Fatalf("apply stale parse: %v", err)
+	}
+
+	record, err := store.RosterRecord(ctx, "alice@example.com")
+	if err != nil {
+		t.Fatalf("adopted record: %v, want a brand-new roster member", err)
+	}
+	if record.ClientID != "uuid-alice" || !slices.Equal(record.Inbounds, []string{"vless-vision", "vless-ws"}) {
+		t.Errorf("adopted record = %+v, want the config's credential and attachments", record)
+	}
+	alice := byEmail(mustUsers(t, store))["alice@example.com"]
+	if alice.Disabled || alice.UpBytesTotal != 0 || alice.DownBytesTotal != 0 || alice.LastSeen != nil {
+		t.Errorf("adopted alice = %+v, want a fresh user with empty history", alice)
+	}
+	if alice.FirstSeen != later.Unix() {
+		t.Errorf("adopted first_seen = %d, want fresh (%d)", alice.FirstSeen, later.Unix())
 	}
 }

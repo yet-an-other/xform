@@ -495,10 +495,7 @@ func (s *Service) Delete(ctx context.Context, email string) (sync SyncState, del
 		return "", false, err
 	}
 
-	ops := make([]pushOp, 0, len(tags))
-	for _, tag := range tags {
-		ops = append(ops, pushOp{kind: opDetach, tag: tag})
-	}
+	ops := detachOps(tags)
 	s.enqueueDelete(record, ops)
 	return s.waitSettled(record.Email), true, nil
 }
@@ -787,11 +784,7 @@ func (s *Service) recoverDeletes(ctx context.Context) {
 		return
 	}
 	for _, record := range records {
-		ops := make([]pushOp, 0, len(record.Inbounds))
-		for _, tag := range record.Inbounds {
-			ops = append(ops, pushOp{kind: opDetach, tag: tag})
-		}
-		s.enqueueDelete(record, ops)
+		s.enqueueDelete(record, detachOps(record.Inbounds))
 	}
 }
 
@@ -1074,6 +1067,16 @@ func (s *Service) logFailure(msg string, err error) {
 	}
 	s.lastApplyErr = err.Error()
 	slog.Warn(msg, "error", err)
+}
+
+// detachOps plans one detach per tag — the shape the delete mutation and
+// the restart recovery both queue (issue #59).
+func detachOps(tags []string) []pushOp {
+	ops := make([]pushOp, 0, len(tags))
+	for _, tag := range tags {
+		ops = append(ops, pushOp{kind: opDetach, tag: tag})
+	}
+	return ops
 }
 
 // findManaged resolves the tag to a managed inbound — tagged and VLESS.

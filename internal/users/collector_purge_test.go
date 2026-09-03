@@ -23,6 +23,14 @@ func TestCollectorPurgeDropsInMemoryState(t *testing.T) {
 	}}
 	collector := users.NewCollector(traffic, unsupportedPresence, store).WithClock(func() time.Time { return now })
 
+	// The real flow's shape: a roster member (users row + roster row) whose
+	// removal the service marks deleting before it purges.
+	if _, err := store.inner.AddRosterUser(context.Background(), users.NewRosterUser{
+		Email: "alice@example.com", ClientID: "uuid-alice", Inbounds: []string{},
+	}, now); err != nil {
+		t.Fatalf("add roster user: %v", err)
+	}
+
 	if _, err := collector.Collect(context.Background()); err != nil {
 		t.Fatalf("collect: %v", err)
 	}
@@ -35,6 +43,11 @@ func TestCollectorPurgeDropsInMemoryState(t *testing.T) {
 	}
 
 	collector.Purge("alice@example.com")
+	// The service marks the row deleting before its purge; the store's
+	// purge erases rows behind that mark only.
+	if err := store.inner.MarkRosterDeleting(context.Background(), "alice@example.com", now); err != nil {
+		t.Fatalf("mark deleting: %v", err)
+	}
 	if err := store.inner.PurgeRosterUser(context.Background(), "alice@example.com"); err != nil {
 		t.Fatalf("purge store rows: %v", err)
 	}

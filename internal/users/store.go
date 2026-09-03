@@ -106,40 +106,16 @@ func (s *Store) Close() error { return s.db.Close() }
 // place; a table carrying neither column gains disabled. A database
 // already on disabled is untouched (ADR-0007).
 func migrateGoneToDisabled(db *sql.DB, table string) error {
-	rows, err := db.Query(fmt.Sprintf(`PRAGMA table_info(%s)`, table))
+	columns, err := tableColumns(db, table)
 	if err != nil {
 		return fmt.Errorf("inspect %s schema: %w", table, err)
 	}
-	hasGone, hasDisabled := false, false
-	for rows.Next() {
-		var cid int
-		var name, colType string
-		var notNull, pk int
-		var dflt any
-		if err := rows.Scan(&cid, &name, &colType, &notNull, &dflt, &pk); err != nil {
-			_ = rows.Close()
-			return fmt.Errorf("inspect %s schema: %w", table, err)
-		}
-		switch name {
-		case "gone":
-			hasGone = true
-		case "disabled":
-			hasDisabled = true
-		}
-	}
-	if err := rows.Err(); err != nil {
-		_ = rows.Close()
-		return fmt.Errorf("inspect %s schema: %w", table, err)
-	}
-	if err := rows.Close(); err != nil {
-		return fmt.Errorf("inspect %s schema: %w", table, err)
-	}
 	switch {
-	case hasGone:
+	case columns["gone"]:
 		if _, err := db.Exec(fmt.Sprintf(`ALTER TABLE %s RENAME COLUMN gone TO disabled`, table)); err != nil {
 			return fmt.Errorf("migrate %s schema: %w", table, err)
 		}
-	case !hasDisabled:
+	case !columns["disabled"]:
 		if _, err := db.Exec(fmt.Sprintf(`ALTER TABLE %s ADD COLUMN disabled INTEGER NOT NULL DEFAULT 0`, table)); err != nil {
 			return fmt.Errorf("migrate %s schema: %w", table, err)
 		}
@@ -147,36 +123,40 @@ func migrateGoneToDisabled(db *sql.DB, table string) error {
 	return nil
 }
 
-// migrateAddDeleting adds the roster's deleting column when a database
-// predates the delete act (issue #59); a table already carrying it is
-// untouched.
-func migrateAddDeleting(db *sql.DB) error {
-	rows, err := db.Query(`PRAGMA table_info(roster)`)
+// tableColumns returns one table's column names — the schema migrations'
+// shared PRAGMA scan.
+func tableColumns(db *sql.DB, table string) (map[string]bool, error) {
+	rows, err := db.Query(fmt.Sprintf(`PRAGMA table_info(%s)`, table))
 	if err != nil {
-		return fmt.Errorf("inspect roster schema: %w", err)
+		return nil, fmt.Errorf("inspect %s schema: %w", table, err)
 	}
-	hasDeleting := false
+	defer func() { _ = rows.Close() }()
+	columns := map[string]bool{}
 	for rows.Next() {
 		var cid int
 		var name, colType string
 		var notNull, pk int
 		var dflt any
 		if err := rows.Scan(&cid, &name, &colType, &notNull, &dflt, &pk); err != nil {
-			_ = rows.Close()
-			return fmt.Errorf("inspect roster schema: %w", err)
+			return nil, fmt.Errorf("inspect %s schema: %w", table, err)
 		}
-		if name == "deleting" {
-			hasDeleting = true
-		}
+		columns[name] = true
 	}
 	if err := rows.Err(); err != nil {
-		_ = rows.Close()
+		return nil, fmt.Errorf("inspect %s schema: %w", table, err)
+	}
+	return columns, nil
+}
+
+// migrateAddDeleting adds the roster's deleting column when a database
+// predates the delete act (issue #59); a table already carrying it is
+// untouched.
+func migrateAddDeleting(db *sql.DB) error {
+	columns, err := tableColumns(db, "roster")
+	if err != nil {
 		return fmt.Errorf("inspect roster schema: %w", err)
 	}
-	if err := rows.Close(); err != nil {
-		return fmt.Errorf("inspect roster schema: %w", err)
-	}
-	if !hasDeleting {
+	if !columns["deleting"] {
 		if _, err := db.Exec(`ALTER TABLE roster ADD COLUMN deleting INTEGER NOT NULL DEFAULT 0`); err != nil {
 			return fmt.Errorf("migrate roster schema: %w", err)
 		}
@@ -232,25 +212,20 @@ func (s *Store) AddRosterUser(ctx context.Context, user NewRosterUser, now time.
 	var existing struct {
 		email    string
 		disabled bool
+		deleting bool
 	}
 	switch err := tx.QueryRowContext(ctx,
-		`SELECT email, disabled FROM roster WHERE lower(email) = lower(?) AND deleting = 0`, user.Email,
-	).Scan(&existing.email, &existing.disabled); {
+		`SELECT email, disabled, deleting FROM roster WHERE lower(email) = lower(?)`, user.Email,
+	).Scan(&existing.email, &existing.disabled, &existing.deleting); {
+	case err == nil && existing.deleting:
+		// A delete in progress keeps its claims until the purge lands — a
+		// failed apply may still have a live credential out there, so
+		// re-adding the email waits (ADR-0007 two-phase delete, issue #59).
+		return RosterRecord{}, fmt.Errorf("%w: %s (delete in progress)", ErrEmailTaken, existing.email)
 	case err == nil && !existing.disabled:
 		return RosterRecord{}, fmt.Errorf("%w: %s", ErrEmailTaken, existing.email)
 	case !errors.Is(err, sql.ErrNoRows) && err != nil:
 		return RosterRecord{}, fmt.Errorf("check email uniqueness: %w", err)
-	}
-	// A delete in progress keeps its claims until the purge lands — a
-	// failed apply may still have a live credential out there, so re-adding
-	// the email waits (ADR-0007 two-phase delete, issue #59).
-	switch err := tx.QueryRowContext(ctx,
-		`SELECT email FROM roster WHERE lower(email) = lower(?) AND deleting = 1`, user.Email,
-	).Scan(&taken); {
-	case err == nil:
-		return RosterRecord{}, fmt.Errorf("%w: %s (delete in progress)", ErrEmailTaken, taken)
-	case !errors.Is(err, sql.ErrNoRows):
-		return RosterRecord{}, fmt.Errorf("check deleting email: %w", err)
 	}
 	switch err := tx.QueryRowContext(ctx, `SELECT email FROM roster WHERE lower(client_id) = lower(?)`, user.ClientID).Scan(&taken); {
 	case err == nil:
@@ -376,13 +351,17 @@ func (s *Store) PurgeRosterUser(ctx context.Context, email string) error {
 	}
 	defer func() { _ = tx.Rollback() }()
 
+	// Deleting rows only, both tables: the users row goes first — gated on
+	// the roster's deleting mark, so a live or disabled user is never a
+	// purge target — and the roster row follows.
+	if _, err := tx.ExecContext(ctx, `
+		DELETE FROM users WHERE lower(email) = lower(?) AND EXISTS (
+			SELECT 1 FROM roster r WHERE lower(r.email) = lower(users.email) AND r.deleting = 1)`, email); err != nil {
+		return fmt.Errorf("purge user row: %w", err)
+	}
 	if _, err := tx.ExecContext(ctx,
 		`DELETE FROM roster WHERE lower(email) = lower(?) AND deleting = 1`, email); err != nil {
 		return fmt.Errorf("purge roster row: %w", err)
-	}
-	if _, err := tx.ExecContext(ctx,
-		`DELETE FROM users WHERE lower(email) = lower(?)`, email); err != nil {
-		return fmt.Errorf("purge user row: %w", err)
 	}
 	if err := tx.Commit(); err != nil {
 		return fmt.Errorf("commit purge transaction: %w", err)

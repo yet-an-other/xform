@@ -220,13 +220,14 @@ export function editUser(
   return mutate("PATCH", `api/v1/users/${encodeURIComponent(email)}`, body);
 }
 
-// disableUser takes one roster user off the Roster (user-management spec
-// §5, ADR-0007): a live disable answers 200 with the Roster sync state, an
-// already-disabled one a bare 204 — idempotent either way. Resolves with
-// the Roster sync state so the dialog can tell applied from still-retrying.
-export async function disableUser(email: string): Promise<RosterSync> {
-  const response = await fetch(`api/v1/users/${encodeURIComponent(email)}/disable`, {
-    method: "POST",
+// mutateSync fetches one bare-sync mutation verb — the shape disable and
+// delete share (ADR-0007): a started change answers 200 with the Roster
+// sync state, an idempotent nothing a bare 204. Maps the panel's answers
+// onto the dialog-facing errors: 401 expires the session, anything else is
+// unreachable. Resolves with the Roster sync state (204 → synced).
+async function mutateSync(method: string, path: string): Promise<RosterSync> {
+  const response = await fetch(path, {
+    method,
     headers: { Accept: "application/json" },
   });
   if (response.status === 401) {
@@ -237,6 +238,14 @@ export async function disableUser(email: string): Promise<RosterSync> {
   }
   const body = (await response.json().catch(() => null)) as { roster_sync?: RosterSync } | null;
   return body?.roster_sync ?? "synced";
+}
+
+// disableUser takes one roster user off the Roster (user-management spec
+// §5, ADR-0007): a live disable answers 200 with the Roster sync state, an
+// already-disabled one a bare 204 — idempotent either way. Resolves with
+// the Roster sync state so the dialog can tell applied from still-retrying.
+export function disableUser(email: string): Promise<RosterSync> {
+  return mutateSync("POST", `api/v1/users/${encodeURIComponent(email)}/disable`);
 }
 
 // enableUser revives one disabled user in place (ADR-0007): the stored
@@ -252,19 +261,8 @@ export function enableUser(email: string): Promise<MutationResult> {
 // brand-new user with fresh history. A started delete answers 200 with the
 // Roster sync state — the purge applies asynchronously — an unknown or
 // already-purged email a bare 204, idempotent either way.
-export async function deleteUser(email: string): Promise<RosterSync> {
-  const response = await fetch(`api/v1/users/${encodeURIComponent(email)}`, {
-    method: "DELETE",
-    headers: { Accept: "application/json" },
-  });
-  if (response.status === 401) {
-    throw new UnauthenticatedError();
-  }
-  if (!response.ok) {
-    throw new Error(`panel returned ${response.status}`);
-  }
-  const body = (await response.json().catch(() => null)) as { roster_sync?: RosterSync } | null;
-  return body?.roster_sync ?? "synced";
+export function deleteUser(email: string): Promise<RosterSync> {
+  return mutateSync("DELETE", `api/v1/users/${encodeURIComponent(email)}`);
 }
 
 export type ConnectionProfileState =
