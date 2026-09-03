@@ -15,7 +15,7 @@ Source of truth for decisions: [map issue #1](https://github.com/yet-an-other/xf
 └─────────────┘              │  embedded by default — ADR-0001) │
                              │  collector ──► xray gRPC API     │
                              │     │          (127.0.0.1,        │
-                             │     │           StatsService only)│
+                             │     │           Stats + Handler)  │
                              │     ├──────► xray config.json     │
                              │     │          (parse + fsnotify) │
                              │     ├──────► connections config   │
@@ -33,7 +33,7 @@ Source of truth for decisions: [map issue #1](https://github.com/yet-an-other/xf
 - **Backend**: Go (≥ 1.26), single static binary: JSON API + collector. Consumes `github.com/xtls/xray-core/app/stats/command` as a library — pin `v1.YYMMDD.N` tags (release tags like `v26.x` are rejected by the Go proxy).
 - **Dashboard hosting**: embedded in the binary by default; alternatively served as static files by the same-origin reverse proxy (see §9, ADR-0001). Never cross-origin.
 - **Frontend**: React + TypeScript (Vite), pure API client, decoupled so the UI can grow (drill-down, editing) without touching the collector.
-- **Read-only**: the panel never mutates xray. HandlerService stays disabled.
+- **User management**: the panel renders `settings.clients` for the managed inbounds into the config file and pushes adds/removes to the running xray over HandlerService — loopback-only, no auth/TLS (§4, §5, §9).
 
 ## 2. Prerequisites (xray side)
 
@@ -49,12 +49,12 @@ Enable stats, policy, and the API in the xray config:
       "statsOutboundUplink": true, "statsOutboundDownlink": true
     }
   },
-  "api": { "tag": "api", "listen": "127.0.0.1:8080", "services": ["StatsService"] }
+  "api": { "tag": "api", "listen": "127.0.0.1:8080", "services": ["StatsService", "HandlerService"] }
 }
 ```
 
 - Every client **must have an `email`** — per-user stats don't exist without it.
-- The gRPC API has **no auth/TLS**; loopback binding + StatsService-only is the entire security model.
+- The gRPC API has **no auth/TLS**; loopback binding is the entire security model. `HandlerService` is what user management applies through — leave it out and every mutation still stores, but the apply stays failed and retries (§9).
 - xray-core ≥ **v26.4.13** recommended (`GetUsersStats`). Presence and the online counts are gated on `GetAllOnlineUsers` (**≥ v26.1.13**) — on older servers the collector tolerates `Unimplemented` and omits presence (degrade: no online status or IPs; `last_seen` falls back to the traffic-delta heuristic).
 - Online tracking only counts **real client IPs** — xray ignores loopback sources in its online maps. If a userspace forwarder fronts xray, it must speak PROXY protocol (`acceptProxyProtocol` on the xray inbound) or presence stays empty.
 - xray runs as a systemd unit; the panel reads unit state via D-Bus (needs to run on the same host, permission to query the system bus is sufficient for unit properties).
@@ -227,7 +227,7 @@ React + TS (Vite), single page per the approved prototypes in `docs/prototypes/`
 - **Header**: two identity groups. Panel group: `xform` wordmark, version, panel uptime, panel-logs icon action. xray group: status indicator immediately before `xray`, version, service uptime, xray-logs icon action, xray-config icon action. Then the refresh note (cadence + last-successful-poll time, 24h clock) and Log out. Every icon-only action has an accessible name and a visible tooltip or title. Degraded banner when `status != "running"` — full copy naming what went stale and that host stats stay live.
 - **Server row**: four cards — CPU / RAM / storage with bars, plus a host-uptime card with load average as its sub-line.
 - **Xray row**: four cards — speed now (↑ green / ↓ blue, stacked big lines), total traffic (up + down), users online (`n / total` + unique IPs), xray process memory/goroutines.
-- **Users table**: online dot, email, protocol · security, Traffic (up/down stacked on two lines), speed now, online IPs (one per line, country flag beside each — ADR-0005), last seen (relative; literal `now` while online), and per-user icon-only actions with accessible names: details, and — for users who are not gone — edit and remove. The edit action opens the edit dialog with the user's email (immutable — the identity; change = remove + add), the inbound multi-select, and an editable Client ID with a generate button; saving stores the edit and applies it live (store → file render → diff push: attach/detach per inbound, remove + add on every attached inbound when the Client ID changes), showing conflicts inline and apply failures on the dialog banner + row badge (`docs/user-management-spec.md`). The remove action opens a confirmation naming what removal means — off every inbound immediately, an xray restart keeps them gone, traffic history retained behind the gone badge, established connections left to close naturally; DELETE is idempotent (`docs/user-management-spec.md`). Compact row density. `gone` users hidden behind a toggle. At narrow widths the table keeps its fixed columns and scrolls horizontally.
+- **Users table**: online dot, email, protocol · security, Traffic (up/down stacked on two lines), speed now, online IPs (one per line, country flag beside each — ADR-0005), last seen (relative; literal `now` while online), and per-user icon-only actions with accessible names: details, and — for users who are not gone — edit and remove; the section header carries the add-user action. The edit action opens the edit dialog with the user's email (immutable — the identity; change = remove + add), the inbound multi-select, and an editable Client ID with a generate button; saving stores the edit and applies it live (store → file render → diff push: attach/detach per inbound, remove + add on every attached inbound when the Client ID changes), showing conflicts inline and apply failures on the dialog banner + row badge (`docs/user-management-spec.md`). The remove action opens a confirmation naming what removal means — off every inbound immediately, an xray restart keeps them gone, traffic history retained behind the gone badge, established connections left to close naturally; DELETE is idempotent (`docs/user-management-spec.md`). Compact row density. `gone` users hidden behind a toggle. At narrow widths the table keeps its fixed columns and scrolls horizontally.
 
 Polls all three observation endpoints every 5s; freshness is the header refresh note, not per-card; shows "stale" speeds when `stale: true`. Login page posting to `/api/v1/login`.
 
@@ -442,6 +442,19 @@ Ships: `deploy/xform.service`, `deploy/xray-journal-namespace.conf.example`, and
 
 Existing monitoring continues when `XFORM_CONNECTIONS_CONFIG` is unset or the journal namespace migration has not run: user detail still opens (matching profile candidates report `advertisement_missing`), Log snapshot endpoints report their own stable deployment or access error, host/xray/user monitoring continues, and the Config snapshot works whenever the configured file's permissions allow it.
 
+### User management deployment
+
+The panel writes the xray config: a roster apply rewrites each managed inbound's `settings.clients` by raw-span surgery and swaps the file atomically (temp file in the same directory + rename). Two walls gate the write, and both must be open (host steps and failure symptoms in the README):
+
+- **Unit sandbox**: `ReadWritePaths=/usr/local/etc/xray` in `xform.service` — `ProtectSystem=strict` otherwise mounts the filesystem read-only for the panel.
+- **DAC**: `setfacl -m u:xform:rwx /usr/local/etc/xray`.
+
+Applies push to the running xray over `HandlerService` (`AddUserOperation` / `RemoveUserOperation`), so the xray `api` object must list it beside `StatsService` — loopback-only still. A closed wall or missing HandlerService never loses a change: it stays stored (pending/failed roster sync) and retries on config-watch fires and xray status transitions to running; an xray restart comes up correct from the rendered file on its own.
+
+**Provisioning contract**: config templates never render `clients` lists. The roster store is the single writer of `settings.clients`; the provisioner keeps inbounds, transports, TLS, ports, and routing. A template-rendered client is indistinguishable from drift and gets adopted into the roster — a removed user re-provisioned that way comes back.
+
+**Rollout order** (existing hosts): upgrade the panel first — first-run adoption imports every existing config user on the first watch tick; then strip `clients` from the template and open both walls + `HandlerService` in the same re-provision (until then the rendered roster is the store's to re-apply, which needs those walls). Fresh hosts get all of it at first provisioning; users are created through the panel.
+
 ## 10. Non-goals
 
-Historical traffic graphs & long retention · user-management mutations (add/edit/remove applied to xray) · free-form config editing · subscription URLs · client-specific profile formats or import guarantees · non-VLESS profiles · per-user advertised connection settings · profiles for gone users · profile/credential persistence, masking, or audit trails · multi-server · Prometheus/Grafana export · alerting/quotas/CSV · cross-origin or CDN-hosted UI (same-origin only, ADR-0001) · live log following, pagination, search, filtering, or downloads · caller-selected units, counts, cursors, time ranges, fields, or journal expressions · log clearing or service controls · xray-managed log-file reading · Config snapshot editing, validation, formatting, download, or reload controls · historical Log/Config snapshot storage · migration of old default-journal records · broad default-journal access or a privileged journal broker · non-systemd hosts or systemd older than 245 · automatic installation of root-owned migration files by the binary updater · multiple simultaneous modals · changes to the five-second observation cadence · a new frontend framework, HTTP router, database, or persistent store.
+Historical traffic graphs & long retention · free-form config editing · subscription URLs · client-specific profile formats or import guarantees · non-VLESS profiles · per-user advertised connection settings · profiles for gone users · profile/credential persistence, masking, or audit trails · multi-server · Prometheus/Grafana export · alerting/quotas/CSV · cross-origin or CDN-hosted UI (same-origin only, ADR-0001) · live log following, pagination, search, filtering, or downloads · caller-selected units, counts, cursors, time ranges, fields, or journal expressions · log clearing or service controls · xray-managed log-file reading · Config snapshot editing, validation, formatting, download, or reload controls · historical Log/Config snapshot storage · migration of old default-journal records · broad default-journal access or a privileged journal broker · non-systemd hosts or systemd older than 245 · automatic installation of root-owned migration files by the binary updater · multiple simultaneous modals · changes to the five-second observation cadence · a new frontend framework, HTTP router, database, or persistent store.
