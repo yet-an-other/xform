@@ -42,12 +42,16 @@ _Avoid_: connection, link, share link, export
 The public endpoint and client-side transport and security values needed for a Connection profile. They describe how a User reaches xray from outside the Host and may differ from the inbound's local settings.
 _Avoid_: overrides, profile config, connection metadata
 
-**Gone user**:
-A user removed from the Roster whose history the panel retains. Gone users are hidden by default, never erased.
-_Avoid_: deleted user, removed user, inactive user
+**Disabled user**:
+A user removed from the Roster whose history the panel retains. Disabled users are hidden by default, never erased; erasing one is a separate act — see Deleted user. Re-adding the same email revives it and rejoins the history.
+_Avoid_: gone user, deleted user, inactive user, removed user
+
+**Deleted user**:
+A user purged from every storage — the Roster, the panel's own history, the config file, and the running server. Nothing remembers the email; if it reappears it is adopted as a brand-new user with fresh history.
+_Avoid_: erased user, purged user, gone user (that is the recoverable one)
 
 **Roster**:
-The set of users the panel manages, held by the panel as the source of truth and applied to xray — rendered into the config file and pushed to the running server so both stay in step. Foreign clients found in the config are adopted into the Roster; Roster users missing from the config are re-applied. The Roster supplies the protocol · security labels and decides who is — or becomes — a gone user.
+The set of users the panel manages, held by the panel as the source of truth and applied to xray — rendered into the config file and pushed to the running server so both stay in step. Foreign clients found in the config are adopted into the Roster; Roster users missing from the config are re-applied. The Roster supplies the protocol · security labels and decides who is — or becomes — a disabled user.
 _Avoid_: config users, client list
 
 **Observation**:
@@ -125,7 +129,7 @@ The timestamp of a user's most recent activity. xray forgets it the moment the u
 _Avoid_: last login, last connection, last active
 
 **Online**:
-A user with at least one live connection to xray right now, along with the set of IP addresses they are connected from.
+A user with at least one live connection to xray right now, along with the set of IP addresses they are connected from. Disabled and deleted users are never online.
 _Avoid_: active, connected, logged in
 
 **Presence**:
