@@ -61,6 +61,19 @@ describe("edit user dialog", () => {
     expect(within(dialog).queryByLabelText("Email")).not.toBeInTheDocument();
   });
 
+  it("separates the editable scope from the fixed user identity", () => {
+    vi.stubGlobal("fetch", vi.fn());
+    renderModal();
+
+    const dialog = screen.getByRole("dialog", { name: "Edit alice@example.com" });
+    const heading = within(dialog).getByRole("heading", { name: "Edit user access" });
+    const header = heading.closest("header");
+    expect(header).not.toBeNull();
+    expect(within(header!).getByText("Inbounds and Client ID")).toBeInTheDocument();
+    expect(within(header!).getByText("alice@example.com")).toBeInTheDocument();
+    expect(within(header!).getByText("Email cannot be changed")).toBeInTheDocument();
+  });
+
   it("flags attachments the config no longer carries; saving drops them", async () => {
     const fetchMock = vi.fn(async () =>
       json({ user: { ...storedUser, inbounds: [] }, roster_sync: "synced" }, 200),

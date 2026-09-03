@@ -81,16 +81,27 @@ export function EditUserModal({ user, inbounds, opener, onClose, onExpired }: Ed
       onOpenChange={onClose}
       className="w-[min(460px,100%)]"
     >
-      <header className="flex items-start gap-4 border-b px-5 py-4">
-        <div className="min-w-0">
-          <h2 className="truncate text-lg font-semibold tracking-tight">Edit {user.email}</h2>
-          <p className="text-muted-foreground mt-1 text-xs">
-            Email is the identity — changing it means remove + add.
-          </p>
+      <header className="border-b">
+        <div className="flex items-start gap-4 px-5 py-3.5">
+          <div className="min-w-0">
+            <h2 className="text-lg font-semibold tracking-tight">Edit user access</h2>
+            <p className="text-muted-foreground mt-0.5 text-xs">Inbounds and Client ID</p>
+          </div>
+          <span className="ml-auto">
+            <ModalClose label={`Close ${user.email} edit`} onClose={onClose} />
+          </span>
         </div>
-        <span className="ml-auto">
-          <ModalClose label={`Close ${user.email} edit`} onClose={onClose} />
-        </span>
+        <div className="border-border bg-background/40 flex min-w-0 flex-wrap items-baseline gap-2 border-t px-5 py-2.5">
+          <span className="text-muted-foreground text-[9px] font-bold tracking-[0.1em] uppercase">
+            User
+          </span>
+          <strong className="min-w-0 flex-1 truncate font-mono text-xs font-semibold">
+            {user.email}
+          </strong>
+          <span className="text-muted-foreground shrink-0 text-[10px] max-xs:w-full">
+            Email cannot be changed
+          </span>
+        </div>
       </header>
       <div className="min-h-0 overflow-auto px-5 py-5">
         {/* The write-side failure surface (user-management spec §6): the
