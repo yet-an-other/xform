@@ -1,0 +1,472 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>xform PROTOTYPE: edit user dialog header</title>
+<!--
+  PROTOTYPE. Throw this file away after choosing a header.
+  Question: how should the Edit action and fixed user identity be separated?
+  Three variants switch through ?variant=A|B|C or the bottom controls.
+  No backend and no persistence.
+-->
+<style>
+  :root {
+    color-scheme: dark;
+    --background: #0b0f14;
+    --foreground: #e9eef5;
+    --card: #17212d;
+    --surface: #121922;
+    --border: #253242;
+    --border-strong: #34465a;
+    --muted: #8d9aaa;
+    --primary: #55d6a8;
+    --primary-ink: #0b0f14;
+    --accent: rgba(85, 214, 168, 0.14);
+    --info: #6cb6ff;
+    --sans: Inter, ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    --mono: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  }
+
+  * { box-sizing: border-box; }
+  html { min-width: 320px; }
+  body {
+    min-height: 100vh;
+    margin: 0;
+    background:
+      radial-gradient(circle at 85% -10%, rgba(61, 107, 145, 0.23), transparent 38rem),
+      var(--background);
+    color: var(--foreground);
+    font: 14px/1.45 var(--sans);
+  }
+  button, input { font: inherit; }
+  button { cursor: pointer; }
+
+  .shell {
+    width: min(1180px, calc(100% - 40px));
+    margin: 0 auto;
+    padding: 32px 0 48px;
+  }
+  .app-header { display: flex; align-items: center; gap: 12px; margin-bottom: 24px; }
+  .wordmark { margin: 0; font-size: 18px; letter-spacing: -0.02em; }
+  .meta { color: var(--muted); font: 12px var(--mono); }
+  .spacer { flex: 1; }
+  .status { display: inline-flex; align-items: center; gap: 7px; font-weight: 650; }
+  .dot {
+    width: 7px;
+    height: 7px;
+    border-radius: 50%;
+    background: var(--primary);
+    box-shadow: 0 0 0 3px rgba(85, 214, 168, 0.1);
+  }
+  .button {
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    background: transparent;
+    color: var(--muted);
+    padding: 7px 11px;
+    font-size: 11px;
+    font-weight: 750;
+    letter-spacing: 0.07em;
+    text-transform: uppercase;
+  }
+  .button:hover, .button:focus-visible { border-color: var(--border-strong); color: var(--foreground); }
+  .button:focus-visible, .close:focus-visible, .switcher button:focus-visible {
+    outline: 2px solid var(--primary);
+    outline-offset: 2px;
+  }
+  .primary { border-color: var(--primary); background: var(--primary); color: var(--primary-ink); }
+
+  .metrics { display: grid; grid-template-columns: repeat(4, 1fr); gap: 16px; }
+  .metric {
+    min-height: 132px;
+    padding: 18px;
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    background: rgba(23, 33, 45, 0.84);
+  }
+  .label {
+    color: var(--muted);
+    font-size: 10px;
+    font-weight: 800;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+  }
+  .metric strong { display: block; margin-top: 14px; font: 600 21px var(--mono); }
+  .metric small { display: block; margin-top: 20px; color: var(--muted); }
+
+  .users-card {
+    margin-top: 16px;
+    overflow: hidden;
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    background: rgba(18, 25, 34, 0.8);
+  }
+  .users-title { padding: 16px 20px 10px; }
+  table { width: 100%; border-collapse: collapse; table-layout: fixed; }
+  th, td { padding: 11px 14px; border-top: 1px solid var(--border); text-align: left; }
+  th { color: var(--muted); font-size: 10px; letter-spacing: 0.08em; text-transform: uppercase; }
+  td { font: 12px var(--mono); }
+  .user { font-family: var(--sans); font-weight: 650; }
+  .actions { text-align: right; }
+  .icon-button {
+    display: inline-grid;
+    width: 30px;
+    height: 30px;
+    place-items: center;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    background: transparent;
+    color: var(--primary);
+  }
+  .icon-button:hover { border-color: var(--primary); background: var(--accent); }
+
+  .dialog-layer {
+    position: fixed;
+    inset: 0;
+    z-index: 20;
+    display: grid;
+    place-items: center;
+    padding: 24px;
+    background: rgba(3, 7, 11, 0.74);
+    backdrop-filter: blur(5px);
+  }
+  .dialog-layer[hidden] { display: none; }
+  .dialog {
+    display: flex;
+    width: min(460px, 100%);
+    max-height: calc(100vh - 112px);
+    flex-direction: column;
+    overflow: hidden;
+    border: 1px solid var(--border-strong);
+    border-radius: 16px;
+    background: var(--surface);
+    box-shadow: 0 24px 80px rgba(0, 0, 0, 0.58);
+  }
+
+  .variant-header { display: none; border-bottom: 1px solid var(--border); }
+  body[data-variant="A"] #header-a,
+  body[data-variant="B"] #header-b { display: flex; }
+  body[data-variant="C"] #header-c { display: block; }
+
+  .header-a { align-items: flex-start; gap: 16px; padding: 16px 20px; }
+  .header-copy { min-width: 0; }
+  .eyebrow {
+    margin: 0;
+    color: var(--primary);
+    font-size: 10px;
+    font-weight: 800;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+  }
+  .header-a h2 { margin: 4px 0 0; overflow: hidden; font-size: 20px; text-overflow: ellipsis; white-space: nowrap; }
+  .header-note { margin: 5px 0 0; color: var(--muted); font-size: 12px; }
+
+  .header-b { align-items: flex-start; gap: 12px; padding: 16px 20px; }
+  .edit-mark {
+    display: grid;
+    width: 40px;
+    height: 40px;
+    flex: 0 0 auto;
+    place-items: center;
+    border: 1px solid rgba(85, 214, 168, 0.25);
+    border-radius: 12px;
+    background: var(--accent);
+    color: var(--primary);
+  }
+  .edit-mark svg { width: 18px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
+  .header-b-main { min-width: 0; flex: 1; }
+  .header-b h2, .header-c h2 { margin: 0; font-size: 18px; letter-spacing: -0.02em; }
+  .identity-card {
+    display: flex;
+    min-width: 0;
+    align-items: center;
+    gap: 8px;
+    margin-top: 8px;
+    padding: 6px 10px;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    background: rgba(11, 15, 20, 0.45);
+  }
+  .identity-card code { overflow: hidden; flex: 1; font: 600 12px var(--mono); text-overflow: ellipsis; white-space: nowrap; }
+  .fixed-label { flex: 0 0 auto; color: var(--muted); font-size: 9px; font-weight: 800; letter-spacing: 0.08em; text-transform: uppercase; }
+
+  .header-c-top { display: flex; align-items: flex-start; gap: 16px; padding: 14px 20px; }
+  .header-c-top p { margin: 2px 0 0; color: var(--muted); font-size: 12px; }
+  .context-strip {
+    display: flex;
+    min-width: 0;
+    flex-wrap: wrap;
+    align-items: baseline;
+    gap: 4px 8px;
+    padding: 10px 20px;
+    border-top: 1px solid var(--border);
+    background: rgba(11, 15, 20, 0.4);
+  }
+  .context-strip code { min-width: 0; overflow: hidden; font: 600 12px var(--mono); text-overflow: ellipsis; white-space: nowrap; }
+  .context-help { margin-left: auto; color: var(--muted); font-size: 10px; }
+
+  .close {
+    display: grid;
+    width: 34px;
+    height: 34px;
+    flex: 0 0 auto;
+    margin-left: auto;
+    place-items: center;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    background: transparent;
+    color: var(--muted);
+    font-size: 20px;
+    line-height: 1;
+  }
+  .close:hover { color: var(--foreground); }
+
+  .dialog-body { min-height: 0; overflow: auto; padding: 20px; }
+  fieldset { margin: 0 0 16px; padding: 0; border: 0; }
+  legend { margin-bottom: 8px; padding: 0; }
+  .inbound {
+    display: flex;
+    align-items: baseline;
+    gap: 10px;
+    margin-bottom: 6px;
+    padding: 9px 12px;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+  }
+  .inbound:has(input:checked) { border-color: rgba(85, 214, 168, 0.42); background: var(--accent); }
+  input[type="checkbox"] { accent-color: var(--primary); }
+  .inbound strong { display: block; font: 600 12px var(--mono); }
+  .inbound small { display: block; margin-top: 1px; color: var(--muted); font-size: 11px; }
+  .client-row { display: flex; gap: 8px; margin-top: 8px; }
+  .client-id {
+    min-width: 0;
+    flex: 1;
+    padding: 8px 10px;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    outline: 0;
+    background: var(--background);
+    color: var(--foreground);
+    font: 12px var(--mono);
+  }
+  .client-id:focus { border-color: var(--primary); box-shadow: 0 0 0 2px rgba(85, 214, 168, 0.15); }
+  .dialog-footer { display: flex; justify-content: flex-end; gap: 8px; padding: 14px 20px; border-top: 1px solid var(--border); }
+
+  .switcher {
+    position: fixed;
+    bottom: 16px;
+    left: 50%;
+    z-index: 40;
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    transform: translateX(-50%);
+    padding: 4px;
+    border: 1px solid #cbd5e1;
+    border-radius: 999px;
+    background: #e9eef5;
+    color: #0b0f14;
+    box-shadow: 0 14px 36px rgba(0, 0, 0, 0.42);
+  }
+  .switcher button {
+    display: grid;
+    width: 32px;
+    height: 32px;
+    place-items: center;
+    border: 0;
+    border-radius: 50%;
+    background: transparent;
+    color: inherit;
+  }
+  .switcher button:hover { background: rgba(11, 15, 20, 0.08); }
+  .switcher-label { min-width: 210px; padding: 0 8px; text-align: center; font-size: 12px; font-weight: 700; }
+  .prototype-word { margin-right: 8px; color: #64748b; font-size: 9px; font-weight: 900; letter-spacing: 0.12em; text-transform: uppercase; }
+
+  @media (max-width: 760px) {
+    .metrics { grid-template-columns: repeat(2, 1fr); }
+    .optional-column { display: none; }
+  }
+  @media (max-width: 560px) {
+    .shell { width: calc(100% - 28px); }
+    .metrics { grid-template-columns: 1fr; }
+    .dialog-layer { padding: 0; }
+    .dialog { width: 100%; min-height: 100vh; max-height: 100vh; border: 0; border-radius: 0; }
+    .dialog-footer { padding-bottom: 72px; }
+    .header-b { gap: 10px; }
+    .identity-card { align-items: flex-start; flex-direction: column; gap: 3px; }
+    .context-help { width: 100%; margin-left: 0; }
+    .switcher { bottom: 12px; }
+    .switcher-label { min-width: 200px; }
+  }
+</style>
+</head>
+<body data-variant="A">
+  <main class="shell">
+    <header class="app-header">
+      <h1 class="wordmark">xform</h1>
+      <span class="meta">v1.4.1</span>
+      <span class="status"><span class="dot"></span>xray</span>
+      <span class="meta">v26.4.13 · up 14d 0h</span>
+      <span class="spacer"></span>
+      <span class="meta">refreshing every 5s</span>
+      <button class="button">Log out</button>
+    </header>
+
+    <section class="metrics" aria-label="Host metrics">
+      <article class="metric"><span class="label">CPU</span><strong>23.4%</strong><small>4 cores</small></article>
+      <article class="metric"><span class="label">RAM</span><strong>59.4%</strong><small>4.75 GiB of 8.00 GiB</small></article>
+      <article class="metric"><span class="label">Storage</span><strong>52.5%</strong><small>84.0 GiB of 160 GiB</small></article>
+      <article class="metric"><span class="label">Host uptime</span><strong>23 days</strong><small>load 0.42 0.38 0.31</small></article>
+    </section>
+
+    <section class="users-card" aria-label="Users">
+      <div class="users-title"><span class="label">Users</span></div>
+      <table>
+        <thead><tr><th>User</th><th class="optional-column">Protocol</th><th class="optional-column">Traffic</th><th class="actions">Actions</th></tr></thead>
+        <tbody>
+          <tr>
+            <td class="user"><span class="dot"></span>&nbsp; alice@example.com</td>
+            <td class="optional-column">VLESS · Reality</td>
+            <td class="optional-column">↑ 36.4 GiB<br>↓ 476 GiB</td>
+            <td class="actions"><button class="icon-button edit-open" aria-label="Edit alice@example.com" title="Edit alice@example.com">✎</button></td>
+          </tr>
+        </tbody>
+      </table>
+    </section>
+  </main>
+
+  <div class="dialog-layer" id="dialog-layer">
+    <section class="dialog" role="dialog" aria-label="Edit alice@example.com" aria-modal="true">
+      <header class="variant-header header-a" id="header-a">
+        <div class="header-copy">
+          <p class="eyebrow">Edit user</p>
+          <h2>alice@example.com</h2>
+          <p class="header-note">Email is fixed. Remove and add the user to change it.</p>
+        </div>
+        <button class="close" aria-label="Close edit dialog">×</button>
+      </header>
+
+      <header class="variant-header header-b" id="header-b">
+        <span class="edit-mark" aria-hidden="true">
+          <svg viewBox="0 0 24 24"><path d="M16.5 4.5l3 3L8 19l-4 1 1-4L16.5 4.5z"></path></svg>
+        </span>
+        <div class="header-b-main">
+          <h2>Edit user</h2>
+          <div class="identity-card">
+            <code>alice@example.com</code>
+            <span class="fixed-label">Fixed email</span>
+          </div>
+        </div>
+        <button class="close" aria-label="Close edit dialog">×</button>
+      </header>
+
+      <header class="variant-header header-c" id="header-c">
+        <div class="header-c-top">
+          <div>
+            <h2>Edit user access</h2>
+            <p>Inbounds and Client ID</p>
+          </div>
+          <button class="close" aria-label="Close edit dialog">×</button>
+        </div>
+        <div class="context-strip">
+          <span class="label">User</span>
+          <code>alice@example.com</code>
+          <span class="context-help">Email cannot be changed</span>
+        </div>
+      </header>
+
+      <div class="dialog-body">
+        <fieldset>
+          <legend class="label">Inbounds</legend>
+          <label class="inbound">
+            <input type="checkbox" checked>
+            <span><strong>vless-vision</strong><small>VLESS · Reality · tcp :443</small></span>
+          </label>
+          <label class="inbound">
+            <input type="checkbox">
+            <span><strong>vless-ws</strong><small>VLESS · TLS · ws :2053</small></span>
+          </label>
+        </fieldset>
+
+        <label class="label" for="client-id">Client ID</label>
+        <div class="client-row">
+          <input class="client-id" id="client-id" value="1d37a118-4f1b-4dc0-9e3c-3426b07518df" spellcheck="false">
+          <button class="button" id="generate">⟳ Generate</button>
+        </div>
+      </div>
+
+      <footer class="dialog-footer">
+        <button class="button close-action">Cancel</button>
+        <button class="button primary" type="button">Save</button>
+      </footer>
+    </section>
+  </div>
+
+  <nav class="switcher" aria-label="Prototype variants">
+    <button id="previous" aria-label="Previous variant">←</button>
+    <span class="switcher-label" aria-live="polite">
+      <span class="prototype-word">Prototype</span><span id="variant-label"></span>
+    </span>
+    <button id="next" aria-label="Next variant">→</button>
+  </nav>
+
+<script>
+  const variants = [
+    { key: "A", name: "Identity first" },
+    { key: "B", name: "Identity card" },
+    { key: "C", name: "Context strip" },
+  ];
+  const layer = document.getElementById("dialog-layer");
+  const label = document.getElementById("variant-label");
+  let current = new URLSearchParams(location.search).get("variant") || "A";
+  if (!variants.some((variant) => variant.key === current)) current = "A";
+
+  function selectVariant(key, updateUrl = true) {
+    current = key;
+    document.body.dataset.variant = key;
+    const selected = variants.find((variant) => variant.key === key);
+    label.textContent = `${selected.key} · ${selected.name}`;
+    if (!updateUrl) return;
+
+    const url = new URL(location.href);
+    url.searchParams.set("variant", key);
+    try {
+      history.replaceState(null, "", url.href);
+    } catch {
+      location.href = url.href;
+    }
+  }
+
+  function cycle(direction) {
+    const index = variants.findIndex((variant) => variant.key === current);
+    selectVariant(variants[(index + direction + variants.length) % variants.length].key);
+  }
+
+  document.getElementById("previous").addEventListener("click", () => cycle(-1));
+  document.getElementById("next").addEventListener("click", () => cycle(1));
+  document.querySelectorAll(".close, .close-action").forEach((button) => {
+    button.addEventListener("click", () => { layer.hidden = true; });
+  });
+  document.querySelectorAll(".edit-open").forEach((button) => {
+    button.addEventListener("click", () => { layer.hidden = false; });
+  });
+  document.getElementById("generate").addEventListener("click", () => {
+    const fallback = "xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx".replace(/[xy]/g, (character) => {
+      const random = Math.random() * 16 | 0;
+      return (character === "x" ? random : (random & 3) | 8).toString(16);
+    });
+    document.getElementById("client-id").value = crypto.randomUUID ? crypto.randomUUID() : fallback;
+  });
+  document.addEventListener("keydown", (event) => {
+    const focused = document.activeElement;
+    if (focused && focused.matches("input, textarea, [contenteditable]")) return;
+    if (event.key === "ArrowLeft") cycle(-1);
+    if (event.key === "ArrowRight") cycle(1);
+    if (event.key === "Escape") layer.hidden = true;
+  });
+
+  selectVariant(current, false);
+</script>
+</body>
+</html>
