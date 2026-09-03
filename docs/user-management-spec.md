@@ -2,6 +2,13 @@
 
 Ready to fold into SPEC.md. Compiled from the map's closed tickets: charting decisions (#45), HandlerService research (#46), dialog prototype (#47), write path (#48), mutation API (#49); rollout notes from #50.
 
+> **Superseded in part by ADR-0007** (map's successor, issue #58): the single
+> "remove" act split into **Disable** (this document's remove, renamed, with
+> the destructive act rehomed into the edit view — `POST
+> /api/v1/users/{email}/disable` and `.../enable` replace `DELETE`) and
+> **Delete**, which purges. "Gone user" is now "Disabled user" everywhere —
+> store column, API field, UI. SPEC.md is the live authority.
+
 ## 1. Summary
 
 The panel manages the user roster: add, edit, and remove users from the dashboard, applied to the running xray immediately, surviving both xray restarts and ansible re-provisioning. The panel's own roster store is the source of truth; every change is rendered into `config.json` **and** pushed live over the xray gRPC API. Ansible no longer manages `clients` lists.

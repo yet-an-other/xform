@@ -104,12 +104,12 @@ CREATE TABLE users (
   down_bytes_total INTEGER NOT NULL DEFAULT 0,
   last_seen        INTEGER,                 -- unix seconds, NULL = never
   last_ips         TEXT,                    -- JSON array
-  gone             INTEGER NOT NULL DEFAULT 0,  -- no longer in xray config; history kept
+  disabled         INTEGER NOT NULL DEFAULT 0,  -- off the Roster (ADR-0007); history kept
   first_seen       INTEGER NOT NULL
 );
 ```
 
-Users with no roster row that vanish from the config get `gone = 1` — never auto-deleted; hidden by default in the UI. A roster member the config loses is not marked gone: the panel converges instead (store wins) — the user is re-rendered and re-pushed on the next watch tick, and an inbound the config dropped has its attachments pruned from the roster (users left with none stay profile-less and manageable).
+Users with no roster row that vanish from the config get `disabled = 1` — never auto-deleted; hidden by default in the UI. A roster member the config loses is not marked disabled: the panel converges instead (store wins) — the user is re-rendered and re-pushed on the next watch tick, and an inbound the config dropped has its attachments pruned from the roster (users left with none stay profile-less and manageable).
 
 The roster store holds one row per managed user — the panel-held source of truth behind user management:
 
@@ -118,15 +118,15 @@ CREATE TABLE roster (
   email      TEXT PRIMARY KEY,        -- identity; email change = new row
   client_id  TEXT NOT NULL,           -- UUID credential
   inbounds   TEXT NOT NULL,           -- JSON array of VLESS inbound tags
-  gone       INTEGER NOT NULL DEFAULT 0,  -- removed from the Roster; history kept
+  disabled   INTEGER NOT NULL DEFAULT 0,  -- off the Roster (ADR-0007); history kept
   created_at INTEGER NOT NULL,
   updated_at INTEGER NOT NULL
 );
 ```
 
-On startup and whenever the config changes, VLESS clients found in the config are adopted into the roster, additively and idempotently: a new email lands with its config Client ID and attachments, a known live email only gains attachments it did not have (a stored Client ID is never rewritten by a config edit), and an unchanged re-read writes nothing. A removed user's flagged row is untouched — the Roster decides gone-ness, so a config still carrying a removed user (the render has not landed yet) is drift, not a revival.
+On startup and whenever the config changes, VLESS clients found in the config are adopted into the roster, additively and idempotently: a new email lands with its config Client ID and attachments, a known live email only gains attachments it did not have (a stored Client ID is never rewritten by a config edit), and an unchanged re-read writes nothing. A disabled user's flagged row is untouched — the Roster decides disabled-ness (ADR-0007), so a config still carrying a disabled user (the render has not landed yet) is drift, not a revival.
 
-Removing a user (DELETE below) flags the row gone — never erased. Re-adding the same email revives it and rejoins the traffic history; the Client ID claim stays roster-wide, gone rows included.
+Disabling a user (ADR-0007) flags the row disabled — never erased. Re-enabling, or re-adding the same email, revives it and rejoins the traffic history; the Client ID claim stays roster-wide, disabled rows included. Databases from before the disable rename carry a `gone` column; it migrates in place to `disabled`, flags intact.
 
 Connection profiles and operational snapshots are never persisted (§7, §8).
 
@@ -145,7 +145,8 @@ Base prefix `/api/v1`. JSON only, snake_case keys, raw integers (bytes, bytes/se
 | GET | `/api/v1/users` | session | `{"stale": bool, "collected_at": ts, "users": [...]}` |
 | POST | `/api/v1/users` | session + same-origin | add a roster user → 201 with the stored record + `roster_sync`; 409 with a machine-readable reason; cross-site → 403 |
 | PATCH | `/api/v1/users/{email}` | session + same-origin | edit (optional `client_id`, optional `inbounds`) → 200 with the stored record + `roster_sync`; idempotent |
-| DELETE | `/api/v1/users/{email}` | session + same-origin | remove → gone: 200 with `roster_sync`; already-gone → 204 |
+| POST | `/api/v1/users/{email}/disable` | session + same-origin | disable (ADR-0007) → 200 with `roster_sync`; already-disabled or unknown email → 204; idempotent |
+| POST | `/api/v1/users/{email}/enable` | session + same-origin | enable (ADR-0007) → 200 with the revived record + `roster_sync`; unknown email → 404; idempotent |
 | GET | `/api/v1/users/{email}` | session | one user's observations + connection profiles (§7) |
 | GET | `/api/v1/logs/panel` | session | bounded Log snapshot of the panel's journal (§8) |
 | GET | `/api/v1/logs/xray` | session | bounded Log snapshot of xray's journal (§8) |
@@ -186,7 +187,7 @@ GET /api/v1/users
                "ip_countries": {"203.0.113.10": "NL"},          // ADR-0005; omitted when geoip.dat is unavailable, absent keys = private/unknown
                "speed_up_bps": 512000, "speed_down_bps": 3800000,
                "last_seen": 1723799995,            // durable; null until first observed activity
-               "gone": false } ] }
+               "disabled": false } ] }
 
 GET /api/v1/panel
 { "version": "v0.10.0",     // the binary's release tag; "dev" outside releases
@@ -217,7 +218,7 @@ The dashboard fetches `/api/v1/panel` in the five-second refresh cycle rather th
 - The caller encodes the email with `encodeURIComponent` as one URL path segment; the handler decodes it exactly once. Malformed percent encoding → 400 `invalid_request`; valid encoded `/`, `%`, and non-ASCII bytes remain part of the email identity. The route works through both root and documented subpath proxy deployments (§9).
 - A known user → 200 even when profile generation failed. An unknown user → 404. Profile errors never become endpoint-level 500s; a 500 is reserved for an internal failure that prevents any detail response.
 - `collected_at` and top-level `stale` describe user observations. `connection_profiles.loaded_at`, `stale`, and `errors` describe the parsed-xray and advertised-connection sources used for profile evaluation (§7): `loaded_at` is the oldest last-success time among the valid source snapshots used (the parsed-xray time when advertisements are unset or never loaded; null only when xray config has never parsed successfully), `stale` is true when either source serves its last-valid snapshot after a reload failure, and `errors` lists `xray_config` then `advertisements` source errors, each `{source, reason, message}` with `reason` ∈ `read_failed | parse_failed | unsupported_version` and a safe human-readable `message`.
-- `state` is `ready` (candidates evaluated), `gone_user` (gone user; `items` empty), `no_matching_inbound`, or `source_unavailable` (xray config never parsed; `loaded_at` null, `items` empty).
+- `state` is `ready` (candidates evaluated), `disabled_user` (disabled user — ADR-0007; `items` empty), `no_matching_inbound`, or `source_unavailable` (xray config never parsed; `loaded_at` null, `items` empty).
 - `items` holds one available or unavailable result per matching VLESS inbound, in xray inbound order (§7).
 
 ## 6. Frontend
@@ -227,17 +228,17 @@ React + TS (Vite), single page per the approved prototypes in `docs/prototypes/`
 - **Header**: two identity groups. Panel group: `xform` wordmark, version, panel uptime, panel-logs icon action. xray group: status indicator immediately before `xray`, version, service uptime, xray-logs icon action, xray-config icon action. Then the refresh note (cadence + last-successful-poll time, 24h clock) and Log out. Every icon-only action has an accessible name and a visible tooltip or title. Degraded banner when `status != "running"` — full copy naming what went stale and that host stats stay live.
 - **Server row**: four cards — CPU / RAM / storage with bars, plus a host-uptime card with load average as its sub-line.
 - **Xray row**: four cards — speed now (↑ green / ↓ blue, stacked big lines), total traffic (up + down), users online (`n / total` + unique IPs), xray process memory/goroutines.
-- **Users table**: online dot, email, protocol · security, Traffic (up/down stacked on two lines), speed now, online IPs (one per line, country flag beside each — ADR-0005), last seen (relative; literal `now` while online), and per-user icon-only actions with accessible names: details, and — for users who are not gone — edit and remove; the section header carries the add-user action. The edit action opens the edit dialog with the user's email (immutable — the identity; change = remove + add), the inbound multi-select, and an editable Client ID with a generate button; saving stores the edit and applies it live (store → file render → diff push: attach/detach per inbound, remove + add on every attached inbound when the Client ID changes), showing conflicts inline and apply failures on the dialog banner + row badge (`docs/user-management-spec.md`). The remove action opens a confirmation naming what removal means — off every inbound immediately, an xray restart keeps them gone, traffic history retained behind the gone badge, established connections left to close naturally; DELETE is idempotent (`docs/user-management-spec.md`). Compact row density. `gone` users hidden behind a toggle. At narrow widths the table keeps its fixed columns and scrolls horizontally.
+- **Users table**: online dot, email, protocol · security, Traffic (up/down stacked on two lines), speed now, online IPs (one per line, country flag beside each — ADR-0005), last seen (relative; literal `now` while online), and per-user icon-only actions with accessible names: details and edit — the destructive acts live in the edit view, not on the rows (ADR-0007); the section header carries the add-user action. The edit action opens the edit dialog with the user's email (immutable — the identity; change = disable + re-add), the inbound multi-select, and an editable Client ID with a generate button; saving stores the edit and applies it live (store → file render → diff push: attach/detach per inbound, remove + add on every attached inbound when the Client ID changes), showing conflicts inline and apply failures on the dialog banner + row badge (`docs/user-management-spec.md`). The edit dialog's Disable user action opens a confirmation naming what disable means — off every inbound immediately, history kept, established connections left to close naturally; POST `/disable` is idempotent. A disabled user's dialog offers Re-enable, which re-applies the stored credential and attachments (`docs/user-management-spec.md`, ADR-0007). Compact row density. Disabled users hidden behind a toggle. At narrow widths the table keeps its fixed columns and scrolls horizontally.
 
 Polls all three observation endpoints every 5s; freshness is the header refresh note, not per-card; shows "stale" speeds when `stale: true`. Login page posting to `/api/v1/login`.
 
 ### User details dialog
 
-Opening a user's details action opens the one modal dialog for that exact user, showing in order: email and online/gone status; current Traffic, Speed, Last seen, and online IP observations; then connection profiles. While open it fetches the user detail every five seconds; detail requests never overlap (a slow request skips the next interval), only the newest completed request for the currently open user may update the modal, and closing cancels its request and timer. The ordinary dashboard polling continues behind the modal.
+Opening a user's details action opens the one modal dialog for that exact user, showing in order: email and online/disabled status; current Traffic, Speed, Last seen, and online IP observations; then connection profiles. While open it fetches the user detail every five seconds; detail requests never overlap (a slow request skips the next interval), only the newest completed request for the currently open user may update the modal, and closing cancels its request and timer. The ordinary dashboard polling continues behind the modal.
 
 - **Available profiles** render as fully expanded cards in xray inbound order: profile name, inbound tag, client ID with Copy, flow (`none` when null), public endpoint, transport and security, full VLESS URI with Copy, and a QR code generated from the exact URI. Stale last-valid profiles stay visible and copyable with a clear stale warning and the source error.
 - **Unavailable results** show the profile name and inbound tag when known, plus the stable reason and readable message — never a client ID copy action, partial URI, or QR code.
-- A **gone user** shows the historical-observations view and no profiles. `no_matching_inbound` and `source_unavailable` have distinct empty/error copy.
+- A **disabled user** (ADR-0007) shows the historical-observations view and no profiles, with copy saying disabled. `no_matching_inbound` and `source_unavailable` have distinct empty/error copy.
 - Observation staleness and profile staleness display independently.
 
 ### Operational dialogs
@@ -256,7 +257,7 @@ A modal traps focus, closes on Escape or its close action, and restores focus to
 
 A connection profile is a client-ready VLESS connection for one user through one matching xray inbound, identified by `(user email, inbound tag)`. The same email in several uniquely tagged VLESS inbounds produces several profiles; the same email repeated within one inbound produces one unavailable result for that inbound (the client ID is ambiguous).
 
-A profile is derived from two sources: server-derived values from the matching VLESS inbound (canonical client ID, effective flow), and advertised connection settings describing the public client view. The panel never infers a complete public client view from an xray listener — NAT, TLS termination, reverse proxies, CDNs, and REALITY selections make that inference unsafe. Profiles are never persisted. A gone user retains historical observations and has no connection profiles.
+A profile is derived from two sources: server-derived values from the matching VLESS inbound (canonical client ID, effective flow), and advertised connection settings describing the public client view. The panel never infers a complete public client view from an xray listener — NAT, TLS termination, reverse proxies, CDNs, and REALITY selections make that inference unsafe. Profiles are never persisted. A disabled user retains historical observations and has no connection profiles.
 
 The profile module owns matching by exact email, stable identity checks, canonical client ID conversion, effective-flow selection, direct and fronted validation, supported-shape validation, unavailable reason selection, and canonical URI serialization. Callers never build or patch VLESS URIs.
 
@@ -457,4 +458,4 @@ Applies push to the running xray over `HandlerService` (`AddUserOperation` / `Re
 
 ## 10. Non-goals
 
-Historical traffic graphs & long retention · free-form config editing · subscription URLs · client-specific profile formats or import guarantees · non-VLESS profiles · per-user advertised connection settings · profiles for gone users · profile/credential persistence, masking, or audit trails · multi-server · Prometheus/Grafana export · alerting/quotas/CSV · cross-origin or CDN-hosted UI (same-origin only, ADR-0001) · live log following, pagination, search, filtering, or downloads · caller-selected units, counts, cursors, time ranges, fields, or journal expressions · log clearing or service controls · xray-managed log-file reading · Config snapshot editing, validation, formatting, download, or reload controls · historical Log/Config snapshot storage · migration of old default-journal records · broad default-journal access or a privileged journal broker · non-systemd hosts or systemd older than 245 · automatic installation of root-owned migration files by the binary updater · multiple simultaneous modals · changes to the five-second observation cadence · a new frontend framework, HTTP router, database, or persistent store.
+Historical traffic graphs & long retention · free-form config editing · subscription URLs · client-specific profile formats or import guarantees · non-VLESS profiles · per-user advertised connection settings · profiles for disabled users · profile/credential persistence, masking, or audit trails · multi-server · Prometheus/Grafana export · alerting/quotas/CSV · cross-origin or CDN-hosted UI (same-origin only, ADR-0001) · live log following, pagination, search, filtering, or downloads · caller-selected units, counts, cursors, time ranges, fields, or journal expressions · log clearing or service controls · xray-managed log-file reading · Config snapshot editing, validation, formatting, download, or reload controls · historical Log/Config snapshot storage · migration of old default-journal records · broad default-journal access or a privileged journal broker · non-systemd hosts or systemd older than 245 · automatic installation of root-owned migration files by the binary updater · multiple simultaneous modals · changes to the five-second observation cadence · a new frontend framework, HTTP router, database, or persistent store.

@@ -13,9 +13,9 @@ import (
 // User is one row of the users table — the JSON contract of
 // GET /api/v1/users (SPEC.md §5). Presence fields (online, ips, last_seen)
 // are live from the online RPCs, degraded on old servers (SPEC.md §3);
-// config fields (protocol, security, gone) come from the config roster sync
-// and stay zero until the xray config parses. Client ID and inbounds are
-// the roster store's adopted record (null until adoption).
+// config fields (protocol, security, disabled) come from the config roster
+// sync and stay zero until the xray config parses. Client ID and inbounds
+// are the roster store's adopted record (null until adoption).
 type User struct {
 	Email          string   `json:"email"`
 	Protocol       *string  `json:"protocol"`
@@ -33,7 +33,7 @@ type User struct {
 	SpeedUpBps   uint64            `json:"speed_up_bps"`
 	SpeedDownBps uint64            `json:"speed_down_bps"`
 	LastSeen     *int64            `json:"last_seen"`
-	Gone         bool              `json:"gone"`
+	Disabled     bool              `json:"disabled"` // off the Roster (ADR-0007); history kept
 
 	FirstSeen int64 `json:"-"` // panel-internal
 }
@@ -87,7 +87,7 @@ type RosterParse = xrayconfig.RosterParse
 // RosterSource supplies the user roster parsed from the xray config — the
 // seam for fakes. The version bumps whenever the roster changes; 0 means no
 // config was ever parsed, so a missing or broken config never syncs (it
-// must not mark everyone gone).
+// must not mark everyone disabled).
 type RosterSource interface {
 	Roster() (parsed RosterParse, version uint64)
 }

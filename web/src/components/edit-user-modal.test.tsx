@@ -23,7 +23,7 @@ const storedUser = {
   speed_up_bps: 0,
   speed_down_bps: 0,
   last_seen: null,
-  gone: false,
+  disabled: false,
 };
 
 function renderModal(user = storedUser) {
@@ -79,10 +79,10 @@ describe("edit user dialog", () => {
       json({ user: { ...storedUser, inbounds: [] }, roster_sync: "synced" }, 200),
     );
     vi.stubGlobal("fetch", fetchMock);
-    renderModal({ ...storedUser, inbounds: ["vless-vision", "vless-gone-tag"] });
+    renderModal({ ...storedUser, inbounds: ["vless-vision", "vless-vanished-tag"] });
 
     const dialog = screen.getByRole("dialog", { name: "Edit alice@example.com" });
-    expect(within(dialog).getByText(/vless-gone-tag/i)).toBeInTheDocument();
+    expect(within(dialog).getByText(/vless-vanished-tag/i)).toBeInTheDocument();
 
     fireEvent.click(within(dialog).getByRole("checkbox", { name: /vless-vision/ })); // detach all
     fireEvent.click(within(dialog).getByRole("button", { name: /save/i }));
@@ -163,6 +163,111 @@ describe("edit user dialog", () => {
     fireEvent.click(within(dialog).getByRole("button", { name: /save/i }));
 
     await waitFor(() => expect(onExpired).toHaveBeenCalled());
+    expect(onClose).not.toHaveBeenCalled();
+  });
+
+  // The disable act lives in the edit view, not on the rows (ADR-0007);
+  // the confirm names what disable means before asking.
+  it("disables behind a confirm that names the semantics", async () => {
+    const fetchMock = vi.fn(async () => json({ roster_sync: "synced" }, 200));
+    vi.stubGlobal("fetch", fetchMock);
+    const { onClose } = renderModal();
+
+    const dialog = screen.getByRole("dialog", { name: "Edit alice@example.com" });
+    fireEvent.click(within(dialog).getByRole("button", { name: /disable user/i }));
+
+    expect(within(dialog).getByText(/off every inbound immediately/i)).toBeInTheDocument();
+    expect(within(dialog).getByText(/not force-killed/i)).toBeInTheDocument();
+
+    fireEvent.click(within(dialog).getByRole("button", { name: /disable user/i }));
+    await waitFor(() => expect(onClose).toHaveBeenCalled());
+    const [url, init] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
+    expect(url).toBe("api/v1/users/alice%40example.com/disable");
+    expect(init.method).toBe("POST");
+  });
+
+  it("cancels the disable confirm back to the form", async () => {
+    vi.stubGlobal("fetch", vi.fn());
+    renderModal();
+
+    const dialog = screen.getByRole("dialog", { name: "Edit alice@example.com" });
+    fireEvent.click(within(dialog).getByRole("button", { name: /disable user/i }));
+    fireEvent.click(within(dialog).getByRole("button", { name: "Cancel" }));
+
+    // Back on the form, nothing was sent.
+    expect(within(dialog).getByRole("button", { name: /save/i })).toBeEnabled();
+    expect(fetch).not.toHaveBeenCalled();
+  });
+
+  it("shows the failure banner when the disable stored but the apply failed", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () => json({ roster_sync: "failed" }, 200)));
+    const { onClose } = renderModal();
+
+    const dialog = screen.getByRole("dialog", { name: "Edit alice@example.com" });
+    fireEvent.click(within(dialog).getByRole("button", { name: /disable user/i }));
+    fireEvent.click(within(dialog).getByRole("button", { name: /disable user/i }));
+
+    expect(await within(dialog).findByRole("alert")).toHaveTextContent(/stored.*retries/i);
+    expect(onClose).not.toHaveBeenCalled();
+    expect(
+      within(dialog).queryByRole("button", { name: /disable user/i }),
+    ).not.toBeInTheDocument();
+  });
+});
+
+describe("disabled user's edit dialog", () => {
+  const disabledUser = { ...storedUser, disabled: true };
+
+  function renderDisabled(onClose = vi.fn(), onExpired = vi.fn()) {
+    render(
+      <EditUserModal
+        user={disabledUser}
+        inbounds={options}
+        opener={createRef<HTMLElement>()}
+        onClose={onClose}
+        onExpired={onExpired}
+      />,
+    );
+    return { onClose, onExpired };
+  }
+
+  it("says what disabled means and offers Re-enable instead of the form", () => {
+    vi.stubGlobal("fetch", vi.fn());
+    renderDisabled();
+
+    const dialog = screen.getByRole("dialog", { name: "Edit alice@example.com" });
+    expect(within(dialog).getByText(/off every inbound, no connection profiles, history kept/i)).toBeInTheDocument();
+    expect(within(dialog).queryByLabelText("Client ID")).not.toBeInTheDocument();
+    expect(within(dialog).getByRole("button", { name: /re-enable user/i })).toBeEnabled();
+    expect(within(dialog).queryByRole("button", { name: /^save$/i })).not.toBeInTheDocument();
+  });
+
+  it("re-enables: the stored credential and attachments re-apply", async () => {
+    const fetchMock = vi.fn(async () =>
+      json({ user: { ...disabledUser, disabled: false }, roster_sync: "synced" }, 200),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    const onClose = vi.fn();
+    renderDisabled(onClose);
+
+    const dialog = screen.getByRole("dialog", { name: "Edit alice@example.com" });
+    fireEvent.click(within(dialog).getByRole("button", { name: /re-enable user/i }));
+
+    await waitFor(() => expect(onClose).toHaveBeenCalled());
+    const [url, init] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
+    expect(url).toBe("api/v1/users/alice%40example.com/enable");
+    expect(init.method).toBe("POST");
+  });
+
+  it("keeps the dialog open on the failure banner when the re-enable's apply failed", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () => json({ user: disabledUser, roster_sync: "failed" }, 200)));
+    const onClose = vi.fn();
+    renderDisabled(onClose);
+
+    const dialog = screen.getByRole("dialog", { name: "Edit alice@example.com" });
+    fireEvent.click(within(dialog).getByRole("button", { name: /re-enable user/i }));
+
+    expect(await within(dialog).findByRole("alert")).toHaveTextContent(/stored.*retries/i);
     expect(onClose).not.toHaveBeenCalled();
   });
 });

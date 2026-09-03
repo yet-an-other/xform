@@ -55,7 +55,7 @@ func TestEditRosterUserUpdatesAttachmentsAndClientID(t *testing.T) {
 		t.Fatalf("users: %v", err)
 	}
 	alice := byEmail(list)["alice@example.com"]
-	if alice.Gone {
+	if alice.Disabled {
 		t.Error("an edited roster member must not read gone")
 	}
 	if alice.ClientID == nil || *alice.ClientID != "uuid-alice-new" {
@@ -118,7 +118,7 @@ func TestEditRosterUserCanDetachEveryInboundAndStaysListed(t *testing.T) {
 		t.Fatalf("apply roster sync: %v", err)
 	}
 	alice := byEmail(mustUsers(t, store))["alice@example.com"]
-	if alice.Gone {
+	if alice.Disabled {
 		t.Error("a profile-less roster member must stay listed, not gone")
 	}
 }

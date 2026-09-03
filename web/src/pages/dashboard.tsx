@@ -7,7 +7,6 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { ConfigSnapshotModal } from "@/components/config-snapshot-modal";
 import { AddUserModal } from "@/components/add-user-modal";
 import { EditUserModal } from "@/components/edit-user-modal";
-import { RemoveUserModal } from "@/components/remove-user-modal";
 import { LogSnapshotModal } from "@/components/log-snapshot-modal";
 import { UserDetailsModal } from "@/components/user-details-modal";
 import {
@@ -50,7 +49,6 @@ const POLL_INTERVAL_MS = 5_000;
 type OpenDialog =
   | { kind: "details"; email: string }
   | { kind: "edit"; email: string }
-  | { kind: "remove"; email: string }
   | { kind: "add" }
   | { kind: "logs"; source: LogSource }
   | { kind: "config" }
@@ -100,7 +98,8 @@ function InfoIcon() {
 }
 
 // EditIcon is the row-level edit glyph (user-management prototype): a
-// pencil, opening the User's edit dialog.
+// pencil, opening the User's edit dialog. The destructive acts — disable,
+// later delete — live inside that dialog, not on the rows (ADR-0007).
 function EditIcon() {
   return (
     <svg
@@ -109,20 +108,6 @@ function EditIcon() {
       className="size-4 fill-none stroke-current stroke-[1.8] [stroke-linecap:round] [stroke-linejoin:round]"
     >
       <path d="M16.5 4.5l3 3L8 19l-4 1 1-4L16.5 4.5z" />
-    </svg>
-  );
-}
-
-// TrashIcon is the row-level remove glyph (user-management prototype): a
-// bin, opening the User's remove confirmation.
-function TrashIcon() {
-  return (
-    <svg
-      aria-hidden="true"
-      viewBox="0 0 24 24"
-      className="size-4 fill-none stroke-current stroke-[1.8] [stroke-linecap:round] [stroke-linejoin:round]"
-    >
-      <path d="M4 7h16M10 11v6M14 11v6M6.5 7l1 12.2a1.8 1.8 0 0 0 1.8 1.8h5.4a1.8 1.8 0 0 0 1.8-1.8L17.5 7M9.5 7V5a1.5 1.5 0 0 1 1.5-1.5h2A1.5 1.5 0 0 1 14.5 5v2" />
     </svg>
   );
 }
@@ -189,26 +174,26 @@ function IconAction({
 // current speed, presence (online dot, IPs, last seen), and the config
 // labels (protocol · security) — plus the named icon-only row actions
 // (details, edit) opening the User dialogs (SPEC §6). Uplink and Downlink
-// share one Traffic column on two lines. Gone users — edited out of the xray config,
-// history retained — are hidden by default behind a toggle. Speeds read
-// "stale" on a stale snapshot — xray is unreachable and the totals are
-// last-known.
+// share one Traffic column on two lines. Disabled users — off the Roster,
+// history retained (ADR-0007) — are hidden by default behind a toggle.
+// Speeds read "stale" on a stale snapshot — xray is unreachable and the
+// totals are last-known.
 function UsersTable({
   snapshot,
   onOpenDetails,
   onOpenEdit,
-  onOpenRemove,
   onOpenAdd,
 }: {
   snapshot: UsersSnapshot;
   onOpenDetails: (email: string, opener: HTMLButtonElement) => void;
   onOpenEdit: (email: string, opener: HTMLButtonElement) => void;
-  onOpenRemove: (email: string, opener: HTMLButtonElement) => void;
   onOpenAdd: (opener: HTMLButtonElement) => void;
 }) {
-  const [showGone, setShowGone] = useState(false);
-  const goneCount = snapshot.users.filter((user) => user.gone).length;
-  const visible = showGone ? snapshot.users : snapshot.users.filter((user) => !user.gone);
+  const [showDisabled, setShowDisabled] = useState(false);
+  const disabledCount = snapshot.users.filter((user) => user.disabled).length;
+  const visible = showDisabled
+    ? snapshot.users
+    : snapshot.users.filter((user) => !user.disabled);
 
   return (
     <section aria-label="Users" className="bg-surface/80 mt-4 overflow-hidden rounded-xl border">
@@ -235,13 +220,13 @@ function UsersTable({
           ) : null}
         </h2>
         <span className="flex items-center gap-2">
-          {goneCount > 0 ? (
+          {disabledCount > 0 ? (
             <button
               type="button"
-              onClick={() => setShowGone((shown) => !shown)}
+              onClick={() => setShowDisabled((shown) => !shown)}
               className="border-border text-muted-foreground hover:text-foreground rounded-lg border px-2.5 py-1 text-[0.7rem] font-bold tracking-[0.08em] uppercase"
             >
-              {showGone ? "Hide gone" : `Show gone (${goneCount})`}
+              {showDisabled ? "Hide disabled" : `Show disabled (${disabledCount})`}
             </button>
           ) : null}
           <button
@@ -275,25 +260,25 @@ function UsersTable({
           {visible.length === 0 ? (
             <TableRow className="hover:bg-transparent">
               <TableCell className="text-muted-foreground px-5 py-4 text-xs" colSpan={8}>
-                {goneCount > 0
-                  ? `Every known user is gone — ${goneCount} hidden behind the toggle.`
+                {disabledCount > 0
+                  ? `Every known user is disabled — ${disabledCount} hidden behind the toggle.`
                   : "No users with traffic yet."}
               </TableCell>
             </TableRow>
           ) : (
             visible.map((user) => (
-              <TableRow key={user.email} className={user.gone ? "opacity-50" : undefined}>
+              <TableRow key={user.email} className={user.disabled ? "opacity-50" : undefined}>
                 <TableCell className="px-5 py-1.5">
                   <PresenceDot online={user.online} />
                 </TableCell>
                 <TableCell className="truncate py-1.5 font-semibold">
                   {user.email}
-                  {user.gone ? (
+                  {user.disabled ? (
                     <Badge
                       className="text-muted-foreground ml-2 px-1.5 py-0.5 align-middle text-[0.65rem] tracking-[0.08em] uppercase"
                       variant="outline"
                     >
-                      gone
+                      disabled
                     </Badge>
                   ) : null}
                   {user.apply_state === "failed" ? (
@@ -375,25 +360,16 @@ function UsersTable({
                     >
                       <InfoIcon />
                     </IconAction>
-                    {/* Gone Users are history: inspectable, never edited or removed. */}
-                    {user.gone ? null : (
-                      <>
-                        <IconAction
-                          label={`Edit ${user.email}`}
-                          title={`Edit ${user.email}`}
-                          onOpen={(opener) => onOpenEdit(user.email, opener)}
-                        >
-                          <EditIcon />
-                        </IconAction>
-                        <IconAction
-                          label={`Remove ${user.email}`}
-                          title={`Remove ${user.email}`}
-                          onOpen={(opener) => onOpenRemove(user.email, opener)}
-                        >
-                          <TrashIcon />
-                        </IconAction>
-                      </>
-                    )}
+                    {/* Every user keeps an edit action: a live user's dialog
+                        edits access and offers Disable; a disabled user's
+                        dialog offers Re-enable (ADR-0007). */}
+                    <IconAction
+                      label={`Edit ${user.email}`}
+                      title={`Edit ${user.email}`}
+                      onOpen={(opener) => onOpenEdit(user.email, opener)}
+                    >
+                      <EditIcon />
+                    </IconAction>
                   </span>
                 </TableCell>
               </TableRow>
@@ -704,7 +680,7 @@ export function Dashboard({ onUnauthenticated }: { onUnauthenticated: () => void
 
       {xray ? (
         <XrayRow
-          rosterSize={users ? users.users.filter((user) => !user.gone).length : null}
+          rosterSize={users ? users.users.filter((user) => !user.disabled).length : null}
           xray={xray}
         />
       ) : null}
@@ -714,7 +690,6 @@ export function Dashboard({ onUnauthenticated }: { onUnauthenticated: () => void
           snapshot={users}
           onOpenDetails={(email, opener) => openDialog({ kind: "details", email }, opener)}
           onOpenEdit={(email, opener) => openDialog({ kind: "edit", email }, opener)}
-          onOpenRemove={(email, opener) => openDialog({ kind: "remove", email }, opener)}
           onOpenAdd={(opener) => openDialog({ kind: "add" }, opener)}
         />
       ) : null}
@@ -731,28 +706,14 @@ export function Dashboard({ onUnauthenticated }: { onUnauthenticated: () => void
       {dialog?.kind === "edit" && users
         ? (() => {
             // The row the dialog edits, re-read from the live snapshot on
-            // every poll so the dialog never shows a replaced record.
+            // every poll so the dialog never shows a replaced record. A
+            // disabled row is editable here too — its dialog offers
+            // Re-enable (ADR-0007).
             const user = users.users.find((candidate) => candidate.email === dialog.email);
             return user ? (
               <EditUserModal
                 user={user}
                 inbounds={users.inbounds}
-                opener={dialogOpener}
-                onClose={closeDialog}
-                onExpired={sessionExpired}
-              />
-            ) : null;
-          })()
-        : null}
-
-      {dialog?.kind === "remove" && users
-        ? (() => {
-            // The row the dialog confirms, re-read from the live snapshot —
-            // a removed user must not keep a confirm dialog open.
-            const user = users.users.find((candidate) => candidate.email === dialog.email);
-            return user && !user.gone ? (
-              <RemoveUserModal
-                user={user}
                 opener={dialogOpener}
                 onClose={closeDialog}
                 onExpired={sessionExpired}

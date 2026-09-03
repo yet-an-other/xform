@@ -50,9 +50,9 @@ export function UserDetailsModal({
           <h2 className="truncate text-xl font-semibold tracking-tight">{email}</h2>
           {user ? (
             <div className="mt-2 flex flex-wrap items-center gap-2">
-              {user.gone ? (
+              {user.disabled ? (
                 <Badge variant="outline" className="border-warning/35 text-warning gap-2 rounded-full border px-2 py-1 text-[11px] font-bold">
-                  Gone User
+                  Disabled User
                 </Badge>
               ) : (
                 <Badge
@@ -98,12 +98,12 @@ export function UserDetailsModal({
               <h3 className="text-[13px] font-semibold">Current observations</h3>
               <span className="text-muted-foreground text-[11px]">
                 {refreshFailed
-                  ? user.gone
+                  ? user.disabled
                     ? "historical observations · refresh failed"
                     : detail.stale
                       ? "stale snapshot · refresh failed"
                       : "refresh failed · showing previous observations"
-                  : user.gone
+                  : user.disabled
                     ? detail.stale
                       ? "historical observations · stale snapshot"
                       : "historical observations"

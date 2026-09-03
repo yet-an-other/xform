@@ -45,7 +45,7 @@ func TestAddEndToEndOverTheRealStoreAndRenderer(t *testing.T) {
 	pusher := &fakePusher{events: events}
 	service := roster.NewService(
 		store,
-		fakeViews{view: view},
+		&fakeViews{view: view},
 		&fakeParseSource{version: 1, parse: xrayconfig.RosterParse{Labels: map[string]xrayconfig.User{}, Clients: map[string]xrayconfig.Client{}}},
 		roster.FileRenderer{Path: configPath},
 		pusher,
@@ -128,7 +128,7 @@ func TestEditEndToEndOverTheRealStoreAndRenderer(t *testing.T) {
 	pusher := &fakePusher{events: events}
 	service := roster.NewService(
 		store,
-		fakeViews{view: view},
+		&fakeViews{view: view},
 		&fakeParseSource{version: 1, parse: xrayconfig.RosterParse{Labels: map[string]xrayconfig.User{}, Clients: map[string]xrayconfig.Client{}}},
 		roster.FileRenderer{Path: configPath},
 		pusher,
@@ -230,7 +230,7 @@ func TestEditEndToEndOverTheRealStoreAndRenderer(t *testing.T) {
 			alice = user
 		}
 	}
-	if alice.Gone || alice.ClientID == nil {
+	if alice.Disabled || alice.ClientID == nil {
 		t.Errorf("alice = %+v, want a listed profile-less roster member", alice)
 	}
 }
@@ -287,7 +287,7 @@ func TestRemoveEndToEndOverTheRealStoreAndRenderer(t *testing.T) {
 	pusher := &fakePusher{events: events}
 	service := roster.NewService(
 		store,
-		fakeViews{view: view},
+		&fakeViews{view: view},
 		&fakeParseSource{version: 1, parse: xrayconfig.RosterParse{Labels: map[string]xrayconfig.User{}, Clients: map[string]xrayconfig.Client{}}},
 		roster.FileRenderer{Path: configPath},
 		pusher,
@@ -302,7 +302,7 @@ func TestRemoveEndToEndOverTheRealStoreAndRenderer(t *testing.T) {
 		t.Fatalf("adoption seed: %v", err)
 	}
 
-	sync, removed, err := service.Remove(ctx, "alice@example.com")
+	sync, removed, err := service.Disable(ctx, "alice@example.com")
 	if err != nil {
 		t.Fatalf("remove: %v", err)
 	}
@@ -346,7 +346,7 @@ func TestRemoveEndToEndOverTheRealStoreAndRenderer(t *testing.T) {
 			alice = user
 		}
 	}
-	if !alice.Gone || alice.UpBytesTotal != 100 || alice.DownBytesTotal != 1_000 || alice.ClientID != nil {
+	if !alice.Disabled || alice.UpBytesTotal != 100 || alice.DownBytesTotal != 1_000 || alice.ClientID != nil {
 		t.Errorf("alice = %+v, want gone with history and no roster fields", alice)
 	}
 
@@ -362,13 +362,13 @@ func TestRemoveEndToEndOverTheRealStoreAndRenderer(t *testing.T) {
 		t.Fatalf("users after parse: %v", err)
 	}
 	for _, user := range list {
-		if user.Email == "alice@example.com" && (!user.Gone || user.ClientID != nil) {
+		if user.Email == "alice@example.com" && (!user.Disabled || user.ClientID != nil) {
 			t.Errorf("after the parse alice = %+v, want still gone", user)
 		}
 	}
 
 	// Idempotent: a second remove is a no-op success.
-	if sync, removedAgain, err := service.Remove(ctx, "alice@example.com"); err != nil || sync != roster.Synced || removedAgain {
+	if sync, removedAgain, err := service.Disable(ctx, "alice@example.com"); err != nil || sync != roster.Synced || removedAgain {
 		t.Errorf("re-remove = %q / %v / %t, want synced, removed nothing", sync, err, removedAgain)
 	}
 }
@@ -410,7 +410,7 @@ func TestConvergeEndToEndOverTheRealStoreAndRenderer(t *testing.T) {
 	changes := make(chan struct{}, 1)
 	service := roster.NewService(
 		store,
-		fakeViews{view: view},
+		&fakeViews{view: view},
 		parses,
 		roster.FileRenderer{Path: configPath},
 		pusher,

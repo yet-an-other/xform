@@ -36,7 +36,7 @@ type pendingDelta struct {
 // deltas stay pending, so durable totals never silently drop bytes.
 //
 // The config roster (WithRoster) syncs in the same transaction when it
-// changes: protocol · security labels, new users, gone flags, and the
+// changes: protocol · security labels, new users, disabled flags, and the
 // adopted VLESS clients (Client ID + attachments) in the roster store. A
 // roster that cannot be persisted stays pending like the deltas, and
 // flushes on its own while xray is unreachable, so config edits never wait
@@ -89,7 +89,7 @@ func (c *Collector) WithClock(now func() time.Time) *Collector {
 }
 
 // WithRoster syncs the user roster from the xray config (SPEC.md §3 step 4)
-// — labels, gone flags, and client adoption — into the poll transaction
+// — labels, disabled flags, and client adoption — into the poll transaction
 // whenever the source's version moves.
 func (c *Collector) WithRoster(roster RosterSource) *Collector {
 	c.roster = roster
@@ -223,7 +223,7 @@ func (c *Collector) Collect(ctx context.Context) (Snapshot, error) {
 
 // sampleRoster picks up the config roster when its version moved. Version 0
 // means the config never parsed — no sync, so a missing or broken config
-// marks nobody gone.
+// marks nobody disabled.
 func (c *Collector) sampleRoster() {
 	if c.roster == nil {
 		return
@@ -239,7 +239,7 @@ func (c *Collector) sampleRoster() {
 
 // flushRoster persists a pending roster on its own — the degraded path,
 // where there is no poll transaction to carry it. Applying a roster is
-// idempotent (upsert + gone flags + additive adoption), so a retry or a
+// idempotent (upsert + disabled flags + additive adoption), so a retry or a
 // racing flush can only write the same state twice.
 func (c *Collector) flushRoster(ctx context.Context) {
 	c.mu.Lock()

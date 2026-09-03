@@ -35,6 +35,7 @@ function stubEndpoints(routes: {
   users?: () => Response;
   addUser?: () => Response;
   details?: (url: string, init?: RequestInit) => Response | Promise<Response>;
+  mutate?: (url: string, init?: RequestInit) => Response | Promise<Response>;
   panel?: () => Response;
   logout?: () => Response;
 }): ReturnType<typeof vi.fn> {
@@ -54,6 +55,10 @@ function stubEndpoints(routes: {
       if (response.ok) latestUsers = await response.clone().json();
       return response;
     }
+    if (url.includes("api/v1/users/") && init?.method && init.method !== "GET") {
+      if (routes.mutate) return routes.mutate(url, init);
+      return json({ error: "unstubbed mutation" }, 500);
+    }
     if (url.includes("api/v1/users/")) {
       if (routes.details) return routes.details(url, init);
       const email = decodeURIComponent(url.slice(url.lastIndexOf("/") + 1));
@@ -64,7 +69,7 @@ function stubEndpoints(routes: {
             stale: latestUsers?.stale,
             user,
             connection_profiles: {
-              state: user.gone ? "gone_user" : "no_matching_inbound",
+              state: user.disabled ? "disabled_user" : "no_matching_inbound",
               loaded_at: latestUsers?.collected_at,
               stale: false,
               errors: [],
@@ -312,7 +317,7 @@ describe("xray runtime stats", () => {
     expect(row).toHaveTextContent("↓ 17.6 MiB/s");
     expect(row).toHaveTextContent("↑ 36.4 GiB");
     expect(row).toHaveTextContent("↓ 476 GiB");
-    expect(row).toHaveTextContent("1 / 2"); // online of roster (gone users excluded)
+    expect(row).toHaveTextContent("1 / 2"); // online of roster (disabled users excluded)
     expect(row).toHaveTextContent("1 unique IPs");
     expect(row).toHaveTextContent("84.0 MiB");
     expect(row).toHaveTextContent("183 goroutines");
@@ -386,7 +391,7 @@ const usersSnapshot = {
       speed_up_bps: 512_000,
       speed_down_bps: 3_800_000,
       last_seen: Math.floor(Date.now() / 1000) - 120,
-      gone: false,
+      disabled: false,
     },
     {
       email: "bob@example.com",
@@ -401,13 +406,13 @@ const usersSnapshot = {
       speed_up_bps: 0,
       speed_down_bps: 0,
       last_seen: null,
-      gone: false,
+      disabled: false,
     },
   ],
 };
 
 describe("users table", () => {
-  it("hides gone users by default and reveals them with the toggle", async () => {
+  it("hides disabled users by default and reveals them with the toggle", async () => {
     stubEndpoints({
       server: () => json(stats),
       xray: () => json(xrayRunning),
@@ -416,7 +421,7 @@ describe("users table", () => {
           ...usersSnapshot,
           users: [
             { ...usersSnapshot.users[0], protocol: "VLESS", security: "XTLS-Reality" },
-            { ...usersSnapshot.users[1], gone: true }, // bob was edited out of the config
+            { ...usersSnapshot.users[1], disabled: true }, // bob was disabled (ADR-0007)
           ],
         }),
     });
@@ -429,18 +434,18 @@ describe("users table", () => {
     expect(aliceRow).toHaveTextContent("VLESS · XTLS-Reality");
     expect(within(table).queryByRole("row", { name: /bob@example\.com/ })).not.toBeInTheDocument();
 
-    // The toggle reveals gone users, marked as gone.
-    fireEvent.click(within(table).getByRole("button", { name: /show gone/i }));
+    // The toggle reveals disabled users, marked as disabled.
+    fireEvent.click(within(table).getByRole("button", { name: /show disabled/i }));
     const bobRow = within(table).getByRole("row", { name: /bob@example\.com/ });
-    expect(bobRow).toHaveTextContent("gone");
+    expect(bobRow).toHaveTextContent("disabled");
     expect(bobRow).toHaveTextContent("2.89 GiB"); // his history is retained
 
     // And hides them again.
-    fireEvent.click(within(table).getByRole("button", { name: /hide gone/i }));
+    fireEvent.click(within(table).getByRole("button", { name: /hide disabled/i }));
     expect(within(table).queryByRole("row", { name: /bob@example\.com/ })).not.toBeInTheDocument();
   });
 
-  it("renders no toggle when nobody is gone", async () => {
+  it("renders no toggle when nobody is disabled", async () => {
     stubEndpoints({
       server: () => json(stats),
       xray: () => json(xrayRunning),
@@ -450,7 +455,7 @@ describe("users table", () => {
     render(<Dashboard onUnauthenticated={() => {}} />);
 
     const table = await screen.findByRole("region", { name: "Users" });
-    expect(within(table).queryByRole("button", { name: /gone/i })).not.toBeInTheDocument();
+    expect(within(table).queryByRole("button", { name: /disabled/i })).not.toBeInTheDocument();
   });
 
   it("renders durable traffic stacked in one Traffic column and current speed per user", async () => {
@@ -490,7 +495,7 @@ describe("users table", () => {
           ...usersSnapshot,
           users: [
             ...usersSnapshot.users,
-            { ...usersSnapshot.users[1], email: "carol@example.com", gone: true },
+            { ...usersSnapshot.users[1], email: "carol@example.com", disabled: true },
           ],
         }),
     });
@@ -498,7 +503,7 @@ describe("users table", () => {
     render(<Dashboard onUnauthenticated={() => {}} />);
 
     const table = await screen.findByRole("region", { name: "Users" });
-    // alice and bob are visible; gone carol is hidden, so only two actions.
+    // alice and bob are visible; disabled carol is hidden, so only two actions.
     expect(
       within(table).getByRole("button", { name: "Open alice@example.com details" }),
     ).toBeInTheDocument();
@@ -509,8 +514,8 @@ describe("users table", () => {
       within(table).queryByRole("button", { name: "Open carol@example.com details" }),
     ).not.toBeInTheDocument();
 
-    // Revealing gone users gives them the action too — every visible User.
-    fireEvent.click(within(table).getByRole("button", { name: /show gone/i }));
+    // Revealing disabled users gives them the action too — every visible User.
+    fireEvent.click(within(table).getByRole("button", { name: /show disabled/i }));
     expect(
       within(table).getByRole("button", { name: "Open carol@example.com details" }),
     ).toBeInTheDocument();
@@ -757,57 +762,64 @@ describe("edit user dialog", () => {
     ).not.toBeInTheDocument();
   });
 
-  it("offers no edit action for gone users", async () => {
+  it("gives every row only details and edit actions — remove lives in the edit dialog", async () => {
     stubEndpoints({
       server: () => json(stats),
       xray: () => json(xrayRunning),
       users: () =>
         json({
           ...usersSnapshot,
-          users: [usersSnapshot.users[0], { ...usersSnapshot.users[1], gone: true }],
+          users: [usersSnapshot.users[0], { ...usersSnapshot.users[1], disabled: true }],
         }),
     });
 
     render(<Dashboard onUnauthenticated={() => {}} />);
 
     const table = await screen.findByRole("region", { name: "Users" });
+    // No row carries a remove action any more (ADR-0007).
     expect(
-      within(table).getByRole("button", { name: "Edit alice@example.com" }),
-    ).toBeInTheDocument();
+      within(table).queryByRole("button", { name: /remove/i }),
+    ).not.toBeInTheDocument();
 
-    // Even revealed, gone bob carries no edit or remove action — only details.
-    fireEvent.click(within(table).getByRole("button", { name: /show gone/i }));
+    // Even revealed, disabled bob carries details + edit — edit offers Re-enable.
+    fireEvent.click(within(table).getByRole("button", { name: /show disabled/i }));
     const bobRow = within(table).getByRole("row", { name: /bob@example\.com/ });
     expect(
-      within(bobRow).queryByRole("button", { name: "Edit bob@example.com" }),
-    ).not.toBeInTheDocument();
-    expect(
-      within(bobRow).queryByRole("button", { name: "Remove bob@example.com" }),
-    ).not.toBeInTheDocument();
+      within(bobRow).getByRole("button", { name: "Edit bob@example.com" }),
+    ).toBeInTheDocument();
     expect(
       within(bobRow).getByRole("button", { name: "Open bob@example.com details" }),
     ).toBeInTheDocument();
   });
 
-  it("opens the remove confirmation from the row's trash action", async () => {
-    stubEndpoints({
+  it("offers Disable user in the edit dialog behind a confirm naming the semantics", async () => {
+    const fetchMock = stubEndpoints({
       server: () => json(stats),
       xray: () => json(xrayRunning),
       users: () => json(usersSnapshot),
+      mutate: () => json({ roster_sync: "synced" }, 200),
     });
 
     render(<Dashboard onUnauthenticated={() => {}} />);
 
     const table = await screen.findByRole("region", { name: "Users" });
-    fireEvent.click(within(table).getByRole("button", { name: "Remove alice@example.com" }));
+    fireEvent.click(within(table).getByRole("button", { name: "Edit alice@example.com" }));
 
-    const dialog = await screen.findByRole("dialog", { name: "Remove alice@example.com" });
-    // The confirm names the documented behavior before asking.
+    const dialog = await screen.findByRole("dialog", { name: "Edit alice@example.com" });
+    // The destructive act lives in the edit view, not the rows (ADR-0007).
+    fireEvent.click(within(dialog).getByRole("button", { name: /disable user/i }));
+
+    // The confirm names what disable means before asking.
+    expect(within(dialog).getByText(/off every inbound immediately/i)).toBeInTheDocument();
     expect(within(dialog).getByText(/not force-killed/i)).toBeInTheDocument();
-    expect(within(dialog).getByRole("button", { name: /remove user/i })).toBeEnabled();
 
-    // Cancel dismisses without a trace.
-    fireEvent.click(within(dialog).getByRole("button", { name: "Cancel" }));
+    // Confirming disables: a live disable answers with the sync state.
+    fireEvent.click(within(dialog).getByRole("button", { name: /disable user/i }));
+    await waitFor(() => {
+      expect(fetchMock.mock.calls.some(([url, init]) =>
+        String(url) === "api/v1/users/alice%40example.com/disable" && init?.method === "POST",
+      )).toBe(true);
+    });
     await waitFor(() => {
       expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
     });
@@ -1107,11 +1119,11 @@ describe("user details dialog", () => {
   });
 
   it.each([
-    ["gone_user", "No connection profiles", "Gone Users keep Traffic and presence history"],
+    ["disabled_user", "No connection profiles", "Disabled Users keep Traffic and presence history"],
     ["no_matching_inbound", "No matching inbound", "not present in a current matching VLESS inbound"],
     ["source_unavailable", "Profile source unavailable", "xray config has never parsed successfully"],
   ])("presents the %s profile state distinctly", async (state, title, message) => {
-    const user = { ...usersSnapshot.users[0], gone: state === "gone_user" };
+    const user = { ...usersSnapshot.users[0], disabled: state === "disabled_user" };
     stubEndpoints({
       server: () => json(stats),
       xray: () => json(xrayRunning),
@@ -1133,7 +1145,7 @@ describe("user details dialog", () => {
 
     render(<Dashboard onUnauthenticated={() => {}} />);
     await screen.findByRole("region", { name: "Users" });
-    if (user.gone) fireEvent.click(screen.getByRole("button", { name: /show gone/i }));
+    if (user.disabled) fireEvent.click(screen.getByRole("button", { name: /show disabled/i }));
     fireEvent.click(openAction("alice@example.com"));
 
     const dialog = await screen.findByRole("dialog", { name: "alice@example.com details" });
@@ -1430,9 +1442,9 @@ describe("user details dialog", () => {
     expect(within(dialog).getByText("↓ 140 GiB")).toBeInTheDocument();
   });
 
-  it("retains observations and removes profiles when a User becomes gone", async () => {
+  it("retains observations and removes profiles when a User becomes disabled", async () => {
     vi.useFakeTimers();
-    let gone = false;
+    let disabled = false;
     const uri = "vless://credential@example.com:443#Primary";
     stubEndpoints({
       server: () => json(stats),
@@ -1440,20 +1452,20 @@ describe("user details dialog", () => {
       users: () =>
         json({
           ...usersSnapshot,
-          users: [{ ...usersSnapshot.users[0], gone }, usersSnapshot.users[1]],
+          users: [{ ...usersSnapshot.users[0], disabled }, usersSnapshot.users[1]],
         }),
       details: () => {
-        const user = { ...usersSnapshot.users[0], gone };
+        const user = { ...usersSnapshot.users[0], disabled };
         return json({
           collected_at: usersSnapshot.collected_at,
           stale: false,
           user,
           connection_profiles: {
-            state: gone ? "gone_user" : "ready",
+            state: disabled ? "disabled_user" : "ready",
             loaded_at: usersSnapshot.collected_at,
             stale: false,
             errors: [],
-            items: gone
+            items: disabled
               ? []
               : [
                   {
@@ -1485,19 +1497,19 @@ describe("user details dialog", () => {
     const dialog = screen.getByRole("dialog", { name: "alice@example.com details" });
     expect(within(dialog).getByText(uri)).toBeInTheDocument();
 
-    gone = true;
+    disabled = true;
     await act(async () => {
       await vi.advanceTimersByTimeAsync(5_000);
     });
 
-    expect(within(dialog).getByText("Gone User")).toBeInTheDocument();
+    expect(within(dialog).getByText("Disabled User")).toBeInTheDocument();
     expect(within(dialog).getByText("historical observations")).toBeInTheDocument();
     expect(within(dialog).getByText("↑ 11.5 GiB")).toBeInTheDocument();
     expect(within(dialog).getByText("No connection profiles")).toBeInTheDocument();
     expect(within(dialog).queryByText(uri)).not.toBeInTheDocument();
   });
 
-  it("marks a gone User as gone and shows historical observations", async () => {
+  it("marks a disabled User as disabled and shows historical observations", async () => {
     stubEndpoints({
       server: () => json(stats),
       xray: () => json(xrayRunning),
@@ -1509,7 +1521,7 @@ describe("user details dialog", () => {
             {
               ...usersSnapshot.users[1],
               email: "carol@example.com",
-              gone: true,
+              disabled: true,
               last_seen: Math.floor(Date.now() / 1000) - 2_820, // 47m ago
             },
           ],
@@ -1519,11 +1531,11 @@ describe("user details dialog", () => {
     render(<Dashboard onUnauthenticated={() => {}} />);
     const table = await screen.findByRole("region", { name: "Users" });
 
-    fireEvent.click(within(table).getByRole("button", { name: /show gone/i }));
+    fireEvent.click(within(table).getByRole("button", { name: /show disabled/i }));
     fireEvent.click(openAction("carol@example.com"));
 
     const dialog = await screen.findByRole("dialog", { name: "carol@example.com details" });
-    expect(within(dialog).getByText("Gone User")).toBeInTheDocument();
+    expect(within(dialog).getByText("Disabled User")).toBeInTheDocument();
     expect(within(dialog).getByText("historical observations")).toBeInTheDocument();
     expect(within(dialog).getByText("47m ago")).toBeInTheDocument();
     expect(within(dialog).getByText("None")).toBeInTheDocument(); // no online IPs

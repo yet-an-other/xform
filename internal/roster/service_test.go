@@ -20,21 +20,21 @@ import (
 // --- fakes over the service's seams ---
 
 type fakeStore struct {
-	mu     sync.Mutex
-	byMail map[string]users.RosterRecord // lower(email) → record
-	byID   map[string]string             // lower(client_id) → email
-	gone   map[string]bool               // lower(email) → removed from the roster
-	// vanishOnList makes the next RosterRecords flag every row gone — a
-	// DELETE racing the caller between the listing and its next read.
+	mu       sync.Mutex
+	byMail   map[string]users.RosterRecord // lower(email) → record
+	byID     map[string]string             // lower(client_id) → email
+	disabled map[string]bool               // lower(email) → off the roster (ADR-0007)
+	// vanishOnList makes the next RosterRecords flag every row disabled —
+	// a Disable racing the caller between the listing and its next read.
 	vanishOnList bool
 	edits        int // writes EditRosterUser actually made
 }
 
 func newFakeStore() *fakeStore {
 	return &fakeStore{
-		byMail: map[string]users.RosterRecord{},
-		byID:   map[string]string{},
-		gone:   map[string]bool{},
+		byMail:   map[string]users.RosterRecord{},
+		byID:     map[string]string{},
+		disabled: map[string]bool{},
 	}
 }
 
@@ -42,10 +42,10 @@ func (f *fakeStore) AddRosterUser(_ context.Context, user users.NewRosterUser, n
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	email := strings.ToLower(user.Email)
-	if _, ok := f.byMail[email]; ok && !f.gone[email] {
+	if _, ok := f.byMail[email]; ok && !f.disabled[email] {
 		return users.RosterRecord{}, users.ErrEmailTaken
 	}
-	if holder, ok := f.byID[strings.ToLower(user.ClientID)]; ok && !(f.gone[email] && strings.EqualFold(holder, user.Email)) {
+	if holder, ok := f.byID[strings.ToLower(user.ClientID)]; ok && !(f.disabled[email] && strings.EqualFold(holder, user.Email)) {
 		return users.RosterRecord{}, users.ErrClientIDTaken
 	}
 	if user.Inbounds == nil {
@@ -61,7 +61,7 @@ func (f *fakeStore) AddRosterUser(_ context.Context, user users.NewRosterUser, n
 	}
 	f.byMail[email] = record
 	f.byID[strings.ToLower(user.ClientID)] = user.Email
-	delete(f.gone, email)
+	delete(f.disabled, email)
 	return record, nil
 }
 
@@ -69,7 +69,7 @@ func (f *fakeStore) RosterRecord(_ context.Context, email string) (users.RosterR
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	email = strings.ToLower(email)
-	if f.gone[email] {
+	if f.disabled[email] {
 		return users.RosterRecord{}, users.ErrRosterNotFound
 	}
 	record, ok := f.byMail[email]
@@ -84,7 +84,7 @@ func (f *fakeStore) RosterRecords(_ context.Context) ([]users.RosterRecord, erro
 	defer f.mu.Unlock()
 	emails := make([]string, 0, len(f.byMail))
 	for email := range f.byMail {
-		if !f.gone[email] {
+		if !f.disabled[email] {
 			emails = append(emails, email)
 		}
 	}
@@ -93,31 +93,58 @@ func (f *fakeStore) RosterRecords(_ context.Context) ([]users.RosterRecord, erro
 	for _, email := range emails {
 		records = append(records, f.byMail[email])
 	}
-	if f.vanishOnList { // a DELETE landing right after the listing
+	if f.vanishOnList { // a Disable landing right after the listing
 		for email := range f.byMail {
-			f.gone[email] = true
+			f.disabled[email] = true
 		}
 	}
 	return records, nil
 }
 
-func (f *fakeStore) RemoveRosterUser(_ context.Context, email string, now time.Time) error {
+func (f *fakeStore) DisableRosterUser(_ context.Context, email string, now time.Time) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	email = strings.ToLower(email)
-	if record, ok := f.byMail[email]; ok && !f.gone[email] {
+	if record, ok := f.byMail[email]; ok && !f.disabled[email] {
 		record.UpdatedAt = now.Unix()
 		f.byMail[email] = record
-		f.gone[email] = true
+		f.disabled[email] = true
 	}
 	return nil
+}
+
+func (f *fakeStore) DisabledRosterRecord(_ context.Context, email string) (users.RosterRecord, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	record, ok := f.byMail[strings.ToLower(email)]
+	if !ok || !f.disabled[strings.ToLower(email)] {
+		return users.RosterRecord{}, users.ErrRosterNotFound
+	}
+	return record, nil
+}
+
+func (f *fakeStore) EnableRosterUser(_ context.Context, email string, now time.Time) (users.RosterRecord, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	email = strings.ToLower(email)
+	record, ok := f.byMail[email]
+	if !ok {
+		return users.RosterRecord{}, users.ErrRosterNotFound
+	}
+	if !f.disabled[email] {
+		return record, nil // already live — idempotent
+	}
+	record.UpdatedAt = now.Unix()
+	f.byMail[email] = record
+	delete(f.disabled, email)
+	return record, nil
 }
 
 func (f *fakeStore) EditRosterUser(_ context.Context, email string, edit users.RosterEdit, now time.Time) (users.RosterRecord, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	key := strings.ToLower(email)
-	if f.gone[key] {
+	if f.disabled[key] {
 		return users.RosterRecord{}, users.ErrRosterNotFound
 	}
 	before, ok := f.byMail[key]
@@ -147,9 +174,24 @@ func (f *fakeStore) EditRosterUser(_ context.Context, email string, edit users.R
 	return after, nil
 }
 
-type fakeViews struct{ view xrayconfig.View }
+type fakeViews struct {
+	mu   sync.Mutex
+	view xrayconfig.View
+}
 
-func (f fakeViews) View() xrayconfig.View { return f.view }
+func (f *fakeViews) View() xrayconfig.View {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.view
+}
+
+// set replaces the current view — a config change landing between two
+// mutations (the vanished-inbound tests).
+func (f *fakeViews) set(view xrayconfig.View) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.view = view
+}
 
 type fakeRenderer struct {
 	mu     sync.Mutex
@@ -617,14 +659,14 @@ func (h *harness) edit(t *testing.T, email string, req roster.EditRequest) roste
 	return result
 }
 
-func (h *harness) remove(t *testing.T, email string) roster.SyncState {
+func (h *harness) disable(t *testing.T, email string) roster.SyncState {
 	t.Helper()
-	sync, removed, err := h.service.Remove(context.Background(), email)
+	sync, disabled, err := h.service.Disable(context.Background(), email)
 	if err != nil {
-		t.Fatalf("remove %s: %v", email, err)
+		t.Fatalf("disable %s: %v", email, err)
 	}
-	if !removed {
-		t.Fatalf("remove %s: removed = false, want a live removal", email)
+	if !disabled {
+		t.Fatalf("disable %s: disabled = false, want a live disable", email)
 	}
 	return sync
 }
@@ -739,7 +781,7 @@ func TestEditIsIdempotent(t *testing.T) {
 }
 
 // Detaching every inbound keeps the user in the roster — profile-less, not
-// gone (CONTEXT.md) — and takes them off the one inbound they had.
+// disabled (CONTEXT.md) — and takes them off the one inbound they had.
 func TestEditCanDetachEveryInbound(t *testing.T) {
 	h := newHarness(t)
 	h.add(t, "alice@example.com", "1d37a118-4f1b-4dc0-9e3c-3426b07518df", []string{"vless-vision"})
@@ -948,21 +990,21 @@ func TestEditKeptSelectionPrunesVanishedInbounds(t *testing.T) {
 	}
 }
 
-// --- the remove slices (issue #55) ---
+// --- the disable and enable slices (issues #55, #58, ADR-0007) ---
 
 // The remove acceptance path (user-management spec §4): stored first, then
 // rendered out of every attached inbound's clients array and pushed off the
 // running xray — file before live, per inbound, idempotent on retry.
-func TestRemoveDetachesEverywhere(t *testing.T) {
+func TestDisableDetachesEverywhere(t *testing.T) {
 	h := newHarness(t)
 	h.add(t, "alice@example.com", "1d37a118-4f1b-4dc0-9e3c-3426b07518df", []string{"vless-vision", "vless-ws"})
 
-	sync, removed, err := h.service.Remove(context.Background(), "alice@example.com")
+	sync, disabled, err := h.service.Disable(context.Background(), "alice@example.com")
 	if err != nil {
-		t.Fatalf("remove: %v", err)
+		t.Fatalf("disable: %v", err)
 	}
-	if !removed {
-		t.Fatal("removed = false, want a live removal")
+	if !disabled {
+		t.Fatal("disabled = false, want a live disable")
 	}
 	if sync != roster.Synced {
 		t.Fatalf("sync = %q, want synced once the apply settled", sync)
@@ -985,39 +1027,146 @@ func TestRemoveDetachesEverywhere(t *testing.T) {
 		t.Errorf("user states = %v, want clean", states)
 	}
 	if _, err := h.store.RosterRecord(context.Background(), "alice@example.com"); !errors.Is(err, users.ErrRosterNotFound) {
-		t.Errorf("record after remove = %v, want gone from the roster", err)
+		t.Errorf("record after disable = %v, want her out of the roster", err)
 	}
 }
 
-// DELETE is idempotent (spec §5): removing an already-removed (or unknown)
-// email is a plain success with nothing to apply.
-func TestRemoveIsIdempotent(t *testing.T) {
+// Enable re-applies the stored attachments like any roster change (§4,
+// ADR-0007): the file gains the entries again and the running xray is
+// pushed the stored credential on every attached inbound.
+func TestEnableReappliesStoredAttachments(t *testing.T) {
 	h := newHarness(t)
-	h.add(t, "alice@example.com", "1d37a118-4f1b-4dc0-9e3c-3426b07518df", nil)
-	h.remove(t, "alice@example.com")
-	renders := len(h.renderer.plans)
-	removes := len(h.pusher.removed)
+	h.add(t, "alice@example.com", "1d37a118-4f1b-4dc0-9e3c-3426b07518df", []string{"vless-vision"})
+	h.disable(t, "alice@example.com")
+	adds := len(h.pusher.pushed)
 
-	if sync, removed, err := h.service.Remove(context.Background(), "Alice@Example.com"); err != nil || sync != roster.Synced || removed {
-		t.Errorf("re-remove = %q / %v / %t, want synced, removed nothing", sync, err, removed)
+	result, err := h.service.Enable(context.Background(), "alice@example.com")
+	if err != nil {
+		t.Fatalf("enable: %v", err)
 	}
-	if sync, removed, err := h.service.Remove(context.Background(), "never-was@example.com"); err != nil || sync != roster.Synced || removed {
-		t.Errorf("unknown remove = %q / %v / %t, want synced, removed nothing", sync, err, removed)
+	if result.Sync != roster.Synced {
+		t.Fatalf("sync = %q, want synced once the apply settled", result.Sync)
 	}
-	if len(h.renderer.plans) != renders || len(h.pusher.removed) != removes {
-		t.Error("an idempotent remove renders and pushes nothing")
+	if result.User.Email != "alice@example.com" || result.User.ClientID != "1d37a118-4f1b-4dc0-9e3c-3426b07518df" {
+		t.Errorf("record = %+v, want alice's stored credential", result.User)
+	}
+	if len(h.pusher.pushed) <= adds {
+		t.Fatalf("live adds = %+v, want the stored credential pushed again", h.pusher.pushed)
+	}
+	latest := h.pusher.lastAdd()
+	if latest.Email != "alice@example.com" || latest.ID != "1d37a118-4f1b-4dc0-9e3c-3426b07518df" {
+		t.Errorf("latest push = %+v, want alice's stored credential", latest)
+	}
+	plan := h.renderer.lastPlan()
+	if got := plan.Adds["vless-vision"]; len(got) != 1 || got[0].ID != "1d37a118-4f1b-4dc0-9e3c-3426b07518df" {
+		t.Errorf("file adds = %+v, want alice's stored credential", got)
+	}
+	if states := h.service.UserStates(); len(states) != 0 {
+		t.Errorf("user states = %v, want clean", states)
+	}
+	record, err := h.store.RosterRecord(context.Background(), "alice@example.com")
+	if err != nil || len(record.Inbounds) != 1 {
+		t.Errorf("record after enable = %+v, err %v", record, err)
 	}
 }
 
-// xray down at remove time: the removal is stored, the answer is failed,
+// Enable prunes attachments to inbounds the config no longer carries — a
+// push to a dead tag would only answer "failed to get handler" — and
+// enables the rest.
+func TestEnablePrunesVanishedInbounds(t *testing.T) {
+	h := newHarness(t)
+	h.add(t, "alice@example.com", "1d37a118-4f1b-4dc0-9e3c-3426b07518df", []string{"vless-vision", "vless-ws"})
+	h.disable(t, "alice@example.com")
+
+	// The ws inbound leaves the config while alice is disabled.
+	h.views.view, _ = xrayconfig.ParseView([]byte(`{
+  "inbounds": [
+    {"tag": "vless-vision", "protocol": "vless", "port": 443,
+     "settings": {"clients": [{"email": "existing@example.com", "id": "uuid-existing", "flow": "xtls-rprx-vision"}]}},
+    {"tag": "trojan", "protocol": "trojan", "settings": {"clients": []}}
+  ]
+}`))
+
+	result, err := h.service.Enable(context.Background(), "alice@example.com")
+	if err != nil {
+		t.Fatalf("enable: %v", err)
+	}
+	if !slices.Equal(result.User.Inbounds, []string{"vless-vision"}) {
+		t.Errorf("record inbounds = %v, want vision only", result.User.Inbounds)
+	}
+	record, err := h.store.RosterRecord(context.Background(), "alice@example.com")
+	if err != nil || !slices.Equal(record.Inbounds, []string{"vless-vision"}) {
+		t.Errorf("stored record = %+v, err %v, want the pruned set", record, err)
+	}
+	latest := h.pusher.lastAdd()
+	if latest.Email != "alice@example.com" || latest.ID != "1d37a118-4f1b-4dc0-9e3c-3426b07518df" {
+		t.Errorf("latest push = %+v, want alice pushed onto vision only", latest)
+	}
+	if len(h.pusher.tags) == 0 || h.pusher.tags[len(h.pusher.tags)-1] != "vless-vision" {
+		t.Errorf("push tags = %v, want the last onto vless-vision", h.pusher.tags)
+	}
+}
+
+// Enable is idempotent: a live user enables as a plain success with
+// nothing to apply; an unknown email is a not-found.
+func TestEnableIsIdempotentAndUnknownEmailIsNotFound(t *testing.T) {
+	h := newHarness(t)
+	h.add(t, "alice@example.com", "1d37a118-4f1b-4dc0-9e3c-3426b07518df", []string{"vless-vision"})
+	renders := len(h.renderer.plans)
+	adds := len(h.pusher.pushed)
+
+	if _, err := h.service.Enable(context.Background(), "Alice@Example.com"); err != nil {
+		t.Errorf("enable a live user: %v, want an idempotent success", err)
+	}
+	if len(h.renderer.plans) != renders || len(h.pusher.pushed) != adds {
+		t.Error("an idempotent enable renders and pushes nothing")
+	}
+
+	_, err := h.service.Enable(context.Background(), "never-was@example.com")
+	var missing *roster.NotFoundError
+	if !errors.As(err, &missing) {
+		t.Errorf("enable a stranger = %v, want a NotFoundError", err)
+	}
+}
+
+// xray down at enable time: the revival is stored, the answer is failed,
+// and the usual retry machine converges it (§7).
+func TestEnableFailureSurfacesAndRetriesOnWatchFire(t *testing.T) {
+	h := newHarness(t)
+	h.status.set("stopped")
+	h.add(t, "alice@example.com", "1d37a118-4f1b-4dc0-9e3c-3426b07518df", []string{"vless-vision"})
+	h.disable(t, "alice@example.com")
+
+	h.pusher.addErr = errors.New("connect: connection refused")
+	h.service.WithSettleWait(50 * time.Millisecond)
+	result, err := h.service.Enable(context.Background(), "alice@example.com")
+	if err != nil {
+		t.Fatalf("enable: %v", err)
+	}
+	if result.Sync != roster.Failed {
+		t.Fatalf("sync = %q, want failed — stored, but the push did not land", result.Sync)
+	}
+
+	h.pusher.addErr = nil
+	h.changes <- struct{}{}
+	eventually(t, "synced after the retry", func() bool {
+		return h.service.Sync() == roster.Synced
+	})
+	record, err := h.store.RosterRecord(context.Background(), "alice@example.com")
+	if err != nil || len(record.Inbounds) != 1 {
+		t.Errorf("record after the retry = %+v, err %v", record, err)
+	}
+}
+
+// xray down at disable time: the disable is stored, the answer is failed,
 // the row carries the failed mark, and a config-watch fire retries (§7).
-func TestRemoveFailureSurfacesAndRetriesOnWatchFire(t *testing.T) {
+func TestDisableFailureSurfacesAndRetriesOnWatchFire(t *testing.T) {
 	h := newHarness(t)
 	h.status.set("stopped")
 	h.add(t, "alice@example.com", "1d37a118-4f1b-4dc0-9e3c-3426b07518df", []string{"vless-vision"})
 
 	h.pusher.removeErr = errors.New("connect: connection refused")
-	sync := h.remove(t, "alice@example.com")
+	sync := h.disable(t, "alice@example.com")
 	if sync != roster.Failed {
 		t.Fatalf("sync = %q, want failed — stored, but the push did not land", sync)
 	}
@@ -1050,7 +1199,7 @@ func TestRemoveWhilePendingDetachesEveryTouchedTag(t *testing.T) {
 		t.Fatalf("edit: %v", err)
 	}
 
-	h.remove(t, "alice@example.com")
+	h.disable(t, "alice@example.com")
 	close(h.renderer.block)
 	eventually(t, "synced after the merged removal", func() bool {
 		return h.service.Sync() == roster.Synced
@@ -1196,7 +1345,7 @@ func TestConvergeSkipsPendingGoneAndForeign(t *testing.T) {
 	})
 
 	// A gone user in the parse is nobody's business: still gone, no ops.
-	h.remove(t, "alice@example.com")
+	h.disable(t, "alice@example.com")
 	h.renderer.mu.Lock()
 	renders = len(h.renderer.plans)
 	h.renderer.mu.Unlock()

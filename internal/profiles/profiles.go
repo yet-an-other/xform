@@ -25,7 +25,7 @@ type State string
 
 const (
 	StateReady             State = "ready"
-	StateGoneUser          State = "gone_user"
+	StateDisabledUser      State = "disabled_user"
 	StateNoMatchingInbound State = "no_matching_inbound"
 	StateSourceUnavailable State = "source_unavailable"
 )
@@ -181,10 +181,10 @@ type Unavailable struct {
 }
 
 // Evaluate returns one result per matching VLESS inbound in xray config order.
-func Evaluate(email string, gone bool, sources Sources) Collection {
+func Evaluate(email string, disabled bool, sources Sources) Collection {
 	collection := sourceState(sources)
-	if gone {
-		collection.State = StateGoneUser
+	if disabled {
+		collection.State = StateDisabledUser
 		collection.Items = []Item{}
 		return collection
 	}

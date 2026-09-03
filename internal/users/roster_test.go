@@ -2,6 +2,7 @@ package users_test
 
 import (
 	"context"
+	"database/sql"
 	"slices"
 	"testing"
 	"time"
@@ -26,6 +27,13 @@ func byEmail(list []users.User) map[string]users.User {
 		byEmail[user.Email] = user
 	}
 	return byEmail
+}
+
+// openRawDB opens a store database directly — the schema-migration tests
+// reshape columns the way an older database has them. The sqlite driver is
+// registered by the users package import.
+func openRawDB(path string) (*sql.DB, error) {
+	return sql.Open("sqlite", "file:"+path+"?_pragma=busy_timeout(5000)")
 }
 
 // The roster sync (SPEC.md §3 step 4, §4): config-defined users gain rows
@@ -73,8 +81,8 @@ func TestStoreSyncsRosterWithTheConfig(t *testing.T) {
 	if alice.LastSeen == nil || *alice.LastSeen != now.Unix() {
 		t.Errorf("alice last_seen = %v, want the traffic poll's %d", alice.LastSeen, now.Unix())
 	}
-	if alice.Gone {
-		t.Error("alice gone = true, want false — she is in the config")
+	if alice.Disabled {
+		t.Error("alice disabled = true, want false — she is in the config")
 	}
 
 	// bob appears automatically, with zero totals, before his first byte.
@@ -85,14 +93,14 @@ func TestStoreSyncsRosterWithTheConfig(t *testing.T) {
 	if bob.UpBytesTotal != 0 || bob.DownBytesTotal != 0 || bob.LastSeen != nil {
 		t.Errorf("bob = %+v, want zero totals and never seen", bob)
 	}
-	if bob.Gone {
-		t.Error("bob gone = true, want false")
+	if bob.Disabled {
+		t.Error("bob disabled = true, want false")
 	}
 
 	// erin is gone: retained, history intact, marked.
 	erin := got["erin@example.com"]
-	if !erin.Gone {
-		t.Error("erin gone = false, want true — she was edited out of the config")
+	if !erin.Disabled {
+		t.Error("erin disabled = false, want true — she was edited out of the config")
 	}
 	if erin.UpBytesTotal != 50 || erin.DownBytesTotal != 500 || erin.LastSeen == nil {
 		t.Errorf("erin = %+v, want her history retained", erin)
@@ -116,8 +124,8 @@ func TestStoreRosterSyncRestoresReturningUsers(t *testing.T) {
 	}
 
 	got := byEmail(mustUsers(t, store))
-	if !got["alice@example.com"].Gone {
-		t.Fatal("alice gone = false, want true after the config dropped everyone")
+	if !got["alice@example.com"].Disabled {
+		t.Fatal("alice disabled = false, want true after the config dropped everyone")
 	}
 
 	if err := store.ApplyPoll(ctx, nil, nil, &users.RosterParse{Labels: map[string]xrayconfig.User{
@@ -126,8 +134,8 @@ func TestStoreRosterSyncRestoresReturningUsers(t *testing.T) {
 		t.Fatalf("apply restored roster: %v", err)
 	}
 	alice := byEmail(mustUsers(t, store))["alice@example.com"]
-	if alice.Gone {
-		t.Error("alice gone = true, want false after returning to the config")
+	if alice.Disabled {
+		t.Error("alice disabled = true, want false after returning to the config")
 	}
 	if alice.Security == nil || *alice.Security != "XTLS-Reality" {
 		t.Errorf("alice security = %v, want the edited XTLS-Reality", alice.Security)

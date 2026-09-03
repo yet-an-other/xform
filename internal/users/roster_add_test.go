@@ -42,7 +42,7 @@ func TestAddRosterUserStoresTheRecordAndShowsTheRow(t *testing.T) {
 		t.Fatalf("users: %v", err)
 	}
 	alice := byEmail(list)["alice@example.com"]
-	if alice.Gone {
+	if alice.Disabled {
 		t.Error("a just-added user must not read gone")
 	}
 	if alice.ClientID == nil || *alice.ClientID != "uuid-alice" {
@@ -88,7 +88,7 @@ func TestAddRosterUserRejoinsAGoneUsersHistory(t *testing.T) {
 		t.Fatalf("users = %d, want exactly one row — rejoining, not duplicating", len(list))
 	}
 	alice := list[0]
-	if alice.Gone || alice.UpBytesTotal != 100 || alice.DownBytesTotal != 1_000 {
+	if alice.Disabled || alice.UpBytesTotal != 100 || alice.DownBytesTotal != 1_000 {
 		t.Errorf("alice = %+v, want not-gone with her history intact", alice)
 	}
 	if alice.LastSeen == nil {

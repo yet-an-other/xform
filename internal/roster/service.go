@@ -93,9 +93,11 @@ type InboundOption struct {
 type Store interface {
 	AddRosterUser(ctx context.Context, user users.NewRosterUser, now time.Time) (users.RosterRecord, error)
 	RosterRecord(ctx context.Context, email string) (users.RosterRecord, error)
+	DisabledRosterRecord(ctx context.Context, email string) (users.RosterRecord, error)
 	RosterRecords(ctx context.Context) ([]users.RosterRecord, error)
 	EditRosterUser(ctx context.Context, email string, edit users.RosterEdit, now time.Time) (users.RosterRecord, error)
-	RemoveRosterUser(ctx context.Context, email string, now time.Time) error
+	DisableRosterUser(ctx context.Context, email string, now time.Time) error
+	EnableRosterUser(ctx context.Context, email string, now time.Time) (users.RosterRecord, error)
 }
 
 // ViewSource supplies the current parsed inbound view — the seam over the
@@ -381,21 +383,22 @@ func (s *Service) Edit(ctx context.Context, email string, req EditRequest) (Muta
 	return s.queueOps(after, ops), nil
 }
 
-// Remove stores one user's removal from the Roster — the row is flagged
-// gone, history kept (user-management spec §3–§4) — then applies it live:
-// rendered out of every inbound that might still carry them (including an
-// unfinished change's tags) and pushed off the running xray. Established
-// connections close naturally; xray has no disconnect op. Idempotent: an
-// already-removed or unknown email is a plain success that removed nothing.
-// The mutation succeeds once stored: a failed apply answers failed.
-func (s *Service) Remove(ctx context.Context, email string) (sync SyncState, removed bool, err error) {
+// Disable takes one user off the Roster (user-management spec §3–§4,
+// ADR-0007, CONTEXT.md Disabled user) — the row is flagged disabled,
+// history kept — then applies it live: rendered out of every inbound that
+// might still carry them (including an unfinished change's tags) and
+// pushed off the running xray. Established connections close naturally;
+// xray has no disconnect op. Idempotent: an already-disabled or unknown
+// email is a plain success that disabled nothing. The mutation succeeds
+// once stored: a failed apply answers failed.
+func (s *Service) Disable(ctx context.Context, email string) (sync SyncState, disabled bool, err error) {
 	email = strings.TrimSpace(email)
 	if email == "" {
 		return s.Sync(), false, nil
 	}
 	before, err := s.store.RosterRecord(ctx, email)
 	if errors.Is(err, users.ErrRosterNotFound) {
-		return s.Sync(), false, nil // gone already — idempotent success
+		return s.Sync(), false, nil // disabled already — idempotent success
 	}
 	if err != nil {
 		return "", false, err
@@ -412,7 +415,7 @@ func (s *Service) Remove(ctx context.Context, email string) (sync SyncState, rem
 		}
 	}
 
-	if err := s.store.RemoveRosterUser(ctx, email, s.now()); err != nil {
+	if err := s.store.DisableRosterUser(ctx, email, s.now()); err != nil {
 		return "", false, err
 	}
 
@@ -424,6 +427,61 @@ func (s *Service) Remove(ctx context.Context, email string) (sync SyncState, rem
 		ops = append(ops, pushOp{kind: opDetach, tag: tag})
 	}
 	return s.queueOps(before, ops).Sync, true, nil
+}
+
+// Enable revives one disabled user (ADR-0007): the store sheds the
+// disabled flag — credential, attachments, and history kept — and the
+// stored attachments re-apply like any roster change: rendered into the
+// config file and pushed to the running xray. Attachments to inbounds the
+// config no longer carries are pruned (a vanished inbound is gone from
+// xray too). Idempotent: enabling a live user is a plain success. The
+// mutation succeeds once stored: a failed apply answers failed.
+func (s *Service) Enable(ctx context.Context, email string) (MutationResult, error) {
+	email = strings.TrimSpace(email)
+	if email == "" {
+		return MutationResult{}, &NotFoundError{Email: email}
+	}
+	if live, err := s.store.RosterRecord(ctx, email); err == nil {
+		return MutationResult{User: live, Sync: s.Sync()}, nil // already live — idempotent
+	} else if !errors.Is(err, users.ErrRosterNotFound) {
+		return MutationResult{}, err
+	}
+	record, err := s.store.EnableRosterUser(ctx, email, s.now())
+	if errors.Is(err, users.ErrRosterNotFound) {
+		return MutationResult{}, &NotFoundError{Email: email}
+	}
+	if err != nil {
+		return MutationResult{}, err
+	}
+
+	// Keep only attachments the current inbound view still carries — the
+	// store's set may name inbounds the config dropped while disabled, and
+	// a push to a dead tag would only answer "failed to get handler".
+	// Convergence prunes too; pruning here keeps the enabled record true
+	// in the same mutation.
+	view := s.views.View()
+	kept := make([]string, 0, len(record.Inbounds))
+	finalOps := make([]pushOp, 0, len(record.Inbounds))
+	for _, tag := range record.Inbounds {
+		if inbound, ok := findManaged(view, tag); ok {
+			kept = append(kept, tag)
+			finalOps = append(finalOps, pushOp{kind: opAttach, tag: tag, flow: xrayconfig.DefaultFlow(inbound)})
+		}
+	}
+	if len(kept) < len(record.Inbounds) {
+		record, err = s.store.EditRosterUser(ctx, record.Email, users.RosterEdit{
+			Inbounds: kept,
+			Protocol: labelProtocol(view, finalOps), Security: labelSecurity(view, finalOps),
+		}, s.now())
+		if err != nil {
+			return MutationResult{}, err
+		}
+	}
+
+	if len(finalOps) == 0 {
+		return MutationResult{User: record, Sync: s.Sync()}, nil // profile-less: nothing to apply
+	}
+	return s.queueOps(record, finalOps), nil
 }
 
 // takePending removes and returns the email's unapplied change, if any —
@@ -472,7 +530,7 @@ func diffOps(before, after users.RosterRecord, flows map[string]string, prev pen
 	}
 	for _, op := range prev.ops {
 		// An unfinished detach is still owed (§7: re-saving retries): a
-		// remove of an already-gone user reads as applied, so re-queuing it
+		// remove of an already-absent user reads as applied, so re-queuing it
 		// converges whether or not the earlier attempt landed.
 		if op.kind == opDetach && !kept[op.tag] {
 			ops = append(ops, pushOp{kind: opDetach, tag: op.tag})
@@ -506,8 +564,8 @@ func (s *Service) queueOps(record users.RosterRecord, ops []pushOp) MutationResu
 }
 
 // enqueueIfLive is convergence's enqueue: the roster is re-checked under
-// the pending lock, so a DELETE that landed between the listing and here
-// wins — a removed user never comes back with working credentials.
+// the pending lock, so a Disable that landed between the listing and here
+// wins — a disabled user never comes back with working credentials.
 func (s *Service) enqueueIfLive(ctx context.Context, record users.RosterRecord, ops []pushOp) {
 	s.mu.Lock()
 	if _, err := s.store.RosterRecord(ctx, record.Email); errors.Is(err, users.ErrRosterNotFound) {
@@ -641,7 +699,7 @@ func (s *Service) retry(ctx context.Context) {
 // clients never deletes; an inbound the file lost has its attachments
 // pruned from the store (the inbound is gone from xray too), users left
 // with none staying profile-less. Extra config clients are adoption's
-// business and gone users stay gone; users with an unapplied change of
+// business and disabled users stay disabled; users with an unapplied change of
 // their own are left to it — the file catching up settles them.
 func (s *Service) converge(ctx context.Context) {
 	parse, version := s.parses.Roster()
@@ -688,7 +746,7 @@ func (s *Service) converge(ctx context.Context) {
 				Security: labelSecurity(view, attachOps),
 			}, s.now())
 			if errors.Is(err, users.ErrRosterNotFound) {
-				continue // removed while we worked
+				continue // disabled while we worked
 			}
 			if err != nil {
 				s.logFailure("cannot prune drifted attachments; the pass retries on the next watch fire", err)

@@ -64,17 +64,17 @@ func TestEvaluateKeepsUserLevelStatesDistinct(t *testing.T) {
 	tests := []struct {
 		name      string
 		email     string
-		gone      bool
+		disabled  bool
 		available bool
 		want      profiles.State
 	}{
-		{name: "gone User", email: fixtureEmail, gone: true, available: true, want: profiles.StateGoneUser},
+		{name: "disabled User", email: fixtureEmail, disabled: true, available: true, want: profiles.StateDisabledUser},
 		{name: "no matching inbound", email: "nobody@example.com", available: true, want: profiles.StateNoMatchingInbound},
 		{name: "parsed xray source unavailable", email: fixtureEmail, available: false, want: profiles.StateSourceUnavailable},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			got := profiles.Evaluate(test.email, test.gone, profiles.Sources{XrayView: availableXray, XrayAvailable: test.available})
+			got := profiles.Evaluate(test.email, test.disabled, profiles.Sources{XrayView: availableXray, XrayAvailable: test.available})
 			if got.State != test.want || len(got.Items) != 0 {
 				t.Errorf("collection = %+v, want state %q with no items", got, test.want)
 			}

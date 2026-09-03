@@ -70,12 +70,12 @@ export function fetchXrayStatus(signal?: AbortSignal): Promise<XrayStatus> {
 
 // User is one row of the users table (SPEC §5). Presence fields (online,
 // ips, last_seen) are live from the online RPCs — omitted on servers
-// predating them; config fields (protocol, security, gone) come from the
-// config roster sync and stay zero until the xray config parses. Client ID
-// and inbounds are the roster store's adopted record — null until adoption.
-// apply_state is the write-side mark (user-management spec §6): pending
-// while a change applies, failed when the last apply failed; absent once
-// applied.
+// predating them; config fields (protocol, security, disabled) come from
+// the config roster sync and stay zero until the xray config parses. Client
+// ID and inbounds are the roster store's adopted record — null until
+// adoption. apply_state is the write-side mark (user-management spec §6):
+// pending while a change applies, failed when the last apply failed; absent
+// once applied.
 export interface User {
   email: string;
   protocol: string | null;
@@ -93,7 +93,7 @@ export interface User {
   speed_up_bps: number;
   speed_down_bps: number;
   last_seen: number | null;
-  gone: boolean;
+  disabled: boolean; // off the Roster (ADR-0007); history kept
 }
 
 // RosterSync is the write-side state of the roster (CONTEXT.md): synced when
@@ -166,7 +166,7 @@ export class UserNotFoundError extends Error {
 
 // mutation fetches one mutation verb and maps the panel's answers onto the
 // dialog-facing errors: 401 expires the session, 409 carries the conflict
-// reason, 404 is a gone record, anything else is unreachable.
+// reason, 404 is a missing record, anything else is unreachable.
 async function mutate(method: string, path: string, body: unknown): Promise<MutationResult> {
   const response = await fetch(path, {
     method,
@@ -220,13 +220,13 @@ export function editUser(
   return mutate("PATCH", `api/v1/users/${encodeURIComponent(email)}`, body);
 }
 
-// removeUser removes one roster user (user-management spec §5): a live
-// removal answers 200 with the Roster sync state, an already-gone one a
-// bare 204 — idempotent either way. Resolves with the Roster sync state so
-// the confirm dialog can tell applied from still-retrying.
-export async function removeUser(email: string): Promise<RosterSync> {
-  const response = await fetch(`api/v1/users/${encodeURIComponent(email)}`, {
-    method: "DELETE",
+// disableUser takes one roster user off the Roster (user-management spec
+// §5, ADR-0007): a live disable answers 200 with the Roster sync state, an
+// already-disabled one a bare 204 — idempotent either way. Resolves with
+// the Roster sync state so the dialog can tell applied from still-retrying.
+export async function disableUser(email: string): Promise<RosterSync> {
+  const response = await fetch(`api/v1/users/${encodeURIComponent(email)}/disable`, {
+    method: "POST",
     headers: { Accept: "application/json" },
   });
   if (response.status === 401) {
@@ -239,9 +239,16 @@ export async function removeUser(email: string): Promise<RosterSync> {
   return body?.roster_sync ?? "synced";
 }
 
+// enableUser revives one disabled user in place (ADR-0007): the stored
+// credential and attachments re-apply like any roster change. Answers with
+// the revived record plus the Roster sync state.
+export function enableUser(email: string): Promise<MutationResult> {
+  return mutate("POST", `api/v1/users/${encodeURIComponent(email)}/enable`, {});
+}
+
 export type ConnectionProfileState =
   | "ready"
-  | "gone_user"
+  | "disabled_user"
   | "no_matching_inbound"
   | "source_unavailable";
 

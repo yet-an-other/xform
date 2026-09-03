@@ -84,10 +84,10 @@ export function ConnectionProfiles({
             No matching profile result was returned for this User.
           </ProfileState>
         )
-      ) : profiles.state === "gone_user" ? (
+      ) : profiles.state === "disabled_user" ? (
         <ProfileState title="No connection profiles">
-          Gone Users keep Traffic and presence history, but xform no longer has current credentials
-          to expose.
+          Disabled Users keep Traffic and presence history, but xform no longer has current
+          credentials to expose.
         </ProfileState>
       ) : profiles.state === "no_matching_inbound" ? (
         <ProfileState title="No matching inbound">

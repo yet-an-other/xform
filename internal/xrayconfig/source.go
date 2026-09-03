@@ -33,7 +33,7 @@ type Snapshot = filesource.Snapshot[Parsed]
 // Version bumps only when the Roster actually changes — a label, a Client
 // ID, or an attachment — so a profile-only config edit does not re-sync
 // every user. 0 means no config has ever parsed successfully — a missing or
-// broken config must not mark anybody gone.
+// broken config must not mark anybody disabled.
 type Parsed struct {
 	// Roster is shared with every caller; none of them may mutate it.
 	Roster  RosterParse

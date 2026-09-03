@@ -57,18 +57,18 @@ func TestCollectorSyncsTheConfigRoster(t *testing.T) {
 	if alice.Protocol == nil || *alice.Protocol != "VLESS" || alice.Security == nil || *alice.Security != "XTLS-Reality" {
 		t.Errorf("alice labels = %v / %v, want VLESS / XTLS-Reality", alice.Protocol, alice.Security)
 	}
-	if alice.Gone {
-		t.Error("alice gone = true, want false — she is in the config")
+	if alice.Disabled {
+		t.Error("alice disabled = true, want false — she is in the config")
 	}
 
 	// bob appears automatically, before any traffic.
-	if bob := got["bob@example.com"]; bob.UpBytesTotal != 0 || bob.Gone {
+	if bob := got["bob@example.com"]; bob.UpBytesTotal != 0 || bob.Disabled {
 		t.Errorf("bob = %+v, want zero totals, not gone", bob)
 	}
 
 	// erin still has counters in xray but is gone from the config.
-	if erin := got["erin@example.com"]; !erin.Gone {
-		t.Error("erin gone = false, want true — the config no longer names her")
+	if erin := got["erin@example.com"]; !erin.Disabled {
+		t.Error("erin disabled = false, want true — the config no longer names her")
 	}
 
 	// A config edit is picked up on the next poll: erin returns, alice's
@@ -85,11 +85,11 @@ func TestCollectorSyncsTheConfigRoster(t *testing.T) {
 	if alice := got["alice@example.com"]; alice.Security == nil || *alice.Security != "Reality" {
 		t.Errorf("alice security = %v, want the edited Reality", alice.Security)
 	}
-	if erin := got["erin@example.com"]; erin.Gone {
-		t.Error("erin gone = true after returning to the config, want false")
+	if erin := got["erin@example.com"]; erin.Disabled {
+		t.Error("erin disabled = true after returning to the config, want false")
 	}
-	if bob := got["bob@example.com"]; !bob.Gone {
-		t.Error("bob gone = false after the config dropped him, want true — his row is retained")
+	if bob := got["bob@example.com"]; !bob.Disabled {
+		t.Error("bob disabled = false after the config dropped him, want true — his row is retained")
 	}
 }
 
@@ -109,8 +109,8 @@ func TestCollectorIgnoresANeverParsedConfig(t *testing.T) {
 		t.Fatalf("collect: %v", err)
 	}
 	alice := snapshot.Users[0]
-	if alice.Gone {
-		t.Error("alice gone = true, want false — a never-parsed config marks nobody gone")
+	if alice.Disabled {
+		t.Error("alice disabled = true, want false — a never-parsed config marks nobody gone")
 	}
 	if alice.Protocol != nil || alice.Security != nil {
 		t.Errorf("alice labels = %v / %v, want null", alice.Protocol, alice.Security)
@@ -175,8 +175,8 @@ func TestCollectorFlushesRosterWhileStale(t *testing.T) {
 	if !snapshot.Stale {
 		t.Error("stale = false, want true when the traffic poll fails")
 	}
-	if alice := snapshot.Users[0]; !alice.Gone {
-		t.Error("alice gone = false, want true — the config edit landed without waiting for xray")
+	if alice := snapshot.Users[0]; !alice.Disabled {
+		t.Error("alice disabled = false, want true — the config edit landed without waiting for xray")
 	}
 
 	// And once xray recovers there is no pending roster left to re-apply.
@@ -186,8 +186,8 @@ func TestCollectorFlushesRosterWhileStale(t *testing.T) {
 	if err != nil {
 		t.Fatalf("collect: %v", err)
 	}
-	if alice := snapshot.Users[0]; !alice.Gone {
-		t.Error("alice gone = false after recovery, want true — the roster stays applied")
+	if alice := snapshot.Users[0]; !alice.Disabled {
+		t.Error("alice disabled = false after recovery, want true — the roster stays applied")
 	}
 }
 
@@ -241,7 +241,7 @@ func TestCollectorAdoptsConfigClients(t *testing.T) {
 	if bob.ClientID == nil || *bob.ClientID != "bob-uuid" {
 		t.Errorf("bob Client ID = %v, want the adopted bob-uuid", bob.ClientID)
 	}
-	if len(bob.Inbounds) != 1 || bob.Inbounds[0] != "vless-xhttp" || bob.Gone || bob.UpBytesTotal != 0 {
+	if len(bob.Inbounds) != 1 || bob.Inbounds[0] != "vless-xhttp" || bob.Disabled || bob.UpBytesTotal != 0 {
 		t.Errorf("bob = %+v, want [vless-xhttp], not gone, zero totals", bob)
 	}
 }

@@ -60,8 +60,8 @@ func TestStoreAccumulatesDurableTotals(t *testing.T) {
 	if alice.Protocol != nil || alice.Security != nil || alice.IPs != nil {
 		t.Errorf("alice = %+v, want config fields null until their slices land", alice)
 	}
-	if alice.Gone {
-		t.Error("alice gone = true, want false until the roster-sync slice")
+	if alice.Disabled {
+		t.Error("alice disabled = true, want false until the roster-sync slice")
 	}
 	if bob := list[1]; bob.UpBytesTotal != 50 || bob.DownBytesTotal != 500 {
 		t.Errorf("bob totals = %d/%d, want 50/500 (no new delta, unchanged)", bob.UpBytesTotal, bob.DownBytesTotal)

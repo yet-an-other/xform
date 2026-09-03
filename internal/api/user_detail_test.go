@@ -407,12 +407,12 @@ func TestUserDetailSerializesEveryUserLevelProfileState(t *testing.T) {
 
 	for _, test := range []struct {
 		name       string
-		gone       bool
+		disabled   bool
 		sources    profiles.Sources
 		wantState  profiles.State
 		wantReason profiles.Reason
 	}{
-		{name: "gone User", gone: true, wantState: profiles.StateGoneUser},
+		{name: "disabled User", disabled: true, wantState: profiles.StateDisabledUser},
 		{name: "source unavailable", wantState: profiles.StateSourceUnavailable},
 		{name: "no matching inbound", sources: profiles.Sources{XrayView: emptyView, XrayAvailable: true}, wantState: profiles.StateNoMatchingInbound},
 		{
@@ -425,7 +425,7 @@ func TestUserDetailSerializesEveryUserLevelProfileState(t *testing.T) {
 			handler := api.New(
 				fixedHostStats{}, fixedXrayStatus{},
 				fixedUsers{snapshot: users.Snapshot{Users: []users.User{{
-					Email: "alice@example.com", Gone: test.gone, UpBytesTotal: 123, DownBytesTotal: 456,
+					Email: "alice@example.com", Disabled: test.disabled, UpBytesTotal: 123, DownBytesTotal: 456,
 					Online: true, IPs: []string{"203.0.113.10"},
 				}}}},
 				fixedProfileSources{sources: test.sources}, &stubRoster{}, api.OperationalSources{}, session.NewManager(testPassword, time.Now),
@@ -454,8 +454,8 @@ func TestUserDetailSerializesEveryUserLevelProfileState(t *testing.T) {
 			if payload.Profiles.State != test.wantState {
 				t.Errorf("state = %q, want %q", payload.Profiles.State, test.wantState)
 			}
-			if test.gone && (payload.User.UpBytesTotal != 123 || payload.User.DownBytesTotal != 456 || !payload.User.Online || len(payload.User.IPs) != 1) {
-				t.Errorf("gone User observations = %+v, want retained Traffic and Presence", payload.User)
+			if test.disabled && (payload.User.UpBytesTotal != 123 || payload.User.DownBytesTotal != 456 || !payload.User.Online || len(payload.User.IPs) != 1) {
+				t.Errorf("disabled User observations = %+v, want retained Traffic and Presence", payload.User)
 			}
 			if test.wantReason == "" {
 				if len(payload.Profiles.Items) != 0 {

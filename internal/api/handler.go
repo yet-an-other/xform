@@ -46,7 +46,8 @@ type usersSnapshots interface {
 type rosterMutations interface {
 	Add(ctx context.Context, email, clientID string, inbounds []string) (roster.MutationResult, error)
 	Edit(ctx context.Context, email string, req roster.EditRequest) (roster.MutationResult, error)
-	Remove(ctx context.Context, email string) (roster.SyncState, bool, error)
+	Disable(ctx context.Context, email string) (roster.SyncState, bool, error)
+	Enable(ctx context.Context, email string) (roster.MutationResult, error)
 	Sync() roster.SyncState
 	UserStates() map[string]roster.ApplyState
 	InboundOptions() []roster.InboundOption
@@ -251,19 +252,26 @@ func New(snapshots hostStatsSnapshots, xray xrayStatuses, usersSource usersSnaps
 		}
 		writeJSON(response, http.StatusOK, mutationResponse{User: result.User, RosterSync: result.Sync})
 	}))))
-	mux.HandleFunc("DELETE /api/v1/users/{email}", noStore(requireSession(sameSiteOnly(func(response http.ResponseWriter, request *http.Request) {
-		sync, removed, err := rosterSource.Remove(request.Context(), request.PathValue("email"))
+	mux.HandleFunc("POST /api/v1/users/{email}/disable", noStore(requireSession(sameSiteOnly(func(response http.ResponseWriter, request *http.Request) {
+		sync, disabled, err := rosterSource.Disable(request.Context(), request.PathValue("email"))
 		if writeMutationError(response, err) {
 			return
 		}
-		if !removed {
-			// Already gone (or never known): idempotent, nothing to say.
+		if !disabled {
+			// Already disabled (or never known): idempotent, nothing to say.
 			response.WriteHeader(http.StatusNoContent)
 			return
 		}
-		// A live removal answers with the Roster sync state so the confirm
-		// dialog can tell applied from still-retrying (spec §5).
+		// A live disable answers with the Roster sync state so the dialog can
+		// tell applied from still-retrying (spec §5).
 		writeJSON(response, http.StatusOK, syncResponse{RosterSync: sync})
+	}))))
+	mux.HandleFunc("POST /api/v1/users/{email}/enable", noStore(requireSession(sameSiteOnly(func(response http.ResponseWriter, request *http.Request) {
+		result, err := rosterSource.Enable(request.Context(), request.PathValue("email"))
+		if writeMutationError(response, err) {
+			return
+		}
+		writeJSON(response, http.StatusOK, mutationResponse{User: result.User, RosterSync: result.Sync})
 	}))))
 	mux.HandleFunc("GET /api/v1/users/{email}", noStore(requireSession(func(response http.ResponseWriter, request *http.Request) {
 		if malformedUserEmailEscape(request.RequestURI) {
@@ -281,7 +289,7 @@ func New(snapshots hostStatsSnapshots, xray xrayStatuses, usersSource usersSnaps
 			if user.Email != email {
 				continue
 			}
-			collection := profiles.Evaluate(email, user.Gone, profileSources.Current())
+			collection := profiles.Evaluate(email, user.Disabled, profileSources.Current())
 			writeJSON(response, http.StatusOK, userDetailResponse{
 				CollectedAt:        snapshot.CollectedAt,
 				Stale:              snapshot.Stale,
@@ -326,8 +334,9 @@ type mutationResponse struct {
 	RosterSync roster.SyncState `json:"roster_sync"`
 }
 
-// syncResponse is DELETE /api/v1/users: just the Roster sync state — the
-// removed user's record is gone, and the users endpoint carries the row.
+// syncResponse is the disable mutation: just the Roster sync state — the
+// disabled user's record is out of the roster set, and the users endpoint
+// carries the row.
 type syncResponse struct {
 	RosterSync roster.SyncState `json:"roster_sync"`
 }

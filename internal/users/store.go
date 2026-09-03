@@ -47,58 +47,35 @@ func Open(path string) (*Store, error) {
 			down_bytes_total INTEGER NOT NULL DEFAULT 0,
 			last_seen        INTEGER,                 -- unix seconds, NULL = never
 			last_ips         TEXT,                    -- JSON array
-			gone             INTEGER NOT NULL DEFAULT 0,  -- no longer in xray config; history kept
+			disabled         INTEGER NOT NULL DEFAULT 0,  -- off the Roster (ADR-0007); history kept
 			first_seen       INTEGER NOT NULL
 		)`); err != nil {
 		_ = db.Close()
 		return nil, fmt.Errorf("create schema: %w", err)
 	}
-	// The roster store (user-management spec §3): one row per managed user —
-	// the panel-held source of truth the config is rendered from. A removed
-	// user's row stays, flagged gone (CONTEXT.md: never erased); re-adding
-	// the email revives it. Adoption only ever adds, so a hand-edited config
-	// cannot rewrite a stored Client ID.
+	// The roster store (user-management spec §3, ADR-0007): one row per
+	// managed user — the panel-held source of truth the config is rendered
+	// from. A disabled user's row stays, flagged disabled (CONTEXT.md: never
+	// erased); re-adding or re-enabling the email revives it. Adoption only
+	// ever adds, so a hand-edited config cannot rewrite a stored Client ID.
 	if _, err := db.Exec(`
 		CREATE TABLE IF NOT EXISTS roster (
 			email      TEXT PRIMARY KEY,        -- identity; email change = new row
 			client_id  TEXT NOT NULL,           -- UUID credential
 			inbounds   TEXT NOT NULL,           -- JSON array of VLESS inbound tags
-			gone       INTEGER NOT NULL DEFAULT 0,  -- removed from the Roster; history kept
+			disabled   INTEGER NOT NULL DEFAULT 0,  -- off the Roster (ADR-0007); history kept
 			created_at INTEGER NOT NULL,
 			updated_at INTEGER NOT NULL
 		)`); err != nil {
 		_ = db.Close()
 		return nil, fmt.Errorf("create roster schema: %w", err)
 	}
-	// Databases from before the gone flag gain the column in place.
-	rows, err := db.Query(`PRAGMA table_info(roster)`)
-	if err != nil {
-		_ = db.Close()
-		return nil, fmt.Errorf("inspect roster schema: %w", err)
-	}
-	hasGone := false
-	for rows.Next() {
-		var cid int
-		var name, colType string
-		var notNull, pk int
-		var dflt any
-		if err := rows.Scan(&cid, &name, &colType, &notNull, &dflt, &pk); err != nil {
-			_ = rows.Close()
+	// Databases from before the disable rename carry a gone column; it
+	// becomes disabled in place, flags intact (ADR-0007).
+	for _, table := range []string{"users", "roster"} {
+		if err := migrateGoneToDisabled(db, table); err != nil {
 			_ = db.Close()
-			return nil, fmt.Errorf("inspect roster schema: %w", err)
-		}
-		hasGone = hasGone || name == "gone"
-	}
-	if err := rows.Err(); err != nil {
-		_ = rows.Close()
-		_ = db.Close()
-		return nil, fmt.Errorf("inspect roster schema: %w", err)
-	}
-	rows.Close()
-	if !hasGone {
-		if _, err := db.Exec(`ALTER TABLE roster ADD COLUMN gone INTEGER NOT NULL DEFAULT 0`); err != nil {
-			_ = db.Close()
-			return nil, fmt.Errorf("migrate roster schema: %w", err)
+			return nil, err
 		}
 	}
 	// The xray row's durable aggregate totals — panel-level state hosted here
@@ -117,6 +94,51 @@ func Open(path string) (*Store, error) {
 
 // Close releases the database.
 func (s *Store) Close() error { return s.db.Close() }
+
+// migrateGoneToDisabled renames one table's gone column to disabled in
+// place; a table carrying neither column gains disabled. A database
+// already on disabled is untouched (ADR-0007).
+func migrateGoneToDisabled(db *sql.DB, table string) error {
+	rows, err := db.Query(fmt.Sprintf(`PRAGMA table_info(%s)`, table))
+	if err != nil {
+		return fmt.Errorf("inspect %s schema: %w", table, err)
+	}
+	hasGone, hasDisabled := false, false
+	for rows.Next() {
+		var cid int
+		var name, colType string
+		var notNull, pk int
+		var dflt any
+		if err := rows.Scan(&cid, &name, &colType, &notNull, &dflt, &pk); err != nil {
+			_ = rows.Close()
+			return fmt.Errorf("inspect %s schema: %w", table, err)
+		}
+		switch name {
+		case "gone":
+			hasGone = true
+		case "disabled":
+			hasDisabled = true
+		}
+	}
+	if err := rows.Err(); err != nil {
+		_ = rows.Close()
+		return fmt.Errorf("inspect %s schema: %w", table, err)
+	}
+	if err := rows.Close(); err != nil {
+		return fmt.Errorf("inspect %s schema: %w", table, err)
+	}
+	switch {
+	case hasGone:
+		if _, err := db.Exec(fmt.Sprintf(`ALTER TABLE %s RENAME COLUMN gone TO disabled`, table)); err != nil {
+			return fmt.Errorf("migrate %s schema: %w", table, err)
+		}
+	case !hasDisabled:
+		if _, err := db.Exec(fmt.Sprintf(`ALTER TABLE %s ADD COLUMN disabled INTEGER NOT NULL DEFAULT 0`, table)); err != nil {
+			return fmt.Errorf("migrate %s schema: %w", table, err)
+		}
+	}
+	return nil
+}
 
 // ErrEmailTaken / ErrClientIDTaken are the roster's two uniqueness rules
 // (user-management spec §5): email conflicts case-insensitively because the
@@ -150,11 +172,11 @@ type RosterRecord struct {
 }
 
 // AddRosterUser stores one panel-added user: the roster row, plus a users
-// row so the dashboard shows them immediately — labelled, not gone, totals
-// at zero. A returning gone user's email rejoins the existing row and its
+// row so the dashboard shows them immediately — labelled, live, totals
+// at zero. A returning disabled user's email rejoins the existing row and its
 // history (user-management spec §3); first_seen, totals, and last_seen are
 // never touched. A removed user's flagged roster row is revived — shed of
-// gone, carrying the new credential. Conflicts write nothing.
+// disabled, carrying the new credential. Conflicts write nothing.
 func (s *Store) AddRosterUser(ctx context.Context, user NewRosterUser, now time.Time) (RosterRecord, error) {
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
@@ -164,22 +186,22 @@ func (s *Store) AddRosterUser(ctx context.Context, user NewRosterUser, now time.
 
 	var taken string
 	var existing struct {
-		email string
-		gone  bool
+		email    string
+		disabled bool
 	}
 	switch err := tx.QueryRowContext(ctx,
-		`SELECT email, gone FROM roster WHERE lower(email) = lower(?)`, user.Email,
-	).Scan(&existing.email, &existing.gone); {
-	case err == nil && !existing.gone:
+		`SELECT email, disabled FROM roster WHERE lower(email) = lower(?)`, user.Email,
+	).Scan(&existing.email, &existing.disabled); {
+	case err == nil && !existing.disabled:
 		return RosterRecord{}, fmt.Errorf("%w: %s", ErrEmailTaken, existing.email)
 	case !errors.Is(err, sql.ErrNoRows) && err != nil:
 		return RosterRecord{}, fmt.Errorf("check email uniqueness: %w", err)
 	}
 	switch err := tx.QueryRowContext(ctx, `SELECT email FROM roster WHERE lower(client_id) = lower(?)`, user.ClientID).Scan(&taken); {
 	case err == nil:
-		// The user's own gone row may be revived under its old credential;
-		// any other holder — gone or not — is a conflict.
-		if !strings.EqualFold(taken, user.Email) || !existing.gone {
+		// The user's own disabled row may be revived under its old credential;
+		// any other holder — disabled or not — is a conflict.
+		if !strings.EqualFold(taken, user.Email) || !existing.disabled {
 			return RosterRecord{}, fmt.Errorf("%w: %s", ErrClientIDTaken, taken)
 		}
 	case !errors.Is(err, sql.ErrNoRows):
@@ -196,13 +218,13 @@ func (s *Store) AddRosterUser(ctx context.Context, user NewRosterUser, now time.
 	}
 	stamp := now.Unix()
 	created := stamp
-	if existing.gone { // revive the flagged row, creation preserved
+	if existing.disabled { // revive the flagged row, creation preserved
 		if err := tx.QueryRowContext(ctx,
 			`SELECT created_at FROM roster WHERE lower(email) = lower(?)`, user.Email).Scan(&created); err != nil {
 			return RosterRecord{}, fmt.Errorf("read creation for revive: %w", err)
 		}
 		if _, err := tx.ExecContext(ctx, `
-			UPDATE roster SET client_id = ?, inbounds = ?, gone = 0, updated_at = ?
+			UPDATE roster SET client_id = ?, inbounds = ?, disabled = 0, updated_at = ?
 			WHERE lower(email) = lower(?)`,
 			user.ClientID, string(encoded), stamp, user.Email); err != nil {
 			return RosterRecord{}, fmt.Errorf("revive roster row: %w", err)
@@ -213,12 +235,12 @@ func (s *Store) AddRosterUser(ctx context.Context, user NewRosterUser, now time.
 		return RosterRecord{}, fmt.Errorf("insert roster row: %w", err)
 	}
 	if _, err := tx.ExecContext(ctx, `
-		INSERT INTO users (email, protocol, security, gone, first_seen)
+		INSERT INTO users (email, protocol, security, disabled, first_seen)
 		VALUES (?, ?, ?, 0, ?)
 		ON CONFLICT(email) DO UPDATE SET
 			protocol = excluded.protocol,
 			security = excluded.security,
-			gone     = 0`, user.Email, user.Protocol, user.Security, stamp); err != nil {
+			disabled = 0`, user.Email, user.Protocol, user.Security, stamp); err != nil {
 		return RosterRecord{}, fmt.Errorf("upsert user row: %w", err)
 	}
 	if err := tx.Commit(); err != nil {
@@ -230,30 +252,93 @@ func (s *Store) AddRosterUser(ctx context.Context, user NewRosterUser, now time.
 	}, nil
 }
 
-// RemoveRosterUser removes one user from the Roster (user-management spec
-// §3–§4, CONTEXT.md Gone user): the roster row is flagged gone — never
-// erased — and the dashboard row keeps its history behind the gone badge.
-// Idempotent: an already-removed (or never-known) email writes nothing.
-func (s *Store) RemoveRosterUser(ctx context.Context, email string, now time.Time) error {
+// DisableRosterUser takes one user off the Roster (user-management spec
+// §3–§4, ADR-0007, CONTEXT.md Disabled user): the roster row is flagged
+// disabled — never erased — and the dashboard row keeps its history behind
+// the disabled badge. Idempotent: an already-disabled (or never-known)
+// email writes nothing.
+func (s *Store) DisableRosterUser(ctx context.Context, email string, now time.Time) error {
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
-		return fmt.Errorf("begin remove transaction: %w", err)
+		return fmt.Errorf("begin disable transaction: %w", err)
 	}
 	defer func() { _ = tx.Rollback() }()
 
 	if _, err := tx.ExecContext(ctx, `
-		UPDATE roster SET gone = 1, updated_at = ? WHERE lower(email) = lower(?) AND gone = 0`,
+		UPDATE roster SET disabled = 1, updated_at = ? WHERE lower(email) = lower(?) AND disabled = 0`,
 		now.Unix(), email); err != nil {
-		return fmt.Errorf("flag roster row gone: %w", err)
+		return fmt.Errorf("flag roster row disabled: %w", err)
 	}
 	if _, err := tx.ExecContext(ctx, `
-		UPDATE users SET gone = 1 WHERE lower(email) = lower(?) AND gone = 0`, email); err != nil {
-		return fmt.Errorf("mark user row gone: %w", err)
+		UPDATE users SET disabled = 1 WHERE lower(email) = lower(?) AND disabled = 0`, email); err != nil {
+		return fmt.Errorf("mark user row disabled: %w", err)
 	}
 	if err := tx.Commit(); err != nil {
-		return fmt.Errorf("commit remove transaction: %w", err)
+		return fmt.Errorf("commit disable transaction: %w", err)
 	}
 	return nil
+}
+
+// DisabledRosterRecord returns the stored roster record for a disabled
+// email — the before-state the enable mutation re-applies. The credential
+// and attachments survive the disable untouched. Emails match
+// case-insensitively; a live or unknown email is ErrRosterNotFound.
+func (s *Store) DisabledRosterRecord(ctx context.Context, email string) (RosterRecord, error) {
+	var record RosterRecord
+	var inbounds string
+	err := s.db.QueryRowContext(ctx,
+		`SELECT email, client_id, inbounds, created_at, updated_at
+		 FROM roster WHERE lower(email) = lower(?) AND disabled = 1`, email,
+	).Scan(&record.Email, &record.ClientID, &inbounds, &record.CreatedAt, &record.UpdatedAt)
+	if errors.Is(err, sql.ErrNoRows) {
+		return RosterRecord{}, ErrRosterNotFound
+	}
+	if err != nil {
+		return RosterRecord{}, fmt.Errorf("query disabled roster record: %w", err)
+	}
+	record.Inbounds = []string{}
+	_ = json.Unmarshal([]byte(inbounds), &record.Inbounds) // tolerate malformed rows
+	return record, nil
+}
+
+// EnableRosterUser revives one disabled user in place (ADR-0007): the
+// roster and dashboard rows shed the disabled flag — credential,
+// attachments, created_at, and history kept — and the record returns.
+// Idempotent: an already-live email writes nothing and returns its record.
+// An unknown email is ErrRosterNotFound.
+func (s *Store) EnableRosterUser(ctx context.Context, email string, now time.Time) (RosterRecord, error) {
+	record, err := s.RosterRecord(ctx, email)
+	switch {
+	case err == nil:
+		return record, nil // already live — idempotent
+	case !errors.Is(err, ErrRosterNotFound):
+		return RosterRecord{}, err
+	}
+	if record, err = s.DisabledRosterRecord(ctx, email); err != nil {
+		return RosterRecord{}, err
+	}
+
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return RosterRecord{}, fmt.Errorf("begin enable transaction: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	stamp := now.Unix()
+	if _, err := tx.ExecContext(ctx, `
+		UPDATE roster SET disabled = 0, updated_at = ? WHERE lower(email) = lower(?)`,
+		stamp, record.Email); err != nil {
+		return RosterRecord{}, fmt.Errorf("revive roster row: %w", err)
+	}
+	if _, err := tx.ExecContext(ctx, `
+		UPDATE users SET disabled = 0 WHERE lower(email) = lower(?)`, record.Email); err != nil {
+		return RosterRecord{}, fmt.Errorf("revive user row: %w", err)
+	}
+	if err := tx.Commit(); err != nil {
+		return RosterRecord{}, fmt.Errorf("commit enable transaction: %w", err)
+	}
+	record.UpdatedAt = stamp
+	return record, nil
 }
 
 // RosterEdit is one edit mutation's stored fields (user-management spec
@@ -269,15 +354,15 @@ type RosterEdit struct {
 }
 
 // RosterRecord returns the stored roster record for email — the before
-// state the edit path diffs against. A removed user's row (gone) reads as
-// absent: gone users are history, not roster members. Emails match
+// state the edit path diffs against. A disabled user's row reads as
+// absent: disabled users are history, not roster members. Emails match
 // case-insensitively.
 func (s *Store) RosterRecord(ctx context.Context, email string) (RosterRecord, error) {
 	var record RosterRecord
 	var inbounds string
 	err := s.db.QueryRowContext(ctx,
 		`SELECT email, client_id, inbounds, created_at, updated_at
-		 FROM roster WHERE lower(email) = lower(?) AND gone = 0`, email,
+		 FROM roster WHERE lower(email) = lower(?) AND disabled = 0`, email,
 	).Scan(&record.Email, &record.ClientID, &inbounds, &record.CreatedAt, &record.UpdatedAt)
 	if errors.Is(err, sql.ErrNoRows) {
 		return RosterRecord{}, ErrRosterNotFound
@@ -290,12 +375,12 @@ func (s *Store) RosterRecord(ctx context.Context, email string) (RosterRecord, e
 	return record, nil
 }
 
-// RosterRecords returns every live roster record, gone rows excluded — the
+// RosterRecords returns every live roster record, disabled rows excluded — the
 // convergence pass re-applies exactly these against the config parse
 // (user-management spec §4). Ordered by email for deterministic writes.
 func (s *Store) RosterRecords(ctx context.Context) ([]RosterRecord, error) {
 	rows, err := s.db.QueryContext(ctx, `
-		SELECT email, client_id, inbounds FROM roster WHERE gone = 0 ORDER BY email`)
+		SELECT email, client_id, inbounds FROM roster WHERE disabled = 0 ORDER BY email`)
 	if err != nil {
 		return nil, fmt.Errorf("query roster records: %w", err)
 	}
@@ -319,8 +404,8 @@ func (s *Store) RosterRecords(ctx context.Context) ([]RosterRecord, error) {
 }
 
 // EditRosterUser stores one edit: the attachment set and — optionally — the
-// Client ID change, with the row relabelled and kept not-gone (a roster
-// member edited to zero inbounds is profile-less, not gone). Idempotent: an
+// Client ID change, with the row relabelled and kept live (a roster
+// member edited to zero inbounds is profile-less, not disabled). Idempotent: an
 // edit carrying the stored state — including the labels — writes nothing.
 // Conflicts write nothing.
 func (s *Store) EditRosterUser(ctx context.Context, email string, edit RosterEdit, now time.Time) (RosterRecord, error) {
@@ -383,12 +468,12 @@ func (s *Store) EditRosterUser(ctx context.Context, email string, edit RosterEdi
 		return RosterRecord{}, fmt.Errorf("update roster row: %w", err)
 	}
 	if _, err := tx.ExecContext(ctx, `
-		INSERT INTO users (email, protocol, security, gone, first_seen)
+		INSERT INTO users (email, protocol, security, disabled, first_seen)
 		VALUES (?, ?, ?, 0, ?)
 		ON CONFLICT(email) DO UPDATE SET
 			protocol = excluded.protocol,
 			security = excluded.security,
-			gone     = 0`,
+			disabled = 0`,
 		before.Email, edit.Protocol, edit.Security, stamp); err != nil {
 		return RosterRecord{}, fmt.Errorf("relabel user row: %w", err)
 	}
@@ -490,31 +575,32 @@ func (s *Store) ApplyPoll(ctx context.Context, deltas []Delta, presence []Presen
 }
 
 // syncLabels applies a fresh config parse's labels inside the poll
-// transaction: everyone not in the config becomes gone (a no-op for rows
-// already gone), then roster emails are upserted — new users appear with
-// zero totals, returning users lose the gone flag, and labels follow the
-// config.
+// transaction: everyone not in the config becomes disabled (a no-op for
+// rows already disabled), then roster emails are upserted — new users
+// appear with zero totals, returning users lose the disabled flag, and
+// labels follow the config.
 func syncLabels(ctx context.Context, tx *sql.Tx, roster map[string]RosterUser, now time.Time) error {
-	// Gone-ness is the Roster's call, not the config's (CONTEXT.md): a parse
-	// missing a roster member leaves them alone — convergence re-applies —
-	// so only users with no live roster row can go gone here. And a parse
-	// may not revive a user the panel removed: the roster upsert keeps the
-	// gone flag for rows flagged gone in the roster.
+	// Disabled-ness is the Roster's call, not the config's (CONTEXT.md): a
+	// parse missing a roster member leaves them alone — convergence
+	// re-applies — so only users with no live roster row can go disabled
+	// here. And a parse may not revive a user the panel disabled: the
+	// roster upsert keeps the disabled flag for rows flagged disabled in
+	// the roster.
 	if _, err := tx.ExecContext(ctx, `
-		UPDATE users SET gone = 1 WHERE gone = 0
-		AND NOT EXISTS (SELECT 1 FROM roster r WHERE lower(r.email) = lower(users.email) AND r.gone = 0)`); err != nil {
-		return fmt.Errorf("mark gone users: %w", err)
+		UPDATE users SET disabled = 1 WHERE disabled = 0
+		AND NOT EXISTS (SELECT 1 FROM roster r WHERE lower(r.email) = lower(users.email) AND r.disabled = 0)`); err != nil {
+		return fmt.Errorf("mark disabled users: %w", err)
 	}
 
 	stmt, err := tx.PrepareContext(ctx, `
-		INSERT INTO users (email, protocol, security, gone, first_seen)
+		INSERT INTO users (email, protocol, security, disabled, first_seen)
 		VALUES (?, ?, ?, 0, ?)
 		ON CONFLICT(email) DO UPDATE SET
 			protocol = excluded.protocol,
 			security = excluded.security,
-			gone     = CASE WHEN EXISTS (
-				SELECT 1 FROM roster r WHERE lower(r.email) = lower(users.email) AND r.gone = 1
-			) THEN users.gone ELSE 0 END`)
+			disabled = CASE WHEN EXISTS (
+				SELECT 1 FROM roster r WHERE lower(r.email) = lower(users.email) AND r.disabled = 1
+			) THEN users.disabled ELSE 0 END`)
 	if err != nil {
 		return fmt.Errorf("prepare roster upsert: %w", err)
 	}
@@ -534,10 +620,10 @@ func syncLabels(ctx context.Context, tx *sql.Tx, roster map[string]RosterUser, n
 // attachments it did not have — never a rewritten Client ID, because the
 // store is the source of truth and the hand edit is drift. An unchanged
 // re-read writes nothing. Attachments not in the config are left alone:
-// re-applying them is convergence's job, not adoption's. A removed user's
-// flagged row is untouched — the panel decided they are gone, and a stale
-// config carrying them (the render has not landed yet) must not revive
-// them.
+// re-applying them is convergence's job, not adoption's. A disabled user's
+// flagged row is untouched — the panel decided they are off the Roster, and
+// a stale config carrying them (the render has not landed yet) must not
+// revive them.
 //
 // The schema deliberately carries no uniqueness constraint on client_id and
 // no case folding on email: a misconfigured config (duplicate Client IDs,
@@ -546,25 +632,25 @@ func syncLabels(ctx context.Context, tx *sql.Tx, roster map[string]RosterUser, n
 // mutation API (user-management spec §5), not the observer.
 func adoptClients(ctx context.Context, tx *sql.Tx, clients map[string]RosterClient, now time.Time) error {
 	type storedRow struct {
-		tags []string
-		gone bool
+		tags     []string
+		disabled bool
 	}
 	stored := map[string]storedRow{}
-	rows, err := tx.QueryContext(ctx, `SELECT email, inbounds, gone FROM roster`)
+	rows, err := tx.QueryContext(ctx, `SELECT email, inbounds, disabled FROM roster`)
 	if err != nil {
 		return fmt.Errorf("read roster for adoption: %w", err)
 	}
 	for rows.Next() {
 		var email, inbounds string
-		var gone bool
-		if err := rows.Scan(&email, &inbounds, &gone); err != nil {
+		var disabled bool
+		if err := rows.Scan(&email, &inbounds, &disabled); err != nil {
 			_ = rows.Close()
 			return fmt.Errorf("scan roster row: %w", err)
 		}
 		// inbounds is a JSON array; tolerate malformed rows.
 		var tags []string
 		_ = json.Unmarshal([]byte(inbounds), &tags)
-		stored[email] = storedRow{tags: tags, gone: gone}
+		stored[email] = storedRow{tags: tags, disabled: disabled}
 	}
 	if err := rows.Err(); err != nil {
 		_ = rows.Close()
@@ -598,8 +684,8 @@ func adoptClients(ctx context.Context, tx *sql.Tx, clients map[string]RosterClie
 	stamp := now.Unix()
 	for _, email := range emails {
 		client := clients[email]
-		if row, known := stored[email]; known && row.gone {
-			continue // a removed user stays removed — the panel decided
+		if row, known := stored[email]; known && row.disabled {
+			continue // a disabled user stays disabled — the panel decided
 		}
 		if client.Inbounds == nil {
 			client.Inbounds = []string{}
@@ -637,14 +723,15 @@ func adoptClients(ctx context.Context, tx *sql.Tx, clients map[string]RosterClie
 
 // Users returns every known user, heaviest traffic first. Roster fields
 // (Client ID, inbounds) join from the roster store — null for users the
-// config never adopted and for gone users, whose flagged rows are history.
+// config never adopted and for disabled users, whose flagged rows are
+// history.
 func (s *Store) Users(ctx context.Context) ([]User, error) {
 	rows, err := s.db.QueryContext(ctx, `
 		SELECT u.email, u.protocol, u.security, u.up_bytes_total, u.down_bytes_total,
-		       u.last_seen, u.last_ips, u.gone, u.first_seen,
+		       u.last_seen, u.last_ips, u.disabled, u.first_seen,
 		       r.client_id, r.inbounds
 		FROM users u
-		LEFT JOIN roster r ON r.email = u.email AND r.gone = 0
+		LEFT JOIN roster r ON r.email = u.email AND r.disabled = 0
 		ORDER BY u.up_bytes_total + u.down_bytes_total DESC, u.email`)
 	if err != nil {
 		return nil, fmt.Errorf("query users: %w", err)
@@ -656,13 +743,13 @@ func (s *Store) Users(ctx context.Context) ([]User, error) {
 		var user User
 		var lastSeen sql.NullInt64
 		var lastIPs sql.NullString
-		var gone bool
+		var disabled bool
 		var clientID sql.NullString
 		var inbounds sql.NullString
 		if err := rows.Scan(
 			&user.Email, &user.Protocol, &user.Security,
 			&user.UpBytesTotal, &user.DownBytesTotal,
-			&lastSeen, &lastIPs, &gone, &user.FirstSeen,
+			&lastSeen, &lastIPs, &disabled, &user.FirstSeen,
 			&clientID, &inbounds,
 		); err != nil {
 			return nil, fmt.Errorf("scan user: %w", err)
@@ -682,7 +769,7 @@ func (s *Store) Users(ctx context.Context) ([]User, error) {
 			// spec §3); tolerate malformed rows.
 			_ = json.Unmarshal([]byte(inbounds.String), &user.Inbounds)
 		}
-		user.Gone = gone
+		user.Disabled = disabled
 		list = append(list, user)
 	}
 	if err := rows.Err(); err != nil {
