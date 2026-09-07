@@ -3,7 +3,7 @@ import { useCallback, type RefObject } from "react";
 import { Modal, ModalClose, ModalFooter } from "@/components/ui/modal";
 import { fetchLogSnapshot, type LogSource } from "@/lib/api";
 import { useCollection } from "@/lib/collection";
-import { formatEntryTime, formatSnapshotTime, logMessage, logSource, priorityLabel } from "@/lib/log-entry";
+import { entryPriority, formatEntryTime, formatSnapshotTime, logMessage, logSource, priorityLabel } from "@/lib/log-entry";
 import { cn } from "@/lib/utils";
 
 interface LogSnapshotModalProps {
@@ -126,7 +126,8 @@ export function LogSnapshotModal({
               <tbody>
                 {snapshot.entries.map((item) => {
                   const message = logMessage(item);
-                  const label = priorityLabel(item.priority);
+                  const priority = entryPriority(item);
+                  const label = priorityLabel(priority);
                   return (
                     <tr key={item.cursor} className="border-border/50 border-t align-top">
                       <td className="text-muted-foreground px-5 py-1 whitespace-nowrap">
@@ -138,7 +139,7 @@ export function LogSnapshotModal({
                           <span
                             className={cn(
                               "rounded-full border px-1.5 py-0.5 text-[10px] font-bold",
-                              priorityTone(item.priority),
+                              priorityTone(priority),
                             )}
                           >
                             {label}
