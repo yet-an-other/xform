@@ -74,6 +74,14 @@ _Avoid_: parsed config, formatted config, config export
 The latest bounded set of journal entries for the Panel or xray, collected when requested. It is a point-in-time view, never a live stream.
 _Avoid_: live logs, log stream, log tail
 
+**Access record**:
+A journal record whose message carries an xray access line — a timestamp followed by "from … accepted/rejected" and no severity marker. Access records narrate proxied traffic and dominate the xray journal.
+_Avoid_: access log entry (xray's own term for its stream; the record is what the journal carries), traffic log, connection log
+
+**System record**:
+A journal record from a watched unit that is not an Access record: xray's general messages ([Debug]/[Info]/[Warning]/[Error]) and every unmarked line that is not an access line, crash output included. They are not all errors.
+_Avoid_: error record (xray's "error log" holds Info too), system error
+
 **Viewer**:
 One operational snapshot together with the dialog that asks for it and shows it: Panel logs, xray logs, or xray config. Each viewer reports only its own result — a failed viewer says so on its own, without making any other viewer or the Dashboard look broken.
 _Avoid_: modal (that is its presentation), log window
