@@ -59,11 +59,12 @@ type connectionProfileSources interface {
 }
 
 // logSnapshots is the Log snapshot module's one collection operation
-// (SPEC §8). The handler's only choice is the fixed source, so no
-// unit, count, filter, cursor, or time range can reach journalctl through the
+// (SPEC §8). The handler's choices are the fixed source and — on the xray
+// endpoint alone — the fixed record filter enum, so no unit, count, cursor,
+// time range, or raw journalctl argument can reach journalctl through the
 // HTTP surface.
 type logSnapshots interface {
-	Collect(ctx context.Context, source journal.Source) (journal.Snapshot, error)
+	Collect(ctx context.Context, source journal.Source, filter journal.Filter) (journal.Snapshot, error)
 }
 
 // configSnapshots is the Config snapshot module's one bounded read
@@ -316,7 +317,7 @@ func New(snapshots hostStatsSnapshots, xray xrayStatuses, usersSource usersSnaps
 		writeJSON(response, http.StatusNotFound, map[string]string{"error": "not_found"})
 	})))
 	mux.HandleFunc("GET /api/v1/logs/panel", noStore(requireSession(logSnapshotHandler(operational.Logs, journal.SourcePanel))))
-	mux.HandleFunc("GET /api/v1/logs/xray", noStore(requireSession(logSnapshotHandler(operational.Logs, journal.SourceXray))))
+	mux.HandleFunc("GET /api/v1/logs/xray", noStore(requireSession(xrayLogSnapshotHandler(operational.Logs))))
 	mux.HandleFunc("GET /api/v1/xray/config", noStore(requireSession(configSnapshotHandler(operational.Config))))
 	mux.Handle("/api/", requireSession(func(response http.ResponseWriter, _ *http.Request) {
 		writeJSON(response, http.StatusNotFound, map[string]string{"error": "not found"})

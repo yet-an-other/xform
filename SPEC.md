@@ -249,7 +249,7 @@ Opening a user's details action opens the one modal dialog for that exact user, 
 
 Only one modal is open at a time. Each viewer reports only its own collection result: a failed viewer says so on its own, without making any other viewer or the dashboard look broken. A stopped or unreachable xray does not disable the xray logs or config viewers.
 
-- **Panel logs** and **xray logs** dialogs: one fresh Log snapshot on open; a dense newest-first table with UTC timestamp, source (`identifier[pid]`, falling back to the unit), priority badge, and message; the badge reads a severity embedded in the message text (xray's `[Warning]`/`[Error]`/…) where one is stamped — xray writes its whole log to stdout, flattening every journald priority to info — and falls back to the journald priority otherwise, while an embedded timestamp repeating the Time column is not shown; actual entry count, capture time, and `Bounded · manual refresh`; one Refresh action; the standing notes `No Panel redaction` and `No live tail`. Base64 messages carry a visible binary marker; a truncated null message renders `[message exceeds journal field limit]`. Refresh is disabled while its request runs. If refresh fails after a successful load, the dialog keeps the displayed entries and original timestamp and shows `Refresh failed, showing snapshot from …` with the stable reason; an initial failure shows only the error state.
+- **Panel logs** and **xray logs** dialogs: one fresh Log snapshot on open; a dense newest-first table with UTC timestamp, source (`identifier[pid]`, falling back to the unit), priority badge, and message; the badge reads a severity embedded in the message text (xray's `[Warning]`/`[Error]`/…) where one is stamped — xray writes its whole log to stdout, flattening every journald priority to info — and falls back to the journald priority otherwise, while an embedded timestamp repeating the Time column is not shown; actual entry count, capture time, and `Bounded · manual refresh`; one Refresh action; the standing notes `No Panel redaction` and `No live tail`. The xray logs dialog additionally carries a `Hide access records` toggle (the Panel logs dialog does not — no Access records exist there by construction): flipping it collects a fresh Log snapshot of System records only (`filter=system`, §8), never a re-cut of the cached one (ADR-0006); the choice is dialog-local, defaults to the full journal on every opening, and resets on close. While a filtered snapshot is shown the count line reads `N system records`, driven by the snapshot's echoed filter so a filtered view never wears the unfiltered label (ADR-0008). Base64 messages carry a visible binary marker; a truncated null message renders `[message exceeds journal field limit]`. Refresh is disabled while its request runs. If refresh fails after a successful load, the dialog keeps the displayed entries and original timestamp and shows `Refresh failed, showing snapshot from …` with the stable reason; an initial failure shows only the error state.
 - **Config snapshot dialog**: one fresh Config snapshot on open; the configured path and the exact text, preserving every character including final newlines; horizontal fixed-format scrolling at narrow widths; Copy, and no Refresh action. A failed Config snapshot shows the stable reason and no Copy action.
 - Log and Config snapshot data live only for the current modal opening: closing either modal aborts its request and clears the browser-local snapshot, and reopening always starts with an initial load.
 
@@ -349,7 +349,7 @@ Freshness and errors stay independent across every source: user observation fres
 
 ### Log snapshots
 
-`GET /api/v1/logs/panel` and `GET /api/v1/logs/xray` each collect the latest 500 records for their one fixed unit, newest first. They accept no query parameter — any parameter → 400 `invalid_request`.
+`GET /api/v1/logs/panel` and `GET /api/v1/logs/xray` each collect the latest 500 records for their one fixed unit, newest first. The panel endpoint accepts no query parameter — any parameter → 400 `invalid_request`. The xray endpoint accepts one optional enum parameter: `filter=all` (the default, also when absent) or `filter=system`, which drops Access records inside the journal traversal, so a filtered snapshot is the newest 500 System records wherever they sit in the journal rather than the survivors of the newest 500 raw records. An unknown value, a repeated or empty `filter`, or any other parameter → 400 `invalid_request` (ADR-0008).
 
 The production adapter executes the equivalent of:
 
@@ -361,7 +361,7 @@ The production adapter executes the equivalent of:
   --no-pager
 ```
 
-Separate arguments, no shell, an attached `--unit=<value>`, and a deterministic environment (`LC_ALL=C`, `LANG=C`, `SYSTEMD_COLORS=0`) — never an inherited pager or shell environment. The journal module owns canonical unit selection, the fixed arguments, process timeout/cancellation/concurrency, output limits, newline-delimited JSON decoding, field normalization, and stable errors; its interface accepts no unit, count, filter, cursor, time range, or raw journalctl argument. Process execution sits behind an internal seam with a production adapter and a fake adapter for tests.
+Separate arguments, no shell, an attached `--unit=<value>`, and a deterministic environment (`LC_ALL=C`, `LANG=C`, `SYSTEMD_COLORS=0`) — never an inherited pager or shell environment. Under `filter=system` the xray collection adds exactly one fixed argument to this template: an attached `--grep=` carrying the pinned PCRE2 negative lookahead `^(?![0-9]{4}/[0-9]{2}/[0-9]{2} [0-9]{2}:[0-9]{2}:[0-9]{2}(\.[0-9]+)? from )`. The classification is strict — an Access record is a timestamp followed by `from ` with no `[Level]` marker — so crash output and every other unmarked line stays visible as a System record. `--invert` is deliberately not used (absent on the deployed systemd); the lookahead inverts instead. The filter value only ever selects between the compiled-in templates; it never becomes an argument itself (ADR-0008). The journal module owns canonical unit selection, the fixed arguments, process timeout/cancellation/concurrency, output limits, newline-delimited JSON decoding, field normalization, and stable errors; its interface accepts no unit, count, cursor, time range, or raw journalctl argument. Process execution sits behind an internal seam with a production adapter and a fake adapter for tests.
 
 Bounds: 5-second process timeout · 500 entries · 8 MiB stdout · 64 KiB stderr · 1 journalctl process globally. Request cancellation kills and reaps the child; a client-disconnect cancellation has no HTTP response requirement. The reader decodes a stream of JSON objects without an unbounded scanner or combined output buffer, rejects more than 500 objects, and never passes `--all`.
 
@@ -371,6 +371,7 @@ Success response:
 {
   "captured_at": 1723800000,
   "source": "panel",
+  "filter": "all",
   "unit": "xform.service",
   "limit": 500,
   "entry_count": 1,
@@ -390,7 +391,7 @@ Success response:
 }
 ```
 
-`captured_at` is recorded after the child exits and every object is validated and normalized. Every entry always includes the `message`, `message_encoding`, and `message_truncated` keys. Normalization:
+`captured_at` is recorded after the child exits and every object is validated and normalized. `filter` echoes the record filter the snapshot was collected under, so a filtered snapshot self-describes and the dialog never mislabels it. Every entry always includes the `message`, `message_encoding`, and `message_truncated` keys. Normalization:
 
 - `__CURSOR` must be a non-empty scalar string; `__REALTIME_TIMESTAMP` a scalar unsigned decimal microsecond string fitting `uint64`.
 - Trusted unit fields, when present, are scalar strings — an array, object, or number makes the snapshot malformed. `unit` derives from the first non-empty of `_SYSTEMD_UNIT`, `UNIT`, `OBJECT_SYSTEMD_UNIT`, `COREDUMP_UNIT`, falling back to the endpoint's fixed unit.
@@ -415,7 +416,7 @@ The panel may record a bounded error summary, but never copies journal messages 
 
 ### Journal reader configuration
 
-`XFORM_JOURNALCTL` (optional, default `/usr/bin/journalctl`) must, at startup, be absolute and — after following a root-configured symlink — resolve to a regular file executable by the panel user; initial validation failure stops startup. If the validated executable later disappears, becomes invalid, or loses execute permission, Log snapshot requests report `journalctl_unavailable` without stopping ordinary monitoring. At startup the panel also rejects shorthand or globbed xray unit names, resolves `XFORM_XRAY_UNIT` through systemd to its canonical service `Id` (permitting canonical instances such as `xray@edge.service`), and rejects an identity that cannot be resolved unambiguously. Missing namespace files, missing ACLs, an empty namespace, or later reader failures never stop ordinary monitoring.
+`XFORM_JOURNALCTL` (optional, default `/usr/bin/journalctl`) must, at startup, be absolute and — after following a root-configured symlink — resolve to a regular file executable by the panel user; initial validation failure stops startup. The deployment requires journalctl with PCRE2 pattern support for the system-only `--grep` template; the panel never probes for it at runtime — a journalctl without it fails a filtered collection as `command_failed`. If the validated executable later disappears, becomes invalid, or loses execute permission, Log snapshot requests report `journalctl_unavailable` without stopping ordinary monitoring. At startup the panel also rejects shorthand or globbed xray unit names, resolves `XFORM_XRAY_UNIT` through systemd to its canonical service `Id` (permitting canonical instances such as `xray@edge.service`), and rejects an identity that cannot be resolved unambiguously. Missing namespace files, missing ACLs, an empty namespace, or later reader failures never stop ordinary monitoring.
 
 ### Config snapshot
 

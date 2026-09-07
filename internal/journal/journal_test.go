@@ -128,9 +128,14 @@ func record(cursor, timestamp, message string, extra ...string) string {
 
 func collect(t *testing.T, reader *Reader, source Source) (Snapshot, error) {
 	t.Helper()
+	return collectFiltered(t, reader, source, FilterAll)
+}
+
+func collectFiltered(t *testing.T, reader *Reader, source Source, filter Filter) (Snapshot, error) {
+	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	return reader.Collect(ctx, source)
+	return reader.Collect(ctx, source, filter)
 }
 
 // reasonOf asserts the error carries a stable collection reason.
@@ -271,6 +276,76 @@ func TestCollectSelectsTheUnitFromTheSourceAlone(t *testing.T) {
 				t.Errorf("args %q do not carry %q", command.Args, want)
 			}
 		})
+	}
+}
+
+func TestCollectSelectsTheRecordFilterFromTheCallerChoiceAlone(t *testing.T) {
+	t.Run("system", func(t *testing.T) {
+		reader, commands := newReader(t, processWith("", nil))
+
+		snapshot, err := collectFiltered(t, reader, SourceXray, FilterSystem)
+
+		if err != nil {
+			t.Fatalf("Collect() error = %v", err)
+		}
+		if snapshot.Filter != FilterSystem {
+			t.Errorf("Filter = %q, want %q", snapshot.Filter, FilterSystem)
+		}
+		// The system template's full argv: the fixed command plus one attached
+		// --grep=<pinned pattern>, and nothing caller-shaped. The pinned PCRE2
+		// negative lookahead drops Access records — a timestamp followed by
+		// "from " with no [Level] marker — and keeps everything else, crash
+		// output included. --invert is absent on the deployed systemd, so the
+		// pattern inverts instead (ADR-0008).
+		wantArgs := []string{
+			"--system",
+			"--namespace=xform",
+			"--unit=xray.service",
+			"--grep=^(?![0-9]{4}/[0-9]{2}/[0-9]{2} [0-9]{2}:[0-9]{2}:[0-9]{2}(\\.[0-9]+)? from )",
+			"--lines=500",
+			"--reverse",
+			"--output=json",
+			"--output-fields=__CURSOR,__REALTIME_TIMESTAMP,_SYSTEMD_UNIT,UNIT,OBJECT_SYSTEMD_UNIT,COREDUMP_UNIT,SYSLOG_IDENTIFIER,_PID,PRIORITY,MESSAGE",
+			"--no-pager",
+		}
+		command := (*commands)[0]
+		if !slices.Equal(command.Args, wantArgs) {
+			t.Errorf("args = %q, want %q", command.Args, wantArgs)
+		}
+		// Attached, like the unit: the pattern can never become another option.
+		if slices.Contains(command.Args, "--grep") {
+			t.Errorf("args %q carry a bare --grep; the pattern must be attached", command.Args)
+		}
+	})
+
+	t.Run("all", func(t *testing.T) {
+		reader, commands := newReader(t, processWith("", nil))
+
+		snapshot, err := collectFiltered(t, reader, SourceXray, FilterAll)
+
+		if err != nil {
+			t.Fatalf("Collect() error = %v", err)
+		}
+		if snapshot.Filter != FilterAll {
+			t.Errorf("Filter = %q, want %q", snapshot.Filter, FilterAll)
+		}
+		for _, arg := range (*commands)[0].Args {
+			if strings.HasPrefix(arg, "--grep") {
+				t.Errorf("args %q carry %q; the unfiltered template takes no grep", (*commands)[0].Args, arg)
+			}
+		}
+	})
+}
+
+func TestCollectRejectsAnUnknownFilter(t *testing.T) {
+	reader, commands := newReader(t, processWith("", nil))
+
+	// Nothing outside the two fixed filters may reach journalctl.
+	if _, err := collectFiltered(t, reader, SourceXray, Filter("everything")); err == nil {
+		t.Fatal("Collect() with an unknown filter = nil error, want a failure")
+	}
+	if len(*commands) != 0 {
+		t.Errorf("started %d processes, want none", len(*commands))
 	}
 }
 
@@ -443,7 +518,7 @@ func TestCollectTimesOutAndReapsTheChild(t *testing.T) {
 	// The contract's five-second bound, narrowed so the test does not wait it out.
 	reader.limits.timeout = 20 * time.Millisecond
 
-	_, err := reader.Collect(context.Background(), SourcePanel)
+	_, err := reader.Collect(context.Background(), SourcePanel, FilterAll)
 
 	if got := reasonOf(t, err); got != ReasonTimeout {
 		t.Errorf("reason = %q, want %q", got, ReasonTimeout)
@@ -463,7 +538,7 @@ func TestCollectCancellationKillsAndReapsTheChild(t *testing.T) {
 		time.Sleep(10 * time.Millisecond)
 		cancel()
 	}()
-	_, err := reader.Collect(ctx, SourcePanel)
+	_, err := reader.Collect(ctx, SourcePanel, FilterAll)
 
 	// A client disconnect is not a reportable collection failure; it is the
 	// caller's own cancellation coming back.
@@ -494,7 +569,7 @@ func TestCollectHoldsOneProcessSlotGlobally(t *testing.T) {
 	go func() {
 		defer close(done)
 		close(running)
-		_, _ = reader.Collect(context.Background(), SourcePanel)
+		_, _ = reader.Collect(context.Background(), SourcePanel, FilterAll)
 	}()
 	<-running
 	// Give the first collection time to claim the slot.
@@ -635,7 +710,7 @@ func TestCollectTimeoutOutranksTheChildsExitStatus(t *testing.T) {
 
 	// The kill makes the child exit non-zero; the deadline is still the
 	// reason the collection failed.
-	_, err := reader.Collect(context.Background(), SourcePanel)
+	_, err := reader.Collect(context.Background(), SourcePanel, FilterAll)
 
 	if got := reasonOf(t, err); got != ReasonTimeout {
 		t.Errorf("reason = %q, want %q", got, ReasonTimeout)
@@ -667,7 +742,7 @@ func TestCollectEndsAChildFloodingItsStderr(t *testing.T) {
 	// Long enough that a deadline could not be what ends this.
 	reader.limits.timeout = 5 * time.Second
 
-	_, err := reader.Collect(context.Background(), SourcePanel)
+	_, err := reader.Collect(context.Background(), SourcePanel, FilterAll)
 
 	if got := reasonOf(t, err); got != ReasonOutputTooLarge {
 		t.Errorf("reason = %q, want %q", got, ReasonOutputTooLarge)
@@ -699,7 +774,7 @@ func TestCollectKeepsASnapshotThatMerelyWarnedAboutDenial(t *testing.T) {
 func TestCollectRejectsAnUnknownSourceWithoutAStableReason(t *testing.T) {
 	reader, commands := newReader(t, processWith("", nil))
 
-	_, err := reader.Collect(context.Background(), Source("../../etc"))
+	_, err := reader.Collect(context.Background(), Source("../../etc"), FilterAll)
 
 	if err == nil {
 		t.Fatal("Collect() with an unknown source = nil error, want a failure")

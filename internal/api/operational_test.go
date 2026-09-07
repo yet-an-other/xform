@@ -17,21 +17,25 @@ import (
 	"github.com/yet-an-other/xform/internal/session"
 )
 
-// stubLogs serves one canned Log snapshot, recording the sources asked for.
+// stubLogs serves one canned Log snapshot, recording the sources and
+// filters asked for.
 type stubLogs struct {
 	snapshot journal.Snapshot
 	err      error
 
 	collected []journal.Source
+	filters   []journal.Filter
 }
 
-func (s *stubLogs) Collect(_ context.Context, source journal.Source) (journal.Snapshot, error) {
+func (s *stubLogs) Collect(_ context.Context, source journal.Source, filter journal.Filter) (journal.Snapshot, error) {
 	s.collected = append(s.collected, source)
+	s.filters = append(s.filters, filter)
 	if s.err != nil {
 		return journal.Snapshot{}, s.err
 	}
 	snapshot := s.snapshot
 	snapshot.Source = source
+	snapshot.Filter = filter
 	return snapshot, nil
 }
 
@@ -281,6 +285,69 @@ func TestLogSnapshotEndpointReturnsTheContractPayload(t *testing.T) {
 	}
 }
 
+func TestXrayLogSnapshotAcceptsTheRecordFilter(t *testing.T) {
+	tests := []struct {
+		name       string
+		query      string
+		wantFilter journal.Filter
+	}{
+		{name: "absent means all", query: "", wantFilter: journal.FilterAll},
+		{name: "explicit all", query: "?filter=all", wantFilter: journal.FilterAll},
+		{name: "system", query: "?filter=system", wantFilter: journal.FilterSystem},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			logs := &stubLogs{}
+			handler := newOperationalHandler(api.OperationalSources{Logs: logs, Config: &stubConfig{}})
+
+			response := authenticatedGet(t, handler, "/api/v1/logs/xray"+test.query)
+
+			if response.Code != http.StatusOK {
+				t.Fatalf("status = %d, want %d; body = %s", response.Code, http.StatusOK, response.Body)
+			}
+			if !reflect.DeepEqual(logs.filters, []journal.Filter{test.wantFilter}) {
+				t.Errorf("filters = %v, want one %q collection", logs.filters, test.wantFilter)
+			}
+			// The snapshot self-describes: the response echoes the applied
+			// filter, so the dialog never mislabels a filtered view.
+			if body := decodeObject(t, response); body["filter"] != string(test.wantFilter) {
+				t.Errorf("filter = %v, want %q echoed", body["filter"], test.wantFilter)
+			}
+		})
+	}
+}
+
+func TestLogSnapshotEndpointsRejectAnUnknownFilter(t *testing.T) {
+	logs := &stubLogs{}
+	handler := newOperationalHandler(api.OperationalSources{Logs: logs, Config: &stubConfig{}})
+
+	// An unknown filter value fails loudly rather than silently meaning
+	// "all"; the panel endpoint keeps rejecting every parameter, filter
+	// included.
+	requests := []string{
+		"/api/v1/logs/xray?filter=everything",
+		"/api/v1/logs/xray?filter",
+		"/api/v1/logs/xray?filter=all&filter=system",
+		"/api/v1/logs/xray?filter=all&lines=1000",
+		"/api/v1/logs/panel?filter=all",
+		"/api/v1/logs/panel?filter=system",
+	}
+	for _, target := range requests {
+		response := authenticatedGet(t, handler, target)
+
+		if response.Code != http.StatusBadRequest {
+			t.Errorf("GET %s: status = %d, want %d", target, response.Code, http.StatusBadRequest)
+			continue
+		}
+		if body := decodeObject(t, response); body["error"] != "invalid_request" {
+			t.Errorf("GET %s: body = %v, want invalid_request", target, body)
+		}
+	}
+	if len(logs.collected) != 0 {
+		t.Errorf("collected = %v, want no collection for rejected requests", logs.collected)
+	}
+}
+
 func TestLogSnapshotEndpointsCollectTheirOwnFixedSource(t *testing.T) {
 	logs := &stubLogs{snapshot: journal.Snapshot{Unit: "xray.service", Limit: 500}}
 	handler := newOperationalHandler(api.OperationalSources{Logs: logs, Config: &stubConfig{}})
@@ -345,7 +412,7 @@ func TestEmptyLogSnapshotIsASuccess(t *testing.T) {
 	if !ok || len(entries) != 0 {
 		t.Errorf("entries = %#v, want an empty list rather than null", body["entries"])
 	}
-	wantKeys := []string{"captured_at", "source", "unit", "limit", "entry_count", "entries"}
+	wantKeys := []string{"captured_at", "source", "filter", "unit", "limit", "entry_count", "entries"}
 	if len(body) != len(wantKeys) {
 		t.Errorf("body keys = %v, want exactly %v", body, wantKeys)
 	}

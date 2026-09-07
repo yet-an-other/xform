@@ -1,4 +1,4 @@
-import { useCallback, type RefObject } from "react";
+import { useCallback, useState, type RefObject } from "react";
 
 import { Modal, ModalClose, ModalFooter } from "@/components/ui/modal";
 import { fetchLogSnapshot, type LogSource } from "@/lib/api";
@@ -38,7 +38,17 @@ export function LogSnapshotModal({
   // the only thing that asks again (ADR-0006). A failure after a successful
   // load keeps the entries and the capture time that produced them, which is
   // what refreshFailed names; an initial failure has nothing to keep.
-  const collect = useCallback((signal: AbortSignal) => fetchLogSnapshot(source, signal), [source]);
+  //
+  // hideAccess is the xray viewer's one filter choice (SPEC §6):
+  // component-local, defaulting to the full journal, and gone with the
+  // dialog — the Viewer keeps no data between openings. Flipping it is a new
+  // ask, so the collect below changes identity and useCollection gathers a
+  // fresh snapshot rather than re-cutting the cached one in the browser.
+  const [hideAccess, setHideAccess] = useState(false);
+  const collect = useCallback(
+    (signal: AbortSignal) => fetchLogSnapshot(source, hideAccess ? "system" : "all", signal),
+    [source, hideAccess],
+  );
   const {
     data: snapshot,
     error,
@@ -60,6 +70,21 @@ export function LogSnapshotModal({
           </p>
         </div>
         <div className="ml-auto flex shrink-0 items-center gap-2">
+          {source === "xray" ? (
+            <button
+              type="button"
+              aria-pressed={hideAccess}
+              onClick={() => setHideAccess((hide) => !hide)}
+              className={cn(
+                "rounded-lg border px-3 py-1.5 text-[0.78rem] font-bold tracking-[0.08em] uppercase",
+                hideAccess
+                  ? "border-primary/50 text-primary"
+                  : "border-border text-muted-foreground hover:text-foreground",
+              )}
+            >
+              Hide access records
+            </button>
+          ) : null}
           <button
             type="button"
             disabled={loading}
@@ -77,7 +102,9 @@ export function LogSnapshotModal({
           <>
             <span>
               <strong className="text-foreground">
-                {snapshot.entry_count} {snapshot.entry_count === 1 ? "entry" : "entries"}
+                {snapshot.filter === "system"
+                  ? `${snapshot.entry_count} system records`
+                  : `${snapshot.entry_count} ${snapshot.entry_count === 1 ? "entry" : "entries"}`}
               </strong>{" "}
               · latest available
             </span>

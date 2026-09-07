@@ -281,7 +281,7 @@ func TestNormalizeRejectsRatherThanSkippingOneBadRecord(t *testing.T) {
 		`{"__CURSOR":"","__REALTIME_TIMESTAMP":"1723800000000000"}` + "\n"
 	reader, _ := newReader(t, processWith(stdout, nil))
 
-	snapshot, err := reader.Collect(context.Background(), SourcePanel)
+	snapshot, err := reader.Collect(context.Background(), SourcePanel, FilterAll)
 
 	if err == nil {
 		t.Fatal("Collect() error = nil, want the snapshot rejected")

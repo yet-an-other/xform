@@ -26,10 +26,13 @@ const (
 	configSnapshotUnavailable = "config snapshot unavailable"
 )
 
-// logSnapshotResponse is GET /api/v1/logs/{source} (SPEC §8).
+// logSnapshotResponse is GET /api/v1/logs/{source} (SPEC §8). filter echoes
+// the record filter the snapshot was collected under, so a snapshot
+// self-describes and the dialog never mislabels a filtered view.
 type logSnapshotResponse struct {
 	CapturedAt int64          `json:"captured_at"`
 	Source     journal.Source `json:"source"`
+	Filter     journal.Filter `json:"filter"`
 	Unit       string         `json:"unit"`
 	Limit      int            `json:"limit"`
 	EntryCount int            `json:"entry_count"`
@@ -77,6 +80,7 @@ func logSnapshotJSON(snapshot journal.Snapshot) logSnapshotResponse {
 	return logSnapshotResponse{
 		CapturedAt: snapshot.CapturedAt.Unix(),
 		Source:     snapshot.Source,
+		Filter:     snapshot.Filter,
 		Unit:       snapshot.Unit,
 		Limit:      snapshot.Limit,
 		// The count is the entries actually collected, never the limit: an
@@ -95,20 +99,63 @@ func configSnapshotJSON(snapshot configsnapshot.Snapshot) configSnapshotResponse
 	}
 }
 
-// logSnapshotHandler serves one fixed source. The source is bound here at
-// route registration, never read from the request: SPEC §8's endpoints are the
-// whole vocabulary.
+// logSnapshotHandler serves one fixed source that accepts no parameter.
+// The source is bound here at route registration, never read from the
+// request: SPEC §8's endpoints are the whole vocabulary.
 func logSnapshotHandler(logs logSnapshots, source journal.Source) http.HandlerFunc {
 	return func(response http.ResponseWriter, request *http.Request) {
 		if rejectedQuery(response, request) {
 			return
 		}
-		snapshot, err := logs.Collect(request.Context(), source)
+		snapshot, err := logs.Collect(request.Context(), source, journal.FilterAll)
 		if err != nil {
 			writeLogFailure(response, request, err)
 			return
 		}
 		writeJSON(response, http.StatusOK, logSnapshotJSON(snapshot))
+	}
+}
+
+// xrayLogSnapshotHandler serves the xray log snapshot: the one endpoint that
+// accepts a parameter, the record filter enum (SPEC §8). The value selects
+// one of the journal module's compiled-in argv templates; it never becomes
+// an argument itself.
+func xrayLogSnapshotHandler(logs logSnapshots) http.HandlerFunc {
+	return func(response http.ResponseWriter, request *http.Request) {
+		filter, ok := requestedFilter(response, request)
+		if !ok {
+			return
+		}
+		snapshot, err := logs.Collect(request.Context(), journal.SourceXray, filter)
+		if err != nil {
+			writeLogFailure(response, request, err)
+			return
+		}
+		writeJSON(response, http.StatusOK, logSnapshotJSON(snapshot))
+	}
+}
+
+// requestedFilter reads the one parameter the xray log endpoint accepts:
+// filter=all (the default, also when absent) or filter=system. Anything else
+// — another key, a repeated or empty filter, an unknown value — is a caller
+// trying to widen a deliberately fixed collection, rejected as
+// invalid_request rather than silently read as "all" (SPEC §8).
+func requestedFilter(response http.ResponseWriter, request *http.Request) (journal.Filter, bool) {
+	query := request.URL.Query()
+	if len(query) == 0 {
+		return journal.FilterAll, true
+	}
+	values, present := query["filter"]
+	if !present || len(query) != 1 || len(values) != 1 {
+		writeJSON(response, http.StatusBadRequest, map[string]string{"error": "invalid_request"})
+		return "", false
+	}
+	switch filter := journal.Filter(values[0]); filter {
+	case journal.FilterAll, journal.FilterSystem:
+		return filter, true
+	default:
+		writeJSON(response, http.StatusBadRequest, map[string]string{"error": "invalid_request"})
+		return "", false
 	}
 }
 

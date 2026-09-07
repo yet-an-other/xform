@@ -413,10 +413,13 @@ export interface LogEntry {
 
 // LogSnapshot is GET /api/v1/logs/{source}: one bounded, newest-first,
 // point-in-time read — never a live stream. entry_count is what was actually
-// collected; limit is the ceiling it was collected under.
+// collected; limit is the ceiling it was collected under. filter echoes the
+// record filter the snapshot was collected under, so a filtered snapshot
+// self-describes and the dialog never mislabels it.
 export interface LogSnapshot {
   captured_at: number;
   source: LogSource;
+  filter: LogFilter;
   unit: string;
   limit: number;
   entry_count: number;
@@ -424,6 +427,10 @@ export interface LogSnapshot {
 }
 
 export type LogSource = "panel" | "xray";
+
+// LogFilter is the one parameter the xray log endpoint accepts: the whole
+// unit journal ("all", the default) or System records only ("system").
+export type LogFilter = "all" | "system";
 
 // ConfigSnapshot is GET /api/v1/xray/config: the exact text observed during
 // one bounded read, never parsed or reformatted. path is the configured path
@@ -487,8 +494,14 @@ async function getSnapshot<T>(path: string, signal?: AbortSignal): Promise<T> {
   return (await response.json()) as T;
 }
 
-export function fetchLogSnapshot(source: LogSource, signal?: AbortSignal): Promise<LogSnapshot> {
-  return getSnapshot<LogSnapshot>(`api/v1/logs/${source}`, signal);
+export function fetchLogSnapshot(
+  source: LogSource,
+  filter: LogFilter = "all",
+  signal?: AbortSignal,
+): Promise<LogSnapshot> {
+  // The default stays parameterless; only a filtered ask carries the enum.
+  const query = filter === "all" ? "" : `?filter=${filter}`;
+  return getSnapshot<LogSnapshot>(`api/v1/logs/${source}${query}`, signal);
 }
 
 export function fetchConfigSnapshot(signal?: AbortSignal): Promise<ConfigSnapshot> {

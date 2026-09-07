@@ -2,12 +2,15 @@
 // fixed units the Panel is allowed to read: its own service and the
 // configured xray service (SPEC §8).
 //
-// The only choice a caller has is which of those two sources to read. Unit
-// names, counts, filters, cursors, time ranges, and raw journalctl arguments
-// are not accepted from anywhere, because journalctl's --unit= expands globs
-// and a fixed argv is not by itself a security boundary
-// (docs/research/bounded-journald-access.md §"Unit-name and argument safety").
-// The bounds and the process seam are unexported for the same reason.
+// The caller's vocabulary is two fixed choices: which of the two sources to
+// read, and which record Filter to collect under. Unit names, counts,
+// cursors, time ranges, and raw journalctl arguments are not accepted from
+// anywhere, because journalctl's --unit= expands globs and a fixed argv is
+// not by itself a security boundary
+// (docs/research/bounded-journald-access.md §"Unit-name and argument
+// safety"). A filter value selects a compiled-in argv template; it never
+// becomes an argument itself (ADR-0008). The bounds and the process seam are
+// unexported for the same reason.
 package journal
 
 import (
@@ -27,6 +30,26 @@ const (
 	SourcePanel Source = "panel"
 	SourceXray  Source = "xray"
 )
+
+// Filter is the caller's second fixed choice: which of the source's records
+// a Log snapshot collects. FilterAll is the whole unit journal; FilterSystem
+// drops Access records and keeps System records (CONTEXT.md).
+type Filter string
+
+const (
+	FilterAll    Filter = "all"
+	FilterSystem Filter = "system"
+)
+
+// accessRecordPattern is the pinned PCRE2 negative lookahead the system-only
+// argv template adds as one attached --grep=<value>: an Access record is a
+// timestamp followed by "from " with no [Level] marker, so the lookahead
+// drops exactly those and keeps every other record, crash output included.
+// --invert is deliberately not used — it is absent on the deployed systemd —
+// so the pattern inverts instead (ADR-0008). Filtering happens inside the
+// journal traversal, so the --lines bound still selects the newest matching
+// records rather than the survivors of the newest raw records.
+const accessRecordPattern = `^(?![0-9]{4}/[0-9]{2}/[0-9]{2} [0-9]{2}:[0-9]{2}:[0-9]{2}(\.[0-9]+)? from )`
 
 // PanelUnit is compiled in rather than configured: the Panel's own unit name
 // is fixed by the deployment this binary ships with.
@@ -96,6 +119,7 @@ type Entry struct {
 type Snapshot struct {
 	CapturedAt time.Time
 	Source     Source
+	Filter     Filter
 	Unit       string
 	Limit      int
 	Entries    []Entry
@@ -152,9 +176,14 @@ func NewReader(executable, xrayUnit string) *Reader {
 	}
 }
 
-// Collect reads the latest bounded snapshot for one fixed source.
-func (r *Reader) Collect(ctx context.Context, source Source) (Snapshot, error) {
+// Collect reads the latest bounded snapshot for one fixed source under one
+// fixed record filter.
+func (r *Reader) Collect(ctx context.Context, source Source, filter Filter) (Snapshot, error) {
 	unit, err := r.unitFor(source)
+	if err != nil {
+		return Snapshot{}, err
+	}
+	args, err := arguments(unit, r.limits.entries, filter)
 	if err != nil {
 		return Snapshot{}, err
 	}
@@ -177,7 +206,7 @@ func (r *Reader) Collect(ctx context.Context, source Source) (Snapshot, error) {
 
 	process, err := r.startChild(runCtx, childCommand{
 		Path: r.executable,
-		Args: arguments(unit, r.limits.entries),
+		Args: args,
 		Env:  fixedEnvironment(),
 	})
 	if err != nil {
@@ -214,6 +243,7 @@ func (r *Reader) Collect(ctx context.Context, source Source) (Snapshot, error) {
 	return Snapshot{
 		CapturedAt: r.clock(),
 		Source:     source,
+		Filter:     filter,
 		Unit:       unit,
 		Limit:      r.limits.entries,
 		Entries:    entries,
@@ -370,21 +400,32 @@ func deniedAccess(stderrText string) bool {
 		strings.Contains(lowered, "insufficient permissions")
 }
 
-// arguments builds the fixed argv. The unit rides as one attached
-// --unit=<value> argument so a value opening with a dash can never become
-// another option, and --all is never passed: it would disable journalctl's
-// own oversized-field protection.
-func arguments(unit string, entries int) []string {
-	return []string{
+// arguments builds the fixed argv the filter selects. The unit rides as one
+// attached --unit=<value> argument so a value opening with a dash can never
+// become another option; --all is never passed: it would disable
+// journalctl's own oversized-field protection. An unrecognized filter is a
+// programming error rather than a collection failure, for the same reason an
+// unrecognized source is: it never reaches journalctl.
+func arguments(unit string, entries int, filter Filter) ([]string, error) {
+	args := []string{
 		"--system",
 		"--namespace=" + namespace,
 		"--unit=" + unit,
+	}
+	switch filter {
+	case FilterAll:
+	case FilterSystem:
+		args = append(args, "--grep="+accessRecordPattern)
+	default:
+		return nil, fmt.Errorf("unknown record filter %q", filter)
+	}
+	return append(args,
 		fmt.Sprintf("--lines=%d", entries),
 		"--reverse",
 		"--output=json",
-		"--output-fields=" + outputFields,
+		"--output-fields="+outputFields,
 		"--no-pager",
-	}
+	), nil
 }
 
 // fixedEnvironment is the child's whole environment: deterministic enough for

@@ -71,7 +71,7 @@ The exact text of the configured xray file read when requested. It is distinct f
 _Avoid_: parsed config, formatted config, config export
 
 **Log snapshot**:
-The latest bounded set of journal entries for the Panel or xray, collected when requested. It is a point-in-time view, never a live stream.
+The latest bounded set of journal entries for the Panel or xray, collected when requested. It is a point-in-time view, never a live stream. The xray Log snapshot can be collected under a record filter that keeps System records only (ADR-0008).
 _Avoid_: live logs, log stream, log tail
 
 **Access record**:
