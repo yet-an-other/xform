@@ -33,7 +33,7 @@ func TestParseViewCapturesInboundPorts(t *testing.T) {
 
 // The flow default for a newly attached client (user-management spec §4):
 // copy the inbound's first existing client's flow; with no clients, fall back
-// to xtls-rprx-vision on REALITY tcp/xhttp inbounds and to empty elsewhere.
+// to xtls-rprx-vision on REALITY tcp/raw inbounds and to empty elsewhere.
 func TestDefaultFlow(t *testing.T) {
 	view, err := xrayconfig.ParseView([]byte(`{
 		"inbounds": [
@@ -50,6 +50,8 @@ func TestDefaultFlow(t *testing.T) {
 			 "streamSettings": {"network": "raw", "security": "reality"}},
 			{"tag": "empty-reality-xhttp", "protocol": "vless", "settings": {"clients": []},
 			 "streamSettings": {"network": "xhttp", "security": "reality"}},
+			{"tag": "empty-reality-splithttp", "protocol": "vless", "settings": {"clients": []},
+			 "streamSettings": {"network": "splithttp", "security": "reality"}},
 			{"tag": "empty-reality-ws", "protocol": "vless", "settings": {"clients": []},
 			 "streamSettings": {"network": "ws", "security": "reality"}},
 			{"tag": "empty-tls-tcp", "protocol": "vless", "settings": {"clients": []},
@@ -64,13 +66,14 @@ func TestDefaultFlow(t *testing.T) {
 		flows[inbound.Tag] = xrayconfig.DefaultFlow(inbound)
 	}
 	want := map[string]string{
-		"has-clients":         "xtls-rprx-vision",
-		"first-empty":         "", // the first client's empty flow is copied, not the fallback
-		"empty-reality-tcp":   "xtls-rprx-vision",
-		"empty-reality-raw":   "xtls-rprx-vision",
-		"empty-reality-xhttp": "xtls-rprx-vision",
-		"empty-reality-ws":    "",
-		"empty-tls-tcp":       "",
+		"has-clients":             "xtls-rprx-vision",
+		"first-empty":             "", // the first client's empty flow is copied, not the fallback
+		"empty-reality-tcp":       "xtls-rprx-vision",
+		"empty-reality-raw":       "xtls-rprx-vision",
+		"empty-reality-xhttp":     "", // Vision needs TCP; an XHTTP client connects without a flow
+		"empty-reality-splithttp": "",
+		"empty-reality-ws":        "",
+		"empty-tls-tcp":           "",
 	}
 	for tag, wantFlow := range want {
 		if flows[tag] != wantFlow {

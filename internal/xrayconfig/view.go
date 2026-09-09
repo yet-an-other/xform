@@ -56,8 +56,10 @@ func Managed(inbound Inbound) bool {
 
 // DefaultFlow is the flow a newly attached client gets on this inbound
 // (user-management spec §4): the first existing client's flow, or — with no
-// clients to copy — xtls-rprx-vision on REALITY tcp/xhttp inbounds and empty
-// elsewhere.
+// clients to copy — xtls-rprx-vision on REALITY tcp/raw inbounds and empty
+// elsewhere. XTLS Vision is defined for TCP plus TLS or REALITY only; other
+// transports (xhttp, splithttp, ws, …) need VLESS Encryption, so their
+// clients attach without a flow.
 func DefaultFlow(inbound Inbound) string {
 	if users := inbound.Users(); len(users) > 0 {
 		return users[0].Flow
@@ -66,7 +68,7 @@ func DefaultFlow(inbound Inbound) string {
 		return ""
 	}
 	switch inbound.Transport.Type {
-	case "tcp", "raw", "xhttp", "splithttp":
+	case "tcp", "raw":
 		return "xtls-rprx-vision"
 	}
 	return ""

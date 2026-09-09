@@ -42,7 +42,7 @@ Order per change: **store → file render → API push.**
 
 **Convergence (store wins, with adoption):** a client found in the config but not in the store is adopted into the store; a store user missing from the config is re-rendered and re-pushed; an inbound removed from the config leaves affected users in the store minus that attachment.
 
-**Flow default** for a newly attached client: copy the flow of the inbound's first existing client; fall back to `xtls-rprx-vision` on reality tcp/xhttp inbounds, empty otherwise.
+**Flow default** for a newly attached client: copy the flow of the inbound's first existing client; fall back to `xtls-rprx-vision` on reality tcp/raw inbounds, empty otherwise (XTLS Vision is a TCP-only feature; other transports need VLESS Encryption).
 
 ## 5. Mutation API
 

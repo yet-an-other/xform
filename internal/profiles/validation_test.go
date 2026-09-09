@@ -127,6 +127,27 @@ func TestEvaluateAppliesEffectiveFlowAndVisionCompatibility(t *testing.T) {
 	}
 }
 
+// A REALITY XHTTP inbound attaches clients without a flow (XTLS Vision is
+// TCP-only), so the evaluated Connection profile carries no flow and stays
+// available rather than failing inbound_mismatch.
+func TestEvaluateAllowsRealityXHTTPWithoutFlow(t *testing.T) {
+	xray := parseXray(t, xrayDocument(inboundJSON("main", fixtureID, "", "none", "xhttp", "reality",
+		`,"xhttpSettings":{"path":"/x","host":"origin.example.com","mode":"auto"}`)))
+	security := fmt.Sprintf(`{"type":"reality","server_name":"cover.example.com","public_key":%q,"short_id":"abcd"}`, realityKey)
+	advertised := parseAdvertisements(t, advertisementDocument(advertisementJSON("main", "fronted",
+		`{"type":"xhttp","path":"/x","host":"origin.example.com","mode":"auto"}`, security)))
+	got := profiles.Evaluate(fixtureEmail, false, profiles.Sources{
+		XrayView: xray, XrayAvailable: true,
+		AdvertisementsView: advertised, AdvertisementsConfigured: true, AdvertisementsAvailable: true,
+	})
+	if got.Items[0].Available == nil {
+		t.Fatalf("result = %+v, want available REALITY XHTTP profile", got)
+	}
+	if got.Items[0].Available.Flow != nil {
+		t.Errorf("flow = %q, want no flow", *got.Items[0].Available.Flow)
+	}
+}
+
 func TestEvaluateRejectsUnsupportedDirectTransportFeatures(t *testing.T) {
 	for _, streamExtra := range []string{
 		`,"finalmask":{"type":"unknown"}`,

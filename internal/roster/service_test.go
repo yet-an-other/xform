@@ -457,6 +457,9 @@ const testDocument = `{
     {"tag": "vless-ws", "protocol": "vless", "port": 2053,
      "settings": {"clients": [{"email": "existing@example.com", "id": "uuid-existing"}]},
      "streamSettings": {"network": "ws", "security": "tls"}},
+    {"tag": "vless-xhttp", "protocol": "vless", "port": 8443,
+     "settings": {"clients": []},
+     "streamSettings": {"network": "xhttp", "security": "reality"}},
     {"tag": "trojan", "protocol": "trojan", "settings": {"clients": []}},
     {"protocol": "vless", "settings": {"clients": []}}
   ]
@@ -741,14 +744,33 @@ func TestAddAnswersPendingWhileTheApplyRuns(t *testing.T) {
 func TestInboundOptions(t *testing.T) {
 	h := newHarness(t)
 	options := h.service.InboundOptions()
-	if len(options) != 2 {
-		t.Fatalf("options = %+v, want the two tagged VLESS inbounds", options)
+	if len(options) != 3 {
+		t.Fatalf("options = %+v, want the three tagged VLESS inbounds", options)
 	}
 	if options[0].Tag != "vless-vision" || options[0].Label != "VLESS · Reality · tcp :443" {
 		t.Errorf("option[0] = %+v", options[0])
 	}
 	if options[1].Tag != "vless-ws" || options[1].Label != "VLESS · TLS · ws :2053" {
 		t.Errorf("option[1] = %+v", options[1])
+	}
+	if options[2].Tag != "vless-xhttp" || options[2].Label != "VLESS · Reality · xhttp :8443" {
+		t.Errorf("option[2] = %+v", options[2])
+	}
+}
+
+// An empty REALITY XHTTP inbound attaches clients without a flow: XTLS
+// Vision is a TCP-only feature, so the fallback default is empty (issue #61).
+func TestAddOnEmptyRealityXHTTPAttachesWithoutAFlow(t *testing.T) {
+	h := newHarness(t)
+
+	h.add(t, "alice@example.com", "1d37a118-4f1b-4dc0-9e3c-3426b07518df", []string{"vless-xhttp"})
+
+	plan := h.renderer.lastPlan()
+	if got := plan.Adds["vless-xhttp"]; len(got) != 1 || got[0].Flow != "" {
+		t.Errorf("xhttp render add = %+v, want no flow", got)
+	}
+	if len(h.pusher.pushed) != 1 || h.pusher.pushed[0].Flow != "" {
+		t.Errorf("pushed = %+v, want one push without a flow", h.pusher.pushed)
 	}
 }
 
