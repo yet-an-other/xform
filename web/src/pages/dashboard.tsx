@@ -291,11 +291,20 @@ function UsersTable({
                   ) : null}
                 </TableCell>
                 <TableCell className="py-1.5">
-                  {user.protocol !== null ? (
-                    <>
-                      <span className="text-muted-foreground">{user.protocol} · </span>
-                      {user.security}
-                    </>
+                  {user.labels !== null && user.labels.length > 0 ? (
+                    // One line per attached inbound, config order — the
+                    // connection shapes the user has.
+                    <div className="flex flex-col">
+                      {user.labels.map((label) => (
+                        <span key={`${label.protocol}-${label.security}-${label.transport}`}>
+                          <span className="text-muted-foreground">{label.protocol} · </span>
+                          {label.security}
+                          {label.transport !== "" && label.transport !== "tcp" ? (
+                            <span className="text-muted-foreground"> · {label.transport}</span>
+                          ) : null}
+                        </span>
+                      ))}
+                    </div>
                   ) : (
                     <span className="text-muted-foreground">—</span>
                   )}

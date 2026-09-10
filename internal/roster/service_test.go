@@ -31,6 +31,7 @@ type fakeStore struct {
 	// a Disable racing the caller between the listing and its next read.
 	vanishOnList bool
 	edits        int // writes EditRosterUser actually made
+	labels       []xrayconfig.Label
 }
 
 func newFakeStore() *fakeStore {
@@ -68,8 +69,16 @@ func (f *fakeStore) AddRosterUser(_ context.Context, user users.NewRosterUser, n
 	}
 	f.byMail[email] = record
 	f.byID[strings.ToLower(user.ClientID)] = user.Email
+	f.labels = user.Labels
 	delete(f.disabled, email)
 	return record, nil
+}
+
+// lastLabels returns the most recent mutation's seeded table labels.
+func (f *fakeStore) lastLabels() []xrayconfig.Label {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return slices.Clone(f.labels)
 }
 
 func (f *fakeStore) RosterRecord(_ context.Context, email string) (users.RosterRecord, error) {
@@ -245,6 +254,7 @@ func (f *fakeStore) EditRosterUser(_ context.Context, email string, edit users.R
 	after.UpdatedAt = now.Unix()
 	f.byMail[key] = after
 	f.byID[strings.ToLower(after.ClientID)] = before.Email
+	f.labels = edit.Labels
 	f.edits++
 	return after, nil
 }
@@ -771,6 +781,23 @@ func TestAddOnEmptyRealityXHTTPAttachesWithoutAFlow(t *testing.T) {
 	}
 	if len(h.pusher.pushed) != 1 || h.pusher.pushed[0].Flow != "" {
 		t.Errorf("pushed = %+v, want one push without a flow", h.pusher.pushed)
+	}
+}
+
+// The attach-time seed lists every attached inbound's label — the parser's
+// rule — in config order, so a user on vision TCP and XHTTP REALITY carries
+// both lines from the first moment, whatever order the tags were given in.
+func TestAddSeedsEveryAttachedInboundLabel(t *testing.T) {
+	h := newHarness(t)
+
+	h.add(t, "alice@example.com", "1d37a118-4f1b-4dc0-9e3c-3426b07518df", []string{"vless-xhttp", "vless-vision"})
+
+	want := []xrayconfig.Label{
+		{Protocol: "VLESS", Security: "XTLS-Reality", Transport: "tcp"},
+		{Protocol: "VLESS", Security: "Reality", Transport: "xhttp"},
+	}
+	if got := h.store.lastLabels(); !slices.Equal(got, want) {
+		t.Errorf("seeded labels = %+v, want %+v", got, want)
 	}
 }
 

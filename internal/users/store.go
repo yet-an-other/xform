@@ -12,6 +12,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/yet-an-other/xform/internal/xrayconfig"
+
 	_ "modernc.org/sqlite" // pure-Go driver — no cgo, static binary preserved (SPEC.md §4)
 )
 
@@ -41,8 +43,7 @@ func Open(path string) (*Store, error) {
 	if _, err := db.Exec(`
 		CREATE TABLE IF NOT EXISTS users (
 			email            TEXT PRIMARY KEY,        -- identity; email change = new row
-			protocol         TEXT,                    -- from config parse
-			security         TEXT,                    -- from config parse
+			labels           TEXT,                    -- JSON array of per-inbound labels, from config parse
 			up_bytes_total   INTEGER NOT NULL DEFAULT 0,  -- durable
 			down_bytes_total INTEGER NOT NULL DEFAULT 0,
 			last_seen        INTEGER,                 -- unix seconds, NULL = never
@@ -85,6 +86,12 @@ func Open(path string) (*Store, error) {
 		_ = db.Close()
 		return nil, err
 	}
+	// Databases from before per-inbound labels carry protocol/security
+	// columns; the pair folds into a one-entry labels array and drops.
+	if err := migrateLabels(db); err != nil {
+		_ = db.Close()
+		return nil, err
+	}
 	// The xray row's durable aggregate totals — panel-level state hosted here
 	// because the Store owns the database file. Exactly one row (id = 1).
 	if _, err := db.Exec(`
@@ -118,6 +125,37 @@ func migrateGoneToDisabled(db *sql.DB, table string) error {
 	case !columns["disabled"]:
 		if _, err := db.Exec(fmt.Sprintf(`ALTER TABLE %s ADD COLUMN disabled INTEGER NOT NULL DEFAULT 0`, table)); err != nil {
 			return fmt.Errorf("migrate %s schema: %w", table, err)
+		}
+	}
+	return nil
+}
+
+// migrateLabels moves the users table from the single protocol/security
+// pair to the per-inbound labels array: the old pair becomes the array's
+// one entry (transport unknown — the next config parse resyncs the true
+// list), then the old columns drop. A database already on labels is
+// untouched.
+func migrateLabels(db *sql.DB) error {
+	columns, err := tableColumns(db, "users")
+	if err != nil {
+		return fmt.Errorf("inspect users schema: %w", err)
+	}
+	if !columns["protocol"] {
+		return nil
+	}
+	if _, err := db.Exec(`ALTER TABLE users ADD COLUMN labels TEXT`); err != nil {
+		return fmt.Errorf("migrate users schema: %w", err)
+	}
+	if _, err := db.Exec(`
+		UPDATE users SET labels = CASE
+			WHEN protocol IS NULL AND security IS NULL THEN NULL
+			ELSE json_array(json_object('protocol', protocol, 'security', security, 'transport', ''))
+		END`); err != nil {
+		return fmt.Errorf("migrate users labels: %w", err)
+	}
+	for _, column := range []string{"protocol", "security"} {
+		if _, err := db.Exec(`ALTER TABLE users DROP COLUMN ` + column); err != nil {
+			return fmt.Errorf("migrate users schema: %w", err)
 		}
 	}
 	return nil
@@ -176,14 +214,13 @@ var (
 	ErrRosterNotFound = errors.New("roster record not found")
 )
 
-// NewRosterUser is one panel-added user to store. Protocol and Security are
-// the table labels for the row until the next config parse resyncs them.
+// NewRosterUser is one panel-added user to store. Labels are the table
+// lines for the row until the next config parse resyncs them.
 type NewRosterUser struct {
 	Email    string
 	ClientID string
 	Inbounds []string
-	Protocol string
-	Security string
+	Labels   []xrayconfig.Label
 }
 
 // RosterRecord is the stored roster row returned to the mutation API.
@@ -264,13 +301,16 @@ func (s *Store) AddRosterUser(ctx context.Context, user NewRosterUser, now time.
 		VALUES (?, ?, ?, ?, ?)`, user.Email, user.ClientID, string(encoded), stamp, stamp); err != nil {
 		return RosterRecord{}, fmt.Errorf("insert roster row: %w", err)
 	}
+	encodedLabels, err := json.Marshal(user.Labels)
+	if err != nil {
+		return RosterRecord{}, fmt.Errorf("encode labels: %w", err)
+	}
 	if _, err := tx.ExecContext(ctx, `
-		INSERT INTO users (email, protocol, security, disabled, first_seen)
-		VALUES (?, ?, ?, 0, ?)
+		INSERT INTO users (email, labels, disabled, first_seen)
+		VALUES (?, ?, 0, ?)
 		ON CONFLICT(email) DO UPDATE SET
-			protocol = excluded.protocol,
-			security = excluded.security,
-			disabled = 0`, user.Email, user.Protocol, user.Security, stamp); err != nil {
+			labels = excluded.labels,
+			disabled = 0`, user.Email, string(encodedLabels), stamp); err != nil {
 		return RosterRecord{}, fmt.Errorf("upsert user row: %w", err)
 	}
 	if err := tx.Commit(); err != nil {
@@ -469,13 +509,11 @@ func (s *Store) EnableRosterUser(ctx context.Context, email string, now time.Tim
 // RosterEdit is one edit mutation's stored fields (user-management spec
 // §5): a nil ClientID keeps the stored credential; nil Inbounds keeps the
 // stored attachment set while an empty (non-nil) set detaches every
-// inbound. Protocol and Security relabel the dashboard row for the new
-// attachment set.
+// inbound. Labels relabel the dashboard row for the new attachment set.
 type RosterEdit struct {
 	ClientID *string
 	Inbounds []string
-	Protocol string
-	Security string
+	Labels   []xrayconfig.Label
 }
 
 // RosterRecord returns the stored roster record for email — the before
@@ -548,16 +586,20 @@ func (s *Store) EditRosterUser(ctx context.Context, email string, edit RosterEdi
 	}
 
 	// The no-op probe: same credential, same attachment set, same labels.
-	var protocol, security sql.NullString
+	var storedLabels sql.NullString
 	switch err := s.db.QueryRowContext(ctx,
-		`SELECT protocol, security FROM users WHERE lower(email) = lower(?)`, before.Email,
-	).Scan(&protocol, &security); {
+		`SELECT labels FROM users WHERE lower(email) = lower(?)`, before.Email,
+	).Scan(&storedLabels); {
 	case errors.Is(err, sql.ErrNoRows): // no dashboard row yet — a label write is due
 	case err != nil:
 		return RosterRecord{}, fmt.Errorf("read stored labels: %w", err)
 	default:
+		var stored []xrayconfig.Label
+		if storedLabels.Valid { // labels is a JSON array; tolerate malformed rows
+			_ = json.Unmarshal([]byte(storedLabels.String), &stored)
+		}
 		if clientID == before.ClientID && slices.Equal(inbounds, before.Inbounds) &&
-			edit.Protocol == protocol.String && edit.Security == security.String {
+			slices.Equal(stored, edit.Labels) {
 			return before, nil
 		}
 	}
@@ -578,14 +620,17 @@ func (s *Store) EditRosterUser(ctx context.Context, email string, edit RosterEdi
 		clientID, string(encoded), stamp, before.Email); err != nil {
 		return RosterRecord{}, fmt.Errorf("update roster row: %w", err)
 	}
+	encodedLabels, err := json.Marshal(edit.Labels)
+	if err != nil {
+		return RosterRecord{}, fmt.Errorf("encode labels: %w", err)
+	}
 	if _, err := tx.ExecContext(ctx, `
-		INSERT INTO users (email, protocol, security, disabled, first_seen)
-		VALUES (?, ?, ?, 0, ?)
+		INSERT INTO users (email, labels, disabled, first_seen)
+		VALUES (?, ?, 0, ?)
 		ON CONFLICT(email) DO UPDATE SET
-			protocol = excluded.protocol,
-			security = excluded.security,
+			labels = excluded.labels,
 			disabled = 0`,
-		before.Email, edit.Protocol, edit.Security, stamp); err != nil {
+		before.Email, string(encodedLabels), stamp); err != nil {
 		return RosterRecord{}, fmt.Errorf("relabel user row: %w", err)
 	}
 	if err := tx.Commit(); err != nil {
@@ -704,11 +749,10 @@ func syncLabels(ctx context.Context, tx *sql.Tx, roster map[string]RosterUser, n
 	}
 
 	stmt, err := tx.PrepareContext(ctx, `
-		INSERT INTO users (email, protocol, security, disabled, first_seen)
-		VALUES (?, ?, ?, 0, ?)
+		INSERT INTO users (email, labels, disabled, first_seen)
+		VALUES (?, ?, 0, ?)
 		ON CONFLICT(email) DO UPDATE SET
-			protocol = excluded.protocol,
-			security = excluded.security,
+			labels = excluded.labels,
 			disabled = CASE WHEN EXISTS (
 				SELECT 1 FROM roster r WHERE lower(r.email) = lower(users.email) AND r.disabled = 1
 			) THEN users.disabled ELSE 0 END`)
@@ -718,7 +762,11 @@ func syncLabels(ctx context.Context, tx *sql.Tx, roster map[string]RosterUser, n
 	defer func() { _ = stmt.Close() }()
 
 	for email, user := range roster {
-		if _, err := stmt.ExecContext(ctx, email, user.Protocol, user.Security, now.Unix()); err != nil {
+		encoded, err := json.Marshal(user.Labels)
+		if err != nil {
+			return fmt.Errorf("sync roster for %s: %w", email, err)
+		}
+		if _, err := stmt.ExecContext(ctx, email, string(encoded), now.Unix()); err != nil {
 			return fmt.Errorf("sync roster for %s: %w", email, err)
 		}
 	}
@@ -838,7 +886,7 @@ func adoptClients(ctx context.Context, tx *sql.Tx, clients map[string]RosterClie
 // history.
 func (s *Store) Users(ctx context.Context) ([]User, error) {
 	rows, err := s.db.QueryContext(ctx, `
-		SELECT u.email, u.protocol, u.security, u.up_bytes_total, u.down_bytes_total,
+		SELECT u.email, u.labels, u.up_bytes_total, u.down_bytes_total,
 		       u.last_seen, u.last_ips, u.disabled, u.first_seen,
 		       r.client_id, r.inbounds
 		FROM users u
@@ -854,16 +902,22 @@ func (s *Store) Users(ctx context.Context) ([]User, error) {
 		var user User
 		var lastSeen sql.NullInt64
 		var lastIPs sql.NullString
+		var labels sql.NullString
 		var disabled bool
 		var clientID sql.NullString
 		var inbounds sql.NullString
 		if err := rows.Scan(
-			&user.Email, &user.Protocol, &user.Security,
+			&user.Email, &labels,
 			&user.UpBytesTotal, &user.DownBytesTotal,
 			&lastSeen, &lastIPs, &disabled, &user.FirstSeen,
 			&clientID, &inbounds,
 		); err != nil {
 			return nil, fmt.Errorf("scan user: %w", err)
+		}
+		if labels.Valid {
+			// labels is a JSON array of per-inbound table lines; tolerate
+			// malformed rows.
+			_ = json.Unmarshal([]byte(labels.String), &user.Labels)
 		}
 		if lastSeen.Valid {
 			user.LastSeen = &lastSeen.Int64

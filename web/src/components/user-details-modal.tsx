@@ -74,11 +74,16 @@ export function UserDetailsModal({
                   {user.online ? "Online" : "Offline"}
                 </Badge>
               )}
-              {user.protocol !== null ? (
-                <Badge variant="outline" className="text-muted-foreground rounded-full border px-2 py-1 text-[11px] font-bold">
-                  {user.protocol} · {user.security}
+              {(user.labels ?? []).map((label) => (
+                <Badge
+                  key={`${label.protocol}-${label.security}-${label.transport}`}
+                  variant="outline"
+                  className="text-muted-foreground rounded-full border px-2 py-1 text-[11px] font-bold"
+                >
+                  {label.protocol} · {label.security}
+                  {label.transport !== "" && label.transport !== "tcp" ? ` · ${label.transport}` : ""}
                 </Badge>
-              ) : null}
+              ))}
             </div>
           ) : null}
         </div>

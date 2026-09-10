@@ -36,7 +36,8 @@ type pendingDelta struct {
 // deltas stay pending, so durable totals never silently drop bytes.
 //
 // The config roster (WithRoster) syncs in the same transaction when it
-// changes: protocol · security labels, new users, disabled flags, and the
+// changes: per-inbound protocol · security labels, new users, disabled
+// flags, and the
 // adopted VLESS clients (Client ID + attachments) in the roster store. A
 // roster that cannot be persisted stays pending like the deltas, and
 // flushes on its own while xray is unreachable, so config edits never wait

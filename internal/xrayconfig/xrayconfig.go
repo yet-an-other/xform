@@ -13,10 +13,18 @@ import (
 	"unicode"
 )
 
-// User is one config-defined user's table labels.
+// User is one config-defined user's table labels: one per inbound the
+// email appears on, in config order, exact duplicates collapsed.
 type User struct {
-	Protocol string // inbound protocol, e.g. VLESS
-	Security string // stream security (+ flow), e.g. XTLS-Reality
+	Labels []Label
+}
+
+// Label is one attached inbound's users-row line: protocol · security,
+// with the transport appended unless it is plain tcp.
+type Label struct {
+	Protocol  string `json:"protocol"`  // inbound protocol, e.g. VLESS
+	Security  string `json:"security"`  // stream security (+ flow), e.g. XTLS-Reality
+	Transport string `json:"transport"` // stream network, modern spelling
 }
 
 // Client is one config-defined VLESS client: the credential and the tags of
@@ -130,7 +138,7 @@ func (values *stringList) UnmarshalJSON(document []byte) error {
 
 // Parse extracts the existing user Roster from an xray config document.
 // Entries without an email have no identity and are skipped. An email listed
-// on several inbounds keeps the first inbound's labels, so config order still
+// on several inbounds carries one label per inbound, config order, so the
 // decides the table label exactly as before.
 func Parse(document []byte) (map[string]User, error) {
 	cfg, err := decode(document)
@@ -169,9 +177,10 @@ func parse(document []byte) (RosterParse, View, error) {
 }
 
 // buildRosterParse walks the inbounds once, building both halves of the
-// roster hand-off. The labels cover every protocol, and an email listed on
-// several inbounds keeps the first inbound's labels — config order decides,
-// so the table label is stable. The clients are the roster store's adoption
+// roster hand-off. The labels cover every inbound an email appears on —
+// one label per inbound, config order, exact duplicates collapsed — so the
+// table lists each connection shape, not just the first inbound's. The
+// clients are the roster store's adoption
 // source and cover VLESS only, because VLESS is what the panel manages: the
 // first inbound's Client ID wins exactly as for labels, and every tagged
 // attachment is gathered in config order. A client whose VLESS inbounds are
@@ -190,11 +199,14 @@ func buildRosterParse(cfg config) RosterParse {
 			if client.Email == "" {
 				continue
 			}
-			if _, exists := labels[client.Email]; !exists {
-				labels[client.Email] = User{
-					Protocol: protocol,
-					Security: SecurityLabel(inbound.StreamSettings.Security, client.Flow),
-				}
+			if label := (Label{
+				Protocol:  protocol,
+				Security:  SecurityLabel(inbound.StreamSettings.Security, client.Flow),
+				Transport: TransportLabel(inbound.StreamSettings.Network),
+			}); !slices.Contains(labels[client.Email].Labels, label) {
+				user := labels[client.Email]
+				user.Labels = append(user.Labels, label)
+				labels[client.Email] = user
 			}
 			if protocol != "VLESS" {
 				continue
@@ -334,6 +346,20 @@ func effectiveWebSocketHost(settings httpTransportConfig) string {
 		}
 	}
 	return ""
+}
+
+// TransportLabel renders a stream network in its modern spelling: raw
+// reads tcp, splithttp reads xhttp, and an absent network is xray's tcp
+// default.
+func TransportLabel(network string) string {
+	switch strings.ToLower(network) {
+	case "", "tcp", "raw":
+		return "tcp"
+	case "splithttp":
+		return "xhttp"
+	default:
+		return strings.ToLower(network)
+	}
 }
 
 // SecurityLabel renders the protocol · security column's second half:

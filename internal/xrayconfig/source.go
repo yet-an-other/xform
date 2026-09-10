@@ -69,10 +69,13 @@ func parseSource(previous Parsed, document []byte) (Parsed, ErrorReason, error) 
 	return next, "", nil
 }
 
-// sameRoster reports whether two parses hand off the same roster: identical
-// labels and identical clients (Client ID and ordered attachments).
+// sameRoster reports whether two parses hand off the same roster:
+// identical labels (ordered label lists) and identical clients (Client ID
+// and ordered attachments).
 func sameRoster(a, b RosterParse) bool {
-	return maps.Equal(a.Labels, b.Labels) &&
+	return maps.EqualFunc(a.Labels, b.Labels, func(x, y User) bool {
+		return slices.Equal(x.Labels, y.Labels)
+	}) &&
 		maps.EqualFunc(a.Clients, b.Clients, func(x, y Client) bool {
 			return x.ClientID == y.ClientID && slices.Equal(x.Inbounds, y.Inbounds)
 		})

@@ -274,8 +274,8 @@ func TestRemoveEndToEndOverTheRealStoreAndRenderer(t *testing.T) {
 		{Email: "alice@example.com", Up: 100, Down: 1_000, SeenNow: true},
 	}, nil, &users.RosterParse{
 		Labels: map[string]users.RosterUser{
-			"alice@example.com":    {Protocol: "VLESS", Security: "Reality"},
-			"existing@example.com": {Protocol: "VLESS", Security: "Reality"},
+			"alice@example.com":    {Labels: []xrayconfig.Label{{Protocol: "VLESS", Security: "Reality", Transport: "tcp"}}},
+			"existing@example.com": {Labels: []xrayconfig.Label{{Protocol: "VLESS", Security: "Reality", Transport: "tcp"}}},
 		},
 		Clients: map[string]users.RosterClient{
 			"alice@example.com":    {ClientID: "uuid-alice", Inbounds: []string{"vless-vision", "vless-ws"}},
@@ -354,7 +354,7 @@ func TestRemoveEndToEndOverTheRealStoreAndRenderer(t *testing.T) {
 	// And a config parse carrying her again (drift before the render landed
 	// cannot happen here, but a stale parse may race) does not revive her.
 	if err := store.ApplyPoll(ctx, nil, nil, &users.RosterParse{
-		Labels: map[string]xrayconfig.User{"alice@example.com": {Protocol: "VLESS", Security: "Reality"}},
+		Labels: map[string]xrayconfig.User{"alice@example.com": {Labels: []xrayconfig.Label{{Protocol: "VLESS", Security: "Reality", Transport: "tcp"}}}},
 	}, time.Unix(1_780_010_000, 0)); err != nil {
 		t.Fatalf("apply drift parse: %v", err)
 	}
@@ -415,7 +415,7 @@ func TestDeleteEndToEndOverTheRealStoreAndRenderer(t *testing.T) {
 		{Email: "alice@example.com", Up: 100, Down: 1_000, SeenNow: true},
 	}, nil, &users.RosterParse{
 		Labels: map[string]users.RosterUser{
-			"alice@example.com": {Protocol: "VLESS", Security: "Reality"},
+			"alice@example.com": {Labels: []xrayconfig.Label{{Protocol: "VLESS", Security: "Reality", Transport: "tcp"}}},
 		},
 		Clients: map[string]users.RosterClient{
 			"alice@example.com": {ClientID: "uuid-alice", Inbounds: []string{"vless-vision", "vless-ws"}},

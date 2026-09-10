@@ -8,13 +8,15 @@ import (
 	"time"
 
 	"github.com/yet-an-other/xform/internal/users"
+
+	"github.com/yet-an-other/xform/internal/xrayconfig"
 )
 
 func addRoster(t *testing.T, store *users.Store, email, clientID string, inbounds []string, now time.Time) users.RosterRecord {
 	t.Helper()
 	record, err := store.AddRosterUser(context.Background(), users.NewRosterUser{
 		Email: email, ClientID: clientID, Inbounds: inbounds,
-		Protocol: "VLESS", Security: "Reality",
+		Labels: []xrayconfig.Label{{Protocol: "VLESS", Security: "Reality", Transport: "tcp"}},
 	}, now)
 	if err != nil {
 		t.Fatalf("add %s: %v", email, err)
@@ -35,7 +37,7 @@ func TestEditRosterUserUpdatesAttachmentsAndClientID(t *testing.T) {
 	record, err := store.EditRosterUser(ctx, "Alice@Example.com", users.RosterEdit{
 		ClientID: &rotate,
 		Inbounds: []string{"vless-xhttp"},
-		Protocol: "VLESS", Security: "XTLS-Reality",
+		Labels:   []xrayconfig.Label{{Protocol: "VLESS", Security: "XTLS-Reality", Transport: "tcp"}},
 	}, now.Add(time.Minute))
 	if err != nil {
 		t.Fatalf("edit: %v", err)
@@ -64,8 +66,8 @@ func TestEditRosterUserUpdatesAttachmentsAndClientID(t *testing.T) {
 	if !slices.Equal(alice.Inbounds, []string{"vless-xhttp"}) {
 		t.Errorf("row inbounds = %v", alice.Inbounds)
 	}
-	if alice.Security == nil || *alice.Security != "XTLS-Reality" {
-		t.Errorf("row security = %v, want the relabelled one", alice.Security)
+	if len(alice.Labels) != 1 || alice.Labels[0].Security != "XTLS-Reality" {
+		t.Errorf("row labels = %+v, want the relabelled one", alice.Labels)
 	}
 }
 
@@ -81,7 +83,7 @@ func TestEditRosterUserIsIdempotent(t *testing.T) {
 	record, err := store.EditRosterUser(ctx, "alice@example.com", users.RosterEdit{
 		ClientID: &same,
 		Inbounds: []string{"vless-vision"},
-		Protocol: "VLESS", Security: "Reality",
+		Labels:   []xrayconfig.Label{{Protocol: "VLESS", Security: "Reality", Transport: "tcp"}},
 	}, now.Add(time.Minute))
 	if err != nil {
 		t.Fatalf("repeat edit: %v", err)

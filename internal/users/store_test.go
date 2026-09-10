@@ -57,8 +57,8 @@ func TestStoreAccumulatesDurableTotals(t *testing.T) {
 	if bob := list[1]; bob.LastSeen == nil || *bob.LastSeen != now.Unix() {
 		t.Errorf("bob last_seen = %v, want the first poll %d", bob.LastSeen, now.Unix())
 	}
-	if alice.Protocol != nil || alice.Security != nil || alice.IPs != nil {
-		t.Errorf("alice = %+v, want config fields null until their slices land", alice)
+	if alice.Labels != nil || alice.IPs != nil {
+		t.Errorf("alice = %+v, want config fields empty until their slices land", alice)
 	}
 	if alice.Disabled {
 		t.Error("alice disabled = true, want false until the roster-sync slice")

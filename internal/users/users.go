@@ -13,19 +13,19 @@ import (
 // User is one row of the users table — the JSON contract of
 // GET /api/v1/users (SPEC.md §5). Presence fields (online, ips, last_seen)
 // are live from the online RPCs, degraded on old servers (SPEC.md §3);
-// config fields (protocol, security, disabled) come from the config roster
-// sync and stay zero until the xray config parses. Client ID and inbounds
-// are the roster store's adopted record (null until adoption).
+// config fields (labels, disabled) come from the config roster sync and
+// stay empty until the xray config parses — one label per attached
+// inbound, config order. Client ID and inbounds are the roster store's
+// adopted record (null until adoption).
 type User struct {
-	Email          string   `json:"email"`
-	Protocol       *string  `json:"protocol"`
-	Security       *string  `json:"security"`
-	ClientID       *string  `json:"client_id"`
-	Inbounds       []string `json:"inbounds"`
-	UpBytesTotal   uint64   `json:"up_bytes_total"`
-	DownBytesTotal uint64   `json:"down_bytes_total"`
-	Online         bool     `json:"online"`
-	IPs            []string `json:"ips"`
+	Email          string             `json:"email"`
+	Labels         []xrayconfig.Label `json:"labels"`
+	ClientID       *string            `json:"client_id"`
+	Inbounds       []string           `json:"inbounds"`
+	UpBytesTotal   uint64             `json:"up_bytes_total"`
+	DownBytesTotal uint64             `json:"down_bytes_total"`
+	Online         bool               `json:"online"`
+	IPs            []string           `json:"ips"`
 	// IPCountries maps each online IP to its ISO country code (ADR-0005).
 	// Omitted entirely when geoip.dat is unavailable; absent keys mean
 	// private, reserved, or unknown.
@@ -69,8 +69,8 @@ type PresenceQuerier interface {
 	QueryPresence(ctx context.Context) (presence []Presence, supported bool, err error)
 }
 
-// RosterUser is one config-defined user's table labels (protocol ·
-// security). The type lives with the config parser; aliased here so the
+// RosterUser is one config-defined user's table labels — one per attached
+// inbound. The type lives with the config parser; aliased here so the
 // collector and store read in panel vocabulary.
 type RosterUser = xrayconfig.User
 

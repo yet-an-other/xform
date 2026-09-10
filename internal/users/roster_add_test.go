@@ -8,6 +8,8 @@ import (
 	"time"
 
 	"github.com/yet-an-other/xform/internal/users"
+
+	"github.com/yet-an-other/xform/internal/xrayconfig"
 )
 
 // The mutation half of the roster store (user-management spec §3, §5): a
@@ -22,7 +24,7 @@ func TestAddRosterUserStoresTheRecordAndShowsTheRow(t *testing.T) {
 	record, err := store.AddRosterUser(ctx, users.NewRosterUser{
 		Email: "alice@example.com", ClientID: "uuid-alice",
 		Inbounds: []string{"vless-vision", "vless-xhttp"},
-		Protocol: "VLESS", Security: "XTLS-Reality",
+		Labels:   []xrayconfig.Label{{Protocol: "VLESS", Security: "XTLS-Reality", Transport: "tcp"}},
 	}, now)
 	if err != nil {
 		t.Fatalf("add: %v", err)
@@ -51,8 +53,8 @@ func TestAddRosterUserStoresTheRecordAndShowsTheRow(t *testing.T) {
 	if !slices.Equal(alice.Inbounds, []string{"vless-vision", "vless-xhttp"}) {
 		t.Errorf("row inbounds = %v", alice.Inbounds)
 	}
-	if alice.Protocol == nil || *alice.Protocol != "VLESS" || alice.Security == nil || *alice.Security != "XTLS-Reality" {
-		t.Errorf("row labels = %v · %v", alice.Protocol, alice.Security)
+	if !slices.Equal(alice.Labels, []xrayconfig.Label{{Protocol: "VLESS", Security: "XTLS-Reality", Transport: "tcp"}}) {
+		t.Errorf("row labels = %+v", alice.Labels)
 	}
 }
 
@@ -75,7 +77,7 @@ func TestAddRosterUserRejoinsAGoneUsersHistory(t *testing.T) {
 
 	if _, err := store.AddRosterUser(ctx, users.NewRosterUser{
 		Email: "alice@example.com", ClientID: "uuid-alice-new",
-		Inbounds: []string{"vless-vision"}, Protocol: "VLESS", Security: "Reality",
+		Inbounds: []string{"vless-vision"}, Labels: []xrayconfig.Label{{Protocol: "VLESS", Security: "Reality", Transport: "tcp"}},
 	}, now.Add(2*time.Second)); err != nil {
 		t.Fatalf("re-add: %v", err)
 	}
@@ -106,20 +108,20 @@ func TestAddRosterUserConflicts(t *testing.T) {
 
 	if _, err := store.AddRosterUser(ctx, users.NewRosterUser{
 		Email: "alice@example.com", ClientID: "uuid-alice",
-		Inbounds: []string{}, Protocol: "VLESS", Security: "Reality",
+		Inbounds: []string{}, Labels: []xrayconfig.Label{{Protocol: "VLESS", Security: "Reality", Transport: "tcp"}},
 	}, now); err != nil {
 		t.Fatalf("add: %v", err)
 	}
 
 	if _, err := store.AddRosterUser(ctx, users.NewRosterUser{
 		Email: "Alice@Example.com", ClientID: "uuid-other",
-		Inbounds: []string{}, Protocol: "VLESS", Security: "Reality",
+		Inbounds: []string{}, Labels: []xrayconfig.Label{{Protocol: "VLESS", Security: "Reality", Transport: "tcp"}},
 	}, now); !errors.Is(err, users.ErrEmailTaken) {
 		t.Errorf("case-variant email = %v, want ErrEmailTaken", err)
 	}
 	if _, err := store.AddRosterUser(ctx, users.NewRosterUser{
 		Email: "bob@example.com", ClientID: "UUID-ALICE",
-		Inbounds: []string{}, Protocol: "VLESS", Security: "Reality",
+		Inbounds: []string{}, Labels: []xrayconfig.Label{{Protocol: "VLESS", Security: "Reality", Transport: "tcp"}},
 	}, now); !errors.Is(err, users.ErrClientIDTaken) {
 		t.Errorf("case-variant Client ID = %v, want ErrClientIDTaken", err)
 	}

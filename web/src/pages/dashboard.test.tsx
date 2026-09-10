@@ -379,8 +379,7 @@ const usersSnapshot = {
   users: [
     {
       email: "alice@example.com",
-      protocol: null,
-      security: null,
+      labels: null,
       client_id: "1e7f6c2a-9b3d-4f8a-9c1e-2d5a7b8c9d0e",
       inbounds: ["vless-vision", "vless-xhttp"],
       up_bytes_total: 12_400_000_000,
@@ -395,8 +394,7 @@ const usersSnapshot = {
     },
     {
       email: "bob@example.com",
-      protocol: null,
-      security: null,
+      labels: null,
       client_id: null,
       inbounds: null,
       up_bytes_total: 3_100_000_000,
@@ -420,7 +418,13 @@ describe("users table", () => {
         json({
           ...usersSnapshot,
           users: [
-            { ...usersSnapshot.users[0], protocol: "VLESS", security: "XTLS-Reality" },
+            {
+              ...usersSnapshot.users[0],
+              labels: [
+                { protocol: "VLESS", security: "XTLS-Reality", transport: "tcp" },
+                { protocol: "VLESS", security: "Reality", transport: "xhttp" },
+              ],
+            },
             { ...usersSnapshot.users[1], disabled: true }, // bob was disabled (ADR-0007)
           ],
         }),
@@ -429,9 +433,10 @@ describe("users table", () => {
     render(<Dashboard onUnauthenticated={() => {}} />);
 
     const table = await screen.findByRole("region", { name: "Users" });
-    // alice is visible with her protocol · security labels; bob is hidden.
+    // alice is visible with one line per attached inbound; bob is hidden.
     const aliceRow = within(table).getByRole("row", { name: /alice@example\.com/ });
     expect(aliceRow).toHaveTextContent("VLESS · XTLS-Reality");
+    expect(aliceRow).toHaveTextContent("VLESS · Reality · xhttp");
     expect(within(table).queryByRole("row", { name: /bob@example\.com/ })).not.toBeInTheDocument();
 
     // The toggle reveals disabled users, marked as disabled.

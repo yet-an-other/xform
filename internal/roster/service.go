@@ -288,7 +288,7 @@ func (s *Service) Add(ctx context.Context, email, clientID string, inbounds []st
 
 	record, err := s.store.AddRosterUser(ctx, users.NewRosterUser{
 		Email: email, ClientID: clientID, Inbounds: tags,
-		Protocol: labelProtocol(view, ops), Security: labelSecurity(view, ops),
+		Labels: seedLabels(view, ops),
 	}, s.now())
 	if errors.Is(err, users.ErrEmailTaken) {
 		return MutationResult{}, &ConflictError{Reason: ReasonEmailTaken}
@@ -383,7 +383,7 @@ func (s *Service) Edit(ctx context.Context, email string, req EditRequest) (Muta
 	edit := users.RosterEdit{
 		ClientID: idPtr,
 		Inbounds: tags,
-		Protocol: labelProtocol(view, finalOps), Security: labelSecurity(view, finalOps),
+		Labels:   seedLabels(view, finalOps),
 	}
 	after, err := s.store.EditRosterUser(ctx, email, edit, s.now())
 	if errors.Is(err, users.ErrClientIDTaken) {
@@ -540,7 +540,7 @@ func (s *Service) Enable(ctx context.Context, email string) (MutationResult, err
 	if len(kept) < len(record.Inbounds) {
 		record, err = s.store.EditRosterUser(ctx, record.Email, users.RosterEdit{
 			Inbounds: kept,
-			Protocol: labelProtocol(view, finalOps), Security: labelSecurity(view, finalOps),
+			Labels:   seedLabels(view, finalOps),
 		}, s.now())
 		if err != nil {
 			return MutationResult{}, err
@@ -838,8 +838,7 @@ func (s *Service) converge(ctx context.Context) {
 			}
 			record, err = s.store.EditRosterUser(ctx, record.Email, users.RosterEdit{
 				Inbounds: kept,
-				Protocol: labelProtocol(view, attachOps),
-				Security: labelSecurity(view, attachOps),
+				Labels:   seedLabels(view, attachOps),
 			}, s.now())
 			if errors.Is(err, users.ErrRosterNotFound) {
 				continue // disabled while we worked
@@ -1102,41 +1101,33 @@ func dedupeOrder(inbounds []string) []string {
 	return ordered
 }
 
-// labelProtocol / labelSecurity seed the users-row labels until the next
-// config parse resyncs them: the first attached inbound in config order,
-// exactly as the parser's labels rule. No attachment means no labels — the
-// store writes NULLs.
-func labelProtocol(view xrayconfig.View, ops []pushOp) string {
-	if inbound, ok := firstAttached(view, ops); ok {
-		return strings.ToUpper(inbound.Protocol)
-	}
-	return ""
-}
-
-func labelSecurity(view xrayconfig.View, ops []pushOp) string {
-	inbound, ok := firstAttached(view, ops)
-	if !ok {
-		return ""
-	}
+// seedLabels seeds the users-row labels until the next config parse
+// resyncs them: one label per attached inbound, config order, exact
+// duplicates collapsed — the parser's labels rule, so the seed and the
+// resync agree. No attachment means no labels — the store writes NULL.
+func seedLabels(view xrayconfig.View, ops []pushOp) []xrayconfig.Label {
 	flows := make(map[string]string, len(ops))
 	for _, op := range ops {
-		flows[op.tag] = op.flow
-	}
-	return xrayconfig.SecurityLabel(inbound.Security.Type, flows[inbound.Tag])
-}
-
-// firstAttached finds the first attached inbound in config order.
-func firstAttached(view xrayconfig.View, ops []pushOp) (xrayconfig.Inbound, bool) {
-	attached := make(map[string]bool, len(ops))
-	for _, op := range ops {
-		attached[op.tag] = true
-	}
-	for _, inbound := range view.Inbounds() {
-		if attached[inbound.Tag] && xrayconfig.Managed(inbound) {
-			return inbound, true
+		if op.kind == opAttach {
+			flows[op.tag] = op.flow
 		}
 	}
-	return xrayconfig.Inbound{}, false
+	var labels []xrayconfig.Label
+	for _, inbound := range view.Inbounds() {
+		flow, attached := flows[inbound.Tag]
+		if !attached || !xrayconfig.Managed(inbound) {
+			continue
+		}
+		label := xrayconfig.Label{
+			Protocol:  strings.ToUpper(inbound.Protocol),
+			Security:  xrayconfig.SecurityLabel(inbound.Security.Type, flow),
+			Transport: xrayconfig.TransportLabel(inbound.Transport.Type),
+		}
+		if !slices.Contains(labels, label) {
+			labels = append(labels, label)
+		}
+	}
+	return labels
 }
 
 // optionLabel composes the multi-select option text (user-management

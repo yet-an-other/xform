@@ -79,7 +79,7 @@ func TestMarkRosterDeletingThenPurgeRemovesEveryTrace(t *testing.T) {
 	// brand-new user: fresh first_seen, zero totals, fresh history.
 	record, err := store.AddRosterUser(ctx, users.NewRosterUser{
 		Email: "alice@example.com", ClientID: "uuid-alice",
-		Inbounds: []string{"vless-ws"}, Protocol: "VLESS", Security: "TLS",
+		Inbounds: []string{"vless-ws"}, Labels: []xrayconfig.Label{{Protocol: "VLESS", Security: "TLS", Transport: "tcp"}},
 	}, now.Add(3*time.Second))
 	if err != nil {
 		t.Fatalf("re-add after purge: %v", err)
@@ -283,7 +283,7 @@ func TestAdoptionTreatsAPurgedEmailAsForeign(t *testing.T) {
 	// lands on the next parse: nothing remembers her.
 	later := now.Add(1_000 * time.Second)
 	if err := store.ApplyPoll(ctx, nil, nil, &users.RosterParse{
-		Labels: map[string]xrayconfig.User{"alice@example.com": {Protocol: "VLESS", Security: "Reality"}},
+		Labels: map[string]xrayconfig.User{"alice@example.com": {Labels: []xrayconfig.Label{{Protocol: "VLESS", Security: "Reality", Transport: "tcp"}}}},
 		Clients: map[string]users.RosterClient{
 			"alice@example.com": {ClientID: "uuid-alice", Inbounds: []string{"vless-vision", "vless-ws"}},
 		},

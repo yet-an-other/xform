@@ -37,7 +37,7 @@ func TestUserDetailReturnsKnownUserAndProfileState(t *testing.T) {
 		fixedUsers{snapshot: users.Snapshot{
 			CollectedAt: 1_723_800_000,
 			Users: []users.User{{
-				Email: "alice@example.com", Protocol: &protocol, IPs: []string{},
+				Email: "alice@example.com", Labels: []xrayconfig.Label{{Protocol: protocol, Security: "XTLS-Reality", Transport: "tcp"}}, IPs: []string{},
 			}},
 		}},
 		fixedProfileSources{sources: profiles.Sources{
@@ -76,7 +76,7 @@ func TestUserDetailReturnsKnownUserAndProfileState(t *testing.T) {
 	if payload.CollectedAt != 1_723_800_000 || payload.Stale {
 		t.Errorf("observation freshness = %d/%t", payload.CollectedAt, payload.Stale)
 	}
-	if payload.User.Email != "alice@example.com" || payload.User.Protocol == nil || *payload.User.Protocol != protocol {
+	if payload.User.Email != "alice@example.com" || len(payload.User.Labels) != 1 || payload.User.Labels[0].Protocol != protocol {
 		t.Errorf("User = %+v", payload.User)
 	}
 	if payload.Profiles.State != profiles.StateNoMatchingInbound || payload.Profiles.LoadedAt == nil || *payload.Profiles.LoadedAt != loadedAt.Unix() {
@@ -110,7 +110,7 @@ func TestUserDetailPreservesUsersEndpointNullabilityAndOmissions(t *testing.T) {
 	if err := json.Unmarshal(response.Body.Bytes(), &payload); err != nil {
 		t.Fatalf("decode response: %v", err)
 	}
-	for _, field := range []string{"protocol", "security", "last_seen"} {
+	for _, field := range []string{"labels", "last_seen"} {
 		value, ok := payload.User[field]
 		if !ok || string(value) != "null" {
 			t.Errorf("%s = %s (present %t), want null", field, value, ok)

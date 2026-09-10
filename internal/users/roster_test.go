@@ -55,8 +55,8 @@ func TestStoreSyncsRosterWithTheConfig(t *testing.T) {
 	// The config names alice (VLESS · Reality) and the brand-new bob; erin
 	// was edited out.
 	roster := &users.RosterParse{Labels: map[string]xrayconfig.User{
-		"alice@example.com": {Protocol: "VLESS", Security: "Reality"},
-		"bob@example.com":   {Protocol: "TROJAN", Security: "TLS"},
+		"alice@example.com": {Labels: []xrayconfig.Label{{Protocol: "VLESS", Security: "Reality", Transport: "tcp"}}},
+		"bob@example.com":   {Labels: []xrayconfig.Label{{Protocol: "TROJAN", Security: "TLS", Transport: "tcp"}}},
 	}}
 	if err := store.ApplyPoll(ctx, nil, nil, roster, now.Add(5*time.Second)); err != nil {
 		t.Fatalf("apply roster sync: %v", err)
@@ -72,8 +72,8 @@ func TestStoreSyncsRosterWithTheConfig(t *testing.T) {
 	}
 
 	alice := got["alice@example.com"]
-	if alice.Protocol == nil || *alice.Protocol != "VLESS" || alice.Security == nil || *alice.Security != "Reality" {
-		t.Errorf("alice labels = %v / %v, want VLESS / Reality", alice.Protocol, alice.Security)
+	if !slices.Equal(alice.Labels, []xrayconfig.Label{{Protocol: "VLESS", Security: "Reality", Transport: "tcp"}}) {
+		t.Errorf("alice labels = %+v, want VLESS / Reality", alice.Labels)
 	}
 	if alice.UpBytesTotal != 100 || alice.DownBytesTotal != 1_000 {
 		t.Errorf("alice totals = %d/%d, want her 100/1000 history untouched", alice.UpBytesTotal, alice.DownBytesTotal)
@@ -87,8 +87,8 @@ func TestStoreSyncsRosterWithTheConfig(t *testing.T) {
 
 	// bob appears automatically, with zero totals, before his first byte.
 	bob := got["bob@example.com"]
-	if bob.Protocol == nil || *bob.Protocol != "TROJAN" {
-		t.Errorf("bob protocol = %v, want TROJAN", bob.Protocol)
+	if len(bob.Labels) != 1 || bob.Labels[0].Protocol != "TROJAN" {
+		t.Errorf("bob labels = %+v, want TROJAN", bob.Labels)
 	}
 	if bob.UpBytesTotal != 0 || bob.DownBytesTotal != 0 || bob.LastSeen != nil {
 		t.Errorf("bob = %+v, want zero totals and never seen", bob)
@@ -115,7 +115,7 @@ func TestStoreRosterSyncRestoresReturningUsers(t *testing.T) {
 	now := time.Unix(1_780_000_000, 0)
 
 	if err := store.ApplyPoll(ctx, nil, nil, &users.RosterParse{Labels: map[string]xrayconfig.User{
-		"alice@example.com": {Protocol: "VLESS", Security: "Reality"},
+		"alice@example.com": {Labels: []xrayconfig.Label{{Protocol: "VLESS", Security: "Reality", Transport: "tcp"}}},
 	}}, now); err != nil {
 		t.Fatalf("apply first roster: %v", err)
 	}
@@ -129,7 +129,7 @@ func TestStoreRosterSyncRestoresReturningUsers(t *testing.T) {
 	}
 
 	if err := store.ApplyPoll(ctx, nil, nil, &users.RosterParse{Labels: map[string]xrayconfig.User{
-		"alice@example.com": {Protocol: "VLESS", Security: "XTLS-Reality"},
+		"alice@example.com": {Labels: []xrayconfig.Label{{Protocol: "VLESS", Security: "XTLS-Reality", Transport: "tcp"}}},
 	}}, now.Add(2*time.Minute)); err != nil {
 		t.Fatalf("apply restored roster: %v", err)
 	}
@@ -137,8 +137,65 @@ func TestStoreRosterSyncRestoresReturningUsers(t *testing.T) {
 	if alice.Disabled {
 		t.Error("alice disabled = true, want false after returning to the config")
 	}
-	if alice.Security == nil || *alice.Security != "XTLS-Reality" {
-		t.Errorf("alice security = %v, want the edited XTLS-Reality", alice.Security)
+	if len(alice.Labels) != 1 || alice.Labels[0].Security != "XTLS-Reality" {
+		t.Errorf("alice labels = %+v, want the edited XTLS-Reality", alice.Labels)
+	}
+}
+
+// Databases from before per-inbound labels carry protocol/security columns;
+// Open folds the pair into a one-entry labels array (transport unknown —
+// the next config parse resyncs the true list) and drops the old columns.
+func TestOpenMigratesLabelColumns(t *testing.T) {
+	path := t.TempDir() + "/legacy.db"
+	store, err := users.Open(path)
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	ctx := context.Background()
+	now := time.Unix(1_780_000_000, 0)
+
+	addRoster(t, store, "alice@example.com", "uuid-alice", []string{"vless-vision"}, now)
+	if err := store.ApplyPoll(ctx, []users.Delta{
+		{Email: "erin@example.com", Up: 50, Down: 500, SeenNow: true}, // no labels yet
+	}, nil, nil, now); err != nil {
+		t.Fatalf("apply traffic poll: %v", err)
+	}
+	if err := store.Close(); err != nil {
+		t.Fatalf("close: %v", err)
+	}
+
+	// Downgrade to the single-pair schema, as a database from before this
+	// change has it.
+	db, err := openRawDB(path)
+	if err != nil {
+		t.Fatalf("reopen raw: %v", err)
+	}
+	for _, statement := range []string{
+		`ALTER TABLE users DROP COLUMN labels`,
+		`ALTER TABLE users ADD COLUMN protocol TEXT`,
+		`ALTER TABLE users ADD COLUMN security TEXT`,
+		`UPDATE users SET protocol = 'VLESS', security = 'XTLS-Reality' WHERE email = 'alice@example.com'`,
+	} {
+		if _, err := db.ExecContext(ctx, statement); err != nil {
+			t.Fatalf("downgrade users: %v", err)
+		}
+	}
+	if err := db.Close(); err != nil {
+		t.Fatalf("close raw: %v", err)
+	}
+
+	migrated, err := users.Open(path)
+	if err != nil {
+		t.Fatalf("migrate: %v", err)
+	}
+	defer func() { _ = migrated.Close() }()
+
+	got := byEmail(mustUsers(t, migrated))
+	if !slices.Equal(got["alice@example.com"].Labels, []xrayconfig.Label{{Protocol: "VLESS", Security: "XTLS-Reality", Transport: ""}}) {
+		t.Errorf("alice labels = %+v, want the folded single pair", got["alice@example.com"].Labels)
+	}
+	if got["erin@example.com"].Labels != nil {
+		t.Errorf("erin labels = %+v, want none — her pair was null", got["erin@example.com"].Labels)
 	}
 }
 
@@ -169,8 +226,8 @@ func TestStoreAdoptsConfigClients(t *testing.T) {
 
 	roster := &users.RosterParse{
 		Labels: map[string]xrayconfig.User{
-			"alice@example.com": {Protocol: "VLESS", Security: "XTLS-Reality"},
-			"carol@example.com": {Protocol: "TROJAN", Security: "TLS"},
+			"alice@example.com": {Labels: []xrayconfig.Label{{Protocol: "VLESS", Security: "XTLS-Reality", Transport: "tcp"}}},
+			"carol@example.com": {Labels: []xrayconfig.Label{{Protocol: "TROJAN", Security: "TLS", Transport: "tcp"}}},
 		},
 		Clients: map[string]xrayconfig.Client{
 			"alice@example.com": {ClientID: "alice-uuid", Inbounds: []string{"vless-vision", "vless-xhttp"}},
@@ -207,7 +264,7 @@ func TestStoreAdoptionIsAdditiveAndIdempotent(t *testing.T) {
 	now := time.Unix(1_780_000_000, 0)
 
 	adopt := &users.RosterParse{
-		Labels:  map[string]xrayconfig.User{"alice@example.com": {Protocol: "VLESS", Security: "Reality"}},
+		Labels:  map[string]xrayconfig.User{"alice@example.com": {Labels: []xrayconfig.Label{{Protocol: "VLESS", Security: "Reality", Transport: "tcp"}}}},
 		Clients: map[string]xrayconfig.Client{"alice@example.com": {ClientID: "alice-uuid", Inbounds: []string{"vless-vision"}}},
 	}
 	if err := store.ApplyPoll(ctx, nil, nil, adopt, now); err != nil {
@@ -217,7 +274,7 @@ func TestStoreAdoptionIsAdditiveAndIdempotent(t *testing.T) {
 	// A hand edit attaches alice to a second inbound — and rewrites her
 	// Client ID. The attachment unions in; the store's Client ID stands.
 	handEdit := &users.RosterParse{
-		Labels:  map[string]xrayconfig.User{"alice@example.com": {Protocol: "VLESS", Security: "Reality"}},
+		Labels:  map[string]xrayconfig.User{"alice@example.com": {Labels: []xrayconfig.Label{{Protocol: "VLESS", Security: "Reality", Transport: "tcp"}}}},
 		Clients: map[string]xrayconfig.Client{"alice@example.com": {ClientID: "rewritten-uuid", Inbounds: []string{"vless-vision", "vless-xhttp"}}},
 	}
 	if err := store.ApplyPoll(ctx, nil, nil, handEdit, now.Add(time.Minute)); err != nil {

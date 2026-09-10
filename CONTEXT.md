@@ -51,7 +51,7 @@ A user purged from every storage — the Roster, the panel's own history, the co
 _Avoid_: erased user, purged user, gone user (that is the recoverable one)
 
 **Roster**:
-The set of users the panel manages, held by the panel as the source of truth and applied to xray — rendered into the config file and pushed to the running server so both stay in step. Foreign clients found in the config are adopted into the Roster; Roster users missing from the config are re-applied. The Roster supplies the protocol · security labels and decides who is — or becomes — a disabled user.
+The set of users the panel manages, held by the panel as the source of truth and applied to xray — rendered into the config file and pushed to the running server so both stay in step. Foreign clients found in the config are adopted into the Roster; Roster users missing from the config are re-applied. The Roster supplies the per-inbound protocol · security labels and decides who is — or becomes — a disabled user.
 _Avoid_: config users, client list
 
 **Observation**:

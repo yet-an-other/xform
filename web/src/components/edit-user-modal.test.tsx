@@ -12,8 +12,7 @@ const options = [
 
 const storedUser = {
   email: "alice@example.com",
-  protocol: "VLESS",
-  security: "Reality",
+  labels: [{ protocol: "VLESS", security: "Reality", transport: "tcp" }],
   client_id: "1d37a118-4f1b-4dc0-9e3c-3426b07518df",
   inbounds: ["vless-vision"],
   up_bytes_total: 1,

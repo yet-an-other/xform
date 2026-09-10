@@ -70,16 +70,24 @@ export function fetchXrayStatus(signal?: AbortSignal): Promise<XrayStatus> {
 
 // User is one row of the users table (SPEC §5). Presence fields (online,
 // ips, last_seen) are live from the online RPCs — omitted on servers
-// predating them; config fields (protocol, security, disabled) come from
-// the config roster sync and stay zero until the xray config parses. Client
+// predating them; config fields (labels, disabled) come from the config
+// roster sync and stay empty until the xray config parses. Client
 // ID and inbounds are the roster store's adopted record — null until
 // adoption. apply_state is the write-side mark (user-management spec §6):
 // pending while a change applies, failed when the last apply failed; absent
 // once applied.
+// UserLabel is one line of a user's table labels: one per attached
+// inbound, config order — protocol · security, with the transport appended
+// unless it is plain tcp.
+export interface UserLabel {
+  protocol: string;
+  security: string;
+  transport: string;
+}
+
 export interface User {
   email: string;
-  protocol: string | null;
-  security: string | null;
+  labels: UserLabel[] | null;
   client_id: string | null;
   inbounds: string[] | null;
   apply_state?: ApplyState;

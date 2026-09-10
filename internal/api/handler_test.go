@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"reflect"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -15,6 +16,7 @@ import (
 	"github.com/yet-an-other/xform/internal/hoststats"
 	"github.com/yet-an-other/xform/internal/session"
 	"github.com/yet-an-other/xform/internal/users"
+	"github.com/yet-an-other/xform/internal/xrayconfig"
 	"github.com/yet-an-other/xform/internal/xraystatus"
 )
 
@@ -261,14 +263,12 @@ func TestLogoutRevokesAndClears(t *testing.T) {
 
 func TestUsersEndpointReturnsContractPayload(t *testing.T) {
 	lastSeen := int64(1_723_799_995)
-	protocol, security := "VLESS", "XTLS-Reality"
 	clientID := "1e7f6c2a-9b3d-4f8a-9c1e-2d5a7b8c9d0e"
 	handler := api.New(fixedHostStats{}, fixedXrayStatus{}, fixedUsers{snapshot: users.Snapshot{
 		CollectedAt: 1_723_800_000,
 		Users: []users.User{{
 			Email:          "alice@example.com",
-			Protocol:       &protocol,
-			Security:       &security,
+			Labels:         []xrayconfig.Label{{Protocol: "VLESS", Security: "XTLS-Reality", Transport: "tcp"}},
 			ClientID:       &clientID,
 			Inbounds:       []string{"vless-vision", "vless-xhttp"},
 			UpBytesTotal:   12_400_000_000,
@@ -294,19 +294,18 @@ func TestUsersEndpointReturnsContractPayload(t *testing.T) {
 		CollectedAt int64 `json:"collected_at"`
 		Stale       bool  `json:"stale"`
 		Users       []struct {
-			Email          string   `json:"email"`
-			Protocol       *string  `json:"protocol"`
-			Security       *string  `json:"security"`
-			ClientID       *string  `json:"client_id"`
-			Inbounds       []string `json:"inbounds"`
-			UpBytesTotal   uint64   `json:"up_bytes_total"`
-			DownBytesTotal uint64   `json:"down_bytes_total"`
-			Online         bool     `json:"online"`
-			IPs            []string `json:"ips"`
-			SpeedUpBps     uint64   `json:"speed_up_bps"`
-			SpeedDownBps   uint64   `json:"speed_down_bps"`
-			LastSeen       *int64   `json:"last_seen"`
-			Gone           bool     `json:"gone"`
+			Email          string             `json:"email"`
+			Labels         []xrayconfig.Label `json:"labels"`
+			ClientID       *string            `json:"client_id"`
+			Inbounds       []string           `json:"inbounds"`
+			UpBytesTotal   uint64             `json:"up_bytes_total"`
+			DownBytesTotal uint64             `json:"down_bytes_total"`
+			Online         bool               `json:"online"`
+			IPs            []string           `json:"ips"`
+			SpeedUpBps     uint64             `json:"speed_up_bps"`
+			SpeedDownBps   uint64             `json:"speed_down_bps"`
+			LastSeen       *int64             `json:"last_seen"`
+			Gone           bool               `json:"gone"`
 		} `json:"users"`
 	}
 	if err := json.Unmarshal(response.Body.Bytes(), &payload); err != nil {
@@ -325,8 +324,8 @@ func TestUsersEndpointReturnsContractPayload(t *testing.T) {
 	if alice.SpeedUpBps != 512_000 || alice.SpeedDownBps != 3_800_000 {
 		t.Errorf("alice speeds = %d/%d", alice.SpeedUpBps, alice.SpeedDownBps)
 	}
-	if alice.Protocol == nil || *alice.Protocol != "VLESS" || alice.Security == nil || *alice.Security != "XTLS-Reality" {
-		t.Errorf("alice protocol/security = %v/%v", alice.Protocol, alice.Security)
+	if !slices.Equal(alice.Labels, []xrayconfig.Label{{Protocol: "VLESS", Security: "XTLS-Reality", Transport: "tcp"}}) {
+		t.Errorf("alice labels = %+v", alice.Labels)
 	}
 	if alice.ClientID == nil || *alice.ClientID != clientID {
 		t.Errorf("alice client_id = %v, want the roster store's %s", alice.ClientID, clientID)

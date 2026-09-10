@@ -1,6 +1,7 @@
 package xrayconfig_test
 
 import (
+	"slices"
 	"testing"
 
 	"github.com/yet-an-other/xform/internal/xrayconfig"
@@ -37,14 +38,14 @@ func TestParseBuildsRosterFromInbounds(t *testing.T) {
 	if len(roster) != 3 {
 		t.Fatalf("roster = %d users, want 3", len(roster))
 	}
-	if user := roster["alice@example.com"]; user.Protocol != "VLESS" || user.Security != "XTLS-Reality" {
-		t.Errorf("alice = %+v, want VLESS / XTLS-Reality (vision flow prefixes the security)", user)
+	if got := roster["alice@example.com"].Labels; !slices.Equal(got, []xrayconfig.Label{{Protocol: "VLESS", Security: "XTLS-Reality", Transport: "tcp"}}) {
+		t.Errorf("alice = %+v, want VLESS / XTLS-Reality (vision flow prefixes the security)", got)
 	}
-	if user := roster["bob@example.com"]; user.Protocol != "VLESS" || user.Security != "Reality" {
-		t.Errorf("bob = %+v, want VLESS / Reality", user)
+	if got := roster["bob@example.com"].Labels; !slices.Equal(got, []xrayconfig.Label{{Protocol: "VLESS", Security: "Reality", Transport: "tcp"}}) {
+		t.Errorf("bob = %+v, want VLESS / Reality", got)
 	}
-	if user := roster["carol@example.com"]; user.Protocol != "TROJAN" || user.Security != "TLS" {
-		t.Errorf("carol = %+v, want TROJAN / TLS", user)
+	if got := roster["carol@example.com"].Labels; !slices.Equal(got, []xrayconfig.Label{{Protocol: "TROJAN", Security: "TLS", Transport: "tcp"}}) {
+		t.Errorf("carol = %+v, want TROJAN / TLS", got)
 	}
 }
 
@@ -66,13 +67,20 @@ func TestParseSkipsWhatHasNoIdentity(t *testing.T) {
 	}
 }
 
-// An email listed on several inbounds keeps the first inbound's labels —
-// config order decides, so the parse is stable.
-func TestParseKeepsFirstInboundPerEmail(t *testing.T) {
+// A user's row labels cover every inbound their email appears on — one
+// label per inbound, config order — so the users table lists each protocol
+// the user can connect with, not just the first inbound's.
+func TestParseLabelsEveryListedInbound(t *testing.T) {
 	config := []byte(`{
 		"inbounds": [
-			{"protocol": "vless", "settings": {"clients": [{"email": "alice@example.com", "flow": "xtls-rprx-vision"}]}, "streamSettings": {"security": "reality"}},
-			{"protocol": "trojan", "settings": {"clients": [{"email": "alice@example.com"}]}, "streamSettings": {"security": "tls"}}
+			{"tag": "vision", "protocol": "vless",
+			 "settings": {"clients": [{"email": "alice@example.com", "flow": "xtls-rprx-vision"}]},
+			 "streamSettings": {"network": "raw", "security": "reality"}},
+			{"tag": "split", "protocol": "vless",
+			 "settings": {"clients": [{"email": "alice@example.com"}]},
+			 "streamSettings": {"network": "splithttp", "security": "reality"}},
+			{"protocol": "trojan", "settings": {"clients": [{"email": "alice@example.com", "password": "x"}]},
+			 "streamSettings": {"security": "tls"}}
 		]
 	}`)
 
@@ -80,8 +88,35 @@ func TestParseKeepsFirstInboundPerEmail(t *testing.T) {
 	if err != nil {
 		t.Fatalf("parse: %v", err)
 	}
-	if user := roster["alice@example.com"]; user.Protocol != "VLESS" || user.Security != "XTLS-Reality" {
-		t.Errorf("alice = %+v, want the first inbound's VLESS / XTLS-Reality", user)
+	want := []xrayconfig.Label{
+		{Protocol: "VLESS", Security: "XTLS-Reality", Transport: "tcp"},
+		{Protocol: "VLESS", Security: "Reality", Transport: "xhttp"},
+		{Protocol: "TROJAN", Security: "TLS", Transport: "tcp"},
+	}
+	if got := roster["alice@example.com"].Labels; !slices.Equal(got, want) {
+		t.Errorf("alice labels = %+v, want %+v", got, want)
+	}
+}
+
+// Identical inbound labels collapse to one line — two same-shape inbounds
+// are one connection shape, not two.
+func TestParseCollapsesIdenticalInboundLabels(t *testing.T) {
+	config := []byte(`{
+		"inbounds": [
+			{"protocol": "vless", "settings": {"clients": [{"email": "alice@example.com", "flow": "xtls-rprx-vision"}]},
+			 "streamSettings": {"network": "tcp", "security": "reality"}},
+			{"protocol": "vless", "settings": {"clients": [{"email": "alice@example.com", "flow": "xtls-rprx-vision"}]},
+			 "streamSettings": {"network": "raw", "security": "reality"}}
+		]
+	}`)
+
+	roster, err := xrayconfig.Parse(config)
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	want := []xrayconfig.Label{{Protocol: "VLESS", Security: "XTLS-Reality", Transport: "tcp"}}
+	if got := roster["alice@example.com"].Labels; !slices.Equal(got, want) {
+		t.Errorf("alice labels = %+v, want the one collapsed label", got)
 	}
 }
 
@@ -98,8 +133,8 @@ func TestParseLabelsUnencryptedSecurity(t *testing.T) {
 	if err != nil {
 		t.Fatalf("parse: %v", err)
 	}
-	if user := roster["alice@example.com"]; user.Security != "None" {
-		t.Errorf("alice security = %q, want None (no streamSettings)", user.Security)
+	if got := roster["alice@example.com"].Labels; len(got) != 1 || got[0].Security != "None" {
+		t.Errorf("alice labels = %+v, want None (no streamSettings)", got)
 	}
 }
 

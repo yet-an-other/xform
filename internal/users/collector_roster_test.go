@@ -2,11 +2,53 @@ package users_test
 
 import (
 	"context"
+	"slices"
 	"testing"
 	"time"
 
 	"github.com/yet-an-other/xform/internal/users"
+	"github.com/yet-an-other/xform/internal/xrayconfig"
 )
+
+// The users table lists every connection shape a user has — one label per
+// attached inbound, config order — so a user on both a vision TCP REALITY
+// inbound and an XHTTP REALITY one carries both labels, not just the first
+// inbound's.
+func TestCollectorCarriesEveryInboundLabel(t *testing.T) {
+	now := time.Unix(1_780_000_000, 0)
+	traffic := &fakeTraffic{pages: [][]users.RawTraffic{
+		{{Email: "alice@example.com", UpBytes: 5_000, DownBytes: 50_000}},
+	}}
+	parsed, err := xrayconfig.Parse([]byte(`{
+		"inbounds": [
+			{"tag": "vision", "protocol": "vless",
+			 "settings": {"clients": [{"email": "alice@example.com", "id": "uuid-a", "flow": "xtls-rprx-vision"}]},
+			 "streamSettings": {"network": "tcp", "security": "reality"}},
+			{"tag": "xhttp", "protocol": "vless",
+			 "settings": {"clients": [{"email": "alice@example.com", "id": "uuid-a"}]},
+			 "streamSettings": {"network": "xhttp", "security": "reality"}}
+		]
+	}`))
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	collector := users.NewCollector(traffic, unsupportedPresence, openMemoryStore(t)).
+		WithClock(func() time.Time { return now }).
+		WithRoster(&fakeRoster{version: 1, roster: users.RosterParse{Labels: parsed}})
+
+	snapshot, err := collector.Collect(context.Background())
+	if err != nil {
+		t.Fatalf("collect: %v", err)
+	}
+	alice := byEmail(snapshot.Users)["alice@example.com"]
+	want := []xrayconfig.Label{
+		{Protocol: "VLESS", Security: "XTLS-Reality", Transport: "tcp"},
+		{Protocol: "VLESS", Security: "Reality", Transport: "xhttp"},
+	}
+	if !slices.Equal(alice.Labels, want) {
+		t.Errorf("alice labels = %+v, want %+v", alice.Labels, want)
+	}
+}
 
 // fakeRoster plays back scripted config parses; the version bumps whenever
 // the roster changes, mirroring the xrayconfig watcher.
@@ -37,8 +79,8 @@ func TestCollectorSyncsTheConfigRoster(t *testing.T) {
 		},
 	}}
 	roster := &fakeRoster{version: 1, roster: users.RosterParse{Labels: map[string]users.RosterUser{
-		"alice@example.com": {Protocol: "VLESS", Security: "XTLS-Reality"},
-		"bob@example.com":   {Protocol: "TROJAN", Security: "TLS"},
+		"alice@example.com": {Labels: []xrayconfig.Label{{Protocol: "VLESS", Security: "XTLS-Reality", Transport: "tcp"}}},
+		"bob@example.com":   {Labels: []xrayconfig.Label{{Protocol: "TROJAN", Security: "TLS", Transport: "tcp"}}},
 	}}}
 	collector := users.NewCollector(traffic, unsupportedPresence, openMemoryStore(t)).
 		WithClock(func() time.Time { return now }).
@@ -54,8 +96,8 @@ func TestCollectorSyncsTheConfigRoster(t *testing.T) {
 	}
 
 	alice := got["alice@example.com"]
-	if alice.Protocol == nil || *alice.Protocol != "VLESS" || alice.Security == nil || *alice.Security != "XTLS-Reality" {
-		t.Errorf("alice labels = %v / %v, want VLESS / XTLS-Reality", alice.Protocol, alice.Security)
+	if !slices.Equal(alice.Labels, []xrayconfig.Label{{Protocol: "VLESS", Security: "XTLS-Reality", Transport: "tcp"}}) {
+		t.Errorf("alice labels = %+v, want VLESS / XTLS-Reality", alice.Labels)
 	}
 	if alice.Disabled {
 		t.Error("alice disabled = true, want false — she is in the config")
@@ -74,16 +116,16 @@ func TestCollectorSyncsTheConfigRoster(t *testing.T) {
 	// A config edit is picked up on the next poll: erin returns, alice's
 	// security changed.
 	roster.update(users.RosterParse{Labels: map[string]users.RosterUser{
-		"alice@example.com": {Protocol: "VLESS", Security: "Reality"},
-		"erin@example.com":  {Protocol: "VLESS", Security: "Reality"},
+		"alice@example.com": {Labels: []xrayconfig.Label{{Protocol: "VLESS", Security: "Reality", Transport: "tcp"}}},
+		"erin@example.com":  {Labels: []xrayconfig.Label{{Protocol: "VLESS", Security: "Reality", Transport: "tcp"}}},
 	}})
 	snapshot, err = collector.Collect(context.Background())
 	if err != nil {
 		t.Fatalf("collect: %v", err)
 	}
 	got = byEmail(snapshot.Users)
-	if alice := got["alice@example.com"]; alice.Security == nil || *alice.Security != "Reality" {
-		t.Errorf("alice security = %v, want the edited Reality", alice.Security)
+	if alice := got["alice@example.com"]; len(alice.Labels) != 1 || alice.Labels[0].Security != "Reality" {
+		t.Errorf("alice labels = %+v, want the edited Reality", alice.Labels)
 	}
 	if erin := got["erin@example.com"]; erin.Disabled {
 		t.Error("erin disabled = true after returning to the config, want false")
@@ -112,8 +154,8 @@ func TestCollectorIgnoresANeverParsedConfig(t *testing.T) {
 	if alice.Disabled {
 		t.Error("alice disabled = true, want false — a never-parsed config marks nobody gone")
 	}
-	if alice.Protocol != nil || alice.Security != nil {
-		t.Errorf("alice labels = %v / %v, want null", alice.Protocol, alice.Security)
+	if alice.Labels != nil {
+		t.Errorf("alice labels = %+v, want none", alice.Labels)
 	}
 }
 
@@ -126,7 +168,7 @@ func TestCollectorCarriesRosterAcrossStoreFailures(t *testing.T) {
 		{{Email: "alice@example.com", UpBytes: 5_000, DownBytes: 50_000}},
 	}}
 	roster := &fakeRoster{version: 1, roster: users.RosterParse{Labels: map[string]users.RosterUser{
-		"alice@example.com": {Protocol: "VLESS", Security: "Reality"},
+		"alice@example.com": {Labels: []xrayconfig.Label{{Protocol: "VLESS", Security: "Reality", Transport: "tcp"}}},
 	}}}
 	collector := users.NewCollector(traffic, unsupportedPresence, store).
 		WithClock(func() time.Time { return now }).
@@ -143,8 +185,8 @@ func TestCollectorCarriesRosterAcrossStoreFailures(t *testing.T) {
 		t.Fatalf("collect: %v", err)
 	}
 	alice := snapshot.Users[0]
-	if alice.Protocol == nil || *alice.Protocol != "VLESS" {
-		t.Errorf("alice protocol = %v, want VLESS — the roster carried into the recovered poll", alice.Protocol)
+	if len(alice.Labels) != 1 || alice.Labels[0].Protocol != "VLESS" {
+		t.Errorf("alice labels = %+v, want VLESS — the roster carried into the recovered poll", alice.Labels)
 	}
 }
 
@@ -156,7 +198,7 @@ func TestCollectorFlushesRosterWhileStale(t *testing.T) {
 		{{Email: "alice@example.com", UpBytes: 5_000, DownBytes: 50_000}},
 	}}
 	roster := &fakeRoster{version: 1, roster: users.RosterParse{Labels: map[string]users.RosterUser{
-		"alice@example.com": {Protocol: "VLESS", Security: "Reality"},
+		"alice@example.com": {Labels: []xrayconfig.Label{{Protocol: "VLESS", Security: "Reality", Transport: "tcp"}}},
 	}}}
 	collector := users.NewCollector(traffic, unsupportedPresence, openMemoryStore(t)).
 		WithClock(func() time.Time { return now }).
@@ -198,7 +240,7 @@ func TestCollectorAdoptsConfigClients(t *testing.T) {
 	now := time.Unix(1_780_000_000, 0)
 	traffic := &fakeTraffic{pages: [][]users.RawTraffic{{}}}
 	roster := &fakeRoster{version: 1, roster: users.RosterParse{
-		Labels:  map[string]users.RosterUser{"alice@example.com": {Protocol: "VLESS", Security: "XTLS-Reality"}},
+		Labels:  map[string]users.RosterUser{"alice@example.com": {Labels: []xrayconfig.Label{{Protocol: "VLESS", Security: "XTLS-Reality", Transport: "tcp"}}}},
 		Clients: map[string]users.RosterClient{"alice@example.com": {ClientID: "alice-uuid", Inbounds: []string{"vless-vision"}}},
 	}}
 	collector := users.NewCollector(traffic, unsupportedPresence, openMemoryStore(t)).
@@ -220,8 +262,8 @@ func TestCollectorAdoptsConfigClients(t *testing.T) {
 	// A hand edit attaches alice to a second inbound and adds bob.
 	roster.update(users.RosterParse{
 		Labels: map[string]users.RosterUser{
-			"alice@example.com": {Protocol: "VLESS", Security: "XTLS-Reality"},
-			"bob@example.com":   {Protocol: "VLESS", Security: "Reality"},
+			"alice@example.com": {Labels: []xrayconfig.Label{{Protocol: "VLESS", Security: "XTLS-Reality", Transport: "tcp"}}},
+			"bob@example.com":   {Labels: []xrayconfig.Label{{Protocol: "VLESS", Security: "Reality", Transport: "tcp"}}},
 		},
 		Clients: map[string]users.RosterClient{
 			"alice@example.com": {ClientID: "alice-uuid", Inbounds: []string{"vless-vision", "vless-xhttp"}},

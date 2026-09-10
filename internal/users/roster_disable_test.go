@@ -56,7 +56,7 @@ func TestDisableRosterUserFlagsDisabledAndKeepsHistory(t *testing.T) {
 	// not revive her: neither the labels upsert nor adoption.
 	if err := store.ApplyPoll(ctx, nil, nil, &users.RosterParse{
 		Labels: map[string]xrayconfig.User{
-			"alice@example.com": {Protocol: "VLESS", Security: "Reality"},
+			"alice@example.com": {Labels: []xrayconfig.Label{{Protocol: "VLESS", Security: "Reality", Transport: "tcp"}}},
 		},
 		Clients: map[string]users.RosterClient{
 			"alice@example.com": {ClientID: "uuid-alice", Inbounds: []string{"vless-vision"}},
@@ -147,7 +147,7 @@ func TestEnableRosterUserRevivesInPlace(t *testing.T) {
 
 	// And adoption resumes: a config parse merges attachments again.
 	if err := store.ApplyPoll(ctx, nil, nil, &users.RosterParse{
-		Labels: map[string]xrayconfig.User{"alice@example.com": {Protocol: "VLESS", Security: "Reality"}},
+		Labels: map[string]xrayconfig.User{"alice@example.com": {Labels: []xrayconfig.Label{{Protocol: "VLESS", Security: "Reality", Transport: "tcp"}}}},
 		Clients: map[string]users.RosterClient{
 			"alice@example.com": {ClientID: "uuid-alice", Inbounds: []string{"vless-vision", "vless-xhttp"}},
 		},
@@ -182,7 +182,7 @@ func TestAddRosterUserRevivesADisabledUser(t *testing.T) {
 
 	record, err := store.AddRosterUser(ctx, users.NewRosterUser{
 		Email: "alice@example.com", ClientID: "uuid-alice-new",
-		Inbounds: []string{"vless-ws"}, Protocol: "VLESS", Security: "TLS",
+		Inbounds: []string{"vless-ws"}, Labels: []xrayconfig.Label{{Protocol: "VLESS", Security: "TLS", Transport: "tcp"}},
 	}, now.Add(3*time.Second))
 	if err != nil {
 		t.Fatalf("re-add: %v", err)
@@ -202,7 +202,7 @@ func TestAddRosterUserRevivesADisabledUser(t *testing.T) {
 	// And adoption resumes for her: a config parse with an extra attachment
 	// merges normally again.
 	if err := store.ApplyPoll(ctx, nil, nil, &users.RosterParse{
-		Labels: map[string]xrayconfig.User{"alice@example.com": {Protocol: "VLESS", Security: "Reality"}},
+		Labels: map[string]xrayconfig.User{"alice@example.com": {Labels: []xrayconfig.Label{{Protocol: "VLESS", Security: "Reality", Transport: "tcp"}}}},
 		Clients: map[string]users.RosterClient{
 			"alice@example.com": {ClientID: "uuid-alice-new", Inbounds: []string{"vless-ws", "vless-xhttp"}},
 		},
