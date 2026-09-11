@@ -27,6 +27,7 @@ import {
   type HostStats,
   type LogSource,
   type PanelInfo,
+  type User,
   type UsersSnapshot,
   type XrayStatus,
 } from "@/lib/api";
@@ -178,6 +179,85 @@ function IconAction({
 // history retained (ADR-0007) — are hidden by default behind a toggle.
 // Speeds read "stale" on a stale snapshot — xray is unreachable and the
 // totals are last-known.
+function compareText(left: string, right: string) {
+  if (left < right) return -1;
+  if (left > right) return 1;
+  return 0;
+}
+
+function compareEmail(left: string, right: string) {
+  return compareText(left.toLowerCase(), right.toLowerCase()) || compareText(left, right);
+}
+
+type SortKey = "email" | "traffic" | "lastSeen";
+type SortDirection = "ascending" | "descending";
+type UserSort = { key: SortKey; direction: SortDirection } | null;
+type UserComparator = (left: User, right: User, direction: SortDirection) => number;
+
+const DEFAULT_SORT_DIRECTIONS: Record<SortKey, SortDirection> = {
+  email: "ascending",
+  traffic: "descending",
+  lastSeen: "descending",
+};
+
+function applyDirection(compared: number, direction: SortDirection) {
+  return direction === "ascending" ? compared : -compared;
+}
+
+const USER_COMPARATORS: Record<SortKey, UserComparator> = {
+  email(left, right, direction) {
+    const folded = compareText(left.email.toLowerCase(), right.email.toLowerCase());
+    return applyDirection(folded, direction) || compareText(left.email, right.email);
+  },
+  traffic(left, right, direction) {
+    const leftTotal = left.up_bytes_total + left.down_bytes_total;
+    const rightTotal = right.up_bytes_total + right.down_bytes_total;
+    return applyDirection(leftTotal - rightTotal, direction) || compareEmail(left.email, right.email);
+  },
+  lastSeen(left, right, direction) {
+    const leftNeverSeen = !left.online && left.last_seen === null;
+    const rightNeverSeen = !right.online && right.last_seen === null;
+    if (leftNeverSeen !== rightNeverSeen) return leftNeverSeen ? 1 : -1;
+    if (left.online !== right.online) {
+      return applyDirection(left.online ? 1 : -1, direction);
+    }
+    if (!left.online && left.last_seen !== right.last_seen) {
+      return applyDirection((left.last_seen ?? 0) - (right.last_seen ?? 0), direction);
+    }
+    return compareEmail(left.email, right.email);
+  },
+};
+
+function SortableHead({
+  label,
+  sortKey,
+  sort,
+  className,
+  onSort,
+}: {
+  label: string;
+  sortKey: SortKey;
+  sort: UserSort;
+  className?: string;
+  onSort: (key: SortKey) => void;
+}) {
+  const direction = sort?.key === sortKey ? sort.direction : "none";
+  return (
+    <TableHead aria-sort={direction} className={className}>
+      <button
+        type="button"
+        onClick={() => onSort(sortKey)}
+        className="hover:text-primary inline-flex items-center gap-1"
+      >
+        {label}
+        <span aria-hidden="true">
+          {direction === "ascending" ? "↑" : direction === "descending" ? "↓" : "↕"}
+        </span>
+      </button>
+    </TableHead>
+  );
+}
+
 function UsersTable({
   snapshot,
   onOpenDetails,
@@ -190,10 +270,27 @@ function UsersTable({
   onOpenAdd: (opener: HTMLButtonElement) => void;
 }) {
   const [showDisabled, setShowDisabled] = useState(false);
+  const [sort, setSort] = useState<UserSort>(null);
   const disabledCount = snapshot.users.filter((user) => user.disabled).length;
   const visible = showDisabled
-    ? snapshot.users
+    ? [...snapshot.users]
     : snapshot.users.filter((user) => !user.disabled);
+
+  function selectSort(key: SortKey) {
+    setSort((current) => ({
+      key,
+      direction:
+        current?.key === key
+          ? current.direction === "ascending"
+            ? "descending"
+            : "ascending"
+          : DEFAULT_SORT_DIRECTIONS[key],
+    }));
+  }
+
+  if (sort !== null) {
+    visible.sort((left, right) => USER_COMPARATORS[sort.key](left, right, sort.direction));
+  }
 
   return (
     <section aria-label="Users" className="bg-surface/80 mt-4 overflow-hidden rounded-xl border">
@@ -247,12 +344,24 @@ function UsersTable({
         <TableHeader>
           <TableRow className="text-muted-foreground text-[0.7rem] font-bold tracking-[0.08em] uppercase hover:bg-transparent">
             <TableHead className="w-10 px-5" aria-label="Online" />
-            <TableHead>User</TableHead>
+            <SortableHead label="User" sortKey="email" sort={sort} onSort={selectSort} />
             <TableHead className="w-48">Protocol</TableHead>
-            <TableHead className="w-28 pl-5">Traffic</TableHead>
+            <SortableHead
+              label="Traffic"
+              sortKey="traffic"
+              sort={sort}
+              onSort={selectSort}
+              className="w-28 pl-5"
+            />
             <TableHead className="w-52">Speed now</TableHead>
             <TableHead className="w-40">Online IPs</TableHead>
-            <TableHead className="w-24 text-right">Last seen</TableHead>
+            <SortableHead
+              label="Last seen"
+              sortKey="lastSeen"
+              sort={sort}
+              onSort={selectSort}
+              className="w-24 text-right"
+            />
             <TableHead className="w-32 pr-5" aria-label="Actions" />
           </TableRow>
         </TableHeader>

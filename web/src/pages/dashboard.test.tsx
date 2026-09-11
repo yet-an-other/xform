@@ -409,7 +409,123 @@ const usersSnapshot = {
   ],
 };
 
+function visibleUserEmails(table: HTMLElement) {
+  return within(table)
+    .getAllByRole("button", { name: /^Edit / })
+    .map((button) => button.getAttribute("aria-label")?.slice(5));
+}
+
 describe("users table", () => {
+  it("preserves API order until User sorting starts, then toggles direction", async () => {
+    stubEndpoints({
+      server: () => json(stats),
+      xray: () => json(xrayRunning),
+      users: () =>
+        json({
+          ...usersSnapshot,
+          users: [
+            { ...usersSnapshot.users[0], email: "zed@example.com" },
+            { ...usersSnapshot.users[1], email: "alice@example.com" },
+            { ...usersSnapshot.users[1], email: "Alice@example.com" },
+          ],
+        }),
+    });
+
+    render(<Dashboard onUnauthenticated={() => {}} />);
+
+    const table = await screen.findByRole("region", { name: "Users" });
+    const userHeader = within(table).getByRole("columnheader", { name: "User" });
+
+    expect(visibleUserEmails(table)).toEqual([
+      "zed@example.com",
+      "alice@example.com",
+      "Alice@example.com",
+    ]);
+    expect(userHeader).toHaveAttribute("aria-sort", "none");
+
+    fireEvent.click(within(userHeader).getByRole("button"));
+    expect(visibleUserEmails(table)).toEqual(["Alice@example.com", "alice@example.com", "zed@example.com"]);
+    expect(userHeader).toHaveAttribute("aria-sort", "ascending");
+
+    fireEvent.click(within(userHeader).getByRole("button"));
+    expect(visibleUserEmails(table)).toEqual(["zed@example.com", "Alice@example.com", "alice@example.com"]);
+    expect(userHeader).toHaveAttribute("aria-sort", "descending");
+  });
+
+  it("sorts Traffic by combined durable totals, descending first, with email ties", async () => {
+    const userTemplate = usersSnapshot.users[1];
+    stubEndpoints({
+      server: () => json(stats),
+      xray: () => json(xrayRunning),
+      users: () =>
+        json({
+          ...usersSnapshot,
+          users: [
+            { ...userTemplate, email: "zed@example.com", up_bytes_total: 60, down_bytes_total: 40 },
+            { ...userTemplate, email: "bob@example.com", up_bytes_total: 100, down_bytes_total: 200 },
+            { ...userTemplate, email: "Alice@example.com", up_bytes_total: 250, down_bytes_total: 50 },
+          ],
+        }),
+    });
+
+    render(<Dashboard onUnauthenticated={() => {}} />);
+
+    const table = await screen.findByRole("region", { name: "Users" });
+    const userHeader = within(table).getByRole("columnheader", { name: "User" });
+    const trafficHeader = within(table).getByRole("columnheader", { name: "Traffic" });
+
+    fireEvent.click(within(userHeader).getByRole("button"));
+    fireEvent.click(within(trafficHeader).getByRole("button"));
+    expect(visibleUserEmails(table)).toEqual(["Alice@example.com", "bob@example.com", "zed@example.com"]);
+    expect(userHeader).toHaveAttribute("aria-sort", "none");
+    expect(trafficHeader).toHaveAttribute("aria-sort", "descending");
+
+    fireEvent.click(within(trafficHeader).getByRole("button"));
+    expect(visibleUserEmails(table)).toEqual(["zed@example.com", "Alice@example.com", "bob@example.com"]);
+    expect(trafficHeader).toHaveAttribute("aria-sort", "ascending");
+  });
+
+  it("sorts Last seen with online newest and never-seen last in both directions", async () => {
+    const userTemplate = usersSnapshot.users[1];
+    stubEndpoints({
+      server: () => json(stats),
+      xray: () => json(xrayRunning),
+      users: () =>
+        json({
+          ...usersSnapshot,
+          users: [
+            { ...userTemplate, email: "never@example.com", last_seen: null },
+            { ...userTemplate, email: "old@example.com", last_seen: 100 },
+            { ...userTemplate, email: "online@example.com", online: true, last_seen: 50 },
+            { ...userTemplate, email: "new@example.com", last_seen: 200 },
+          ],
+        }),
+    });
+
+    render(<Dashboard onUnauthenticated={() => {}} />);
+
+    const table = await screen.findByRole("region", { name: "Users" });
+    const lastSeenHeader = within(table).getByRole("columnheader", { name: "Last seen" });
+
+    fireEvent.click(within(lastSeenHeader).getByRole("button"));
+    expect(visibleUserEmails(table)).toEqual([
+      "online@example.com",
+      "new@example.com",
+      "old@example.com",
+      "never@example.com",
+    ]);
+    expect(lastSeenHeader).toHaveAttribute("aria-sort", "descending");
+
+    fireEvent.click(within(lastSeenHeader).getByRole("button"));
+    expect(visibleUserEmails(table)).toEqual([
+      "old@example.com",
+      "new@example.com",
+      "online@example.com",
+      "never@example.com",
+    ]);
+    expect(lastSeenHeader).toHaveAttribute("aria-sort", "ascending");
+  });
+
   it("hides disabled users by default and reveals them with the toggle", async () => {
     stubEndpoints({
       server: () => json(stats),
@@ -448,6 +564,60 @@ describe("users table", () => {
     // And hides them again.
     fireEvent.click(within(table).getByRole("button", { name: /hide disabled/i }));
     expect(within(table).queryByRole("row", { name: /bob@example\.com/ })).not.toBeInTheDocument();
+  });
+
+  it("keeps disabled Users in the selected order after an Observation refresh", async () => {
+    vi.useFakeTimers();
+    const userTemplate = usersSnapshot.users[1];
+    let refreshed = false;
+    stubEndpoints({
+      server: () => json(stats),
+      xray: () => json(xrayRunning),
+      users: () =>
+        json({
+          ...usersSnapshot,
+          collected_at: refreshed ? usersSnapshot.collected_at + 5 : usersSnapshot.collected_at,
+          users: refreshed
+            ? [
+                { ...userTemplate, email: "high@example.com", up_bytes_total: 50, down_bytes_total: 0 },
+                { ...userTemplate, email: "low@example.com", up_bytes_total: 100, down_bytes_total: 0 },
+                { ...userTemplate, email: "disabled@example.com", up_bytes_total: 200, down_bytes_total: 0, disabled: true },
+              ]
+            : [
+                { ...userTemplate, email: "low@example.com", up_bytes_total: 10, down_bytes_total: 0 },
+                { ...userTemplate, email: "high@example.com", up_bytes_total: 30, down_bytes_total: 0 },
+                { ...userTemplate, email: "disabled@example.com", up_bytes_total: 20, down_bytes_total: 0, disabled: true },
+              ],
+        }),
+    });
+
+    render(<Dashboard onUnauthenticated={() => {}} />);
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    const table = screen.getByRole("region", { name: "Users" });
+    fireEvent.click(within(table).getByRole("button", { name: /show disabled/i }));
+    fireEvent.click(within(table).getByRole("button", { name: "Traffic" }));
+    expect(visibleUserEmails(table)).toEqual([
+      "high@example.com",
+      "disabled@example.com",
+      "low@example.com",
+    ]);
+
+    refreshed = true;
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(5_000);
+    });
+    expect(visibleUserEmails(table)).toEqual([
+      "disabled@example.com",
+      "low@example.com",
+      "high@example.com",
+    ]);
+    expect(within(table).getByRole("columnheader", { name: "Traffic" })).toHaveAttribute(
+      "aria-sort",
+      "descending",
+    );
   });
 
   it("renders no toggle when nobody is disabled", async () => {
