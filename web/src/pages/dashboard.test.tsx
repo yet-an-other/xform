@@ -526,6 +526,27 @@ describe("users table", () => {
     expect(lastSeenHeader).toHaveAttribute("aria-sort", "ascending");
   });
 
+  it("keeps uppercase on the sortable header buttons", async () => {
+    // Tailwind preflight sets `button { text-transform: none }`, so the
+    // row-level `uppercase` does not reach the sort buttons — they must
+    // carry it themselves. jsdom cannot compute Tailwind styles, so the
+    // class presence is the seam here; the headless-chromium fixture
+    // (/tmp/header-case pattern) verified computed styles.
+    stubEndpoints({
+      server: () => json(stats),
+      xray: () => json(xrayRunning),
+      users: () => json(usersSnapshot),
+    });
+
+    render(<Dashboard onUnauthenticated={() => {}} />);
+
+    const table = await screen.findByRole("region", { name: "Users" });
+    for (const name of ["User", "Traffic", "Last seen"]) {
+      const button = within(table).getByRole("columnheader", { name }).querySelector("button");
+      expect(button).toHaveClass("uppercase");
+    }
+  });
+
   it("hides disabled users by default and reveals them with the toggle", async () => {
     stubEndpoints({
       server: () => json(stats),

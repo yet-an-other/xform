@@ -284,7 +284,7 @@ function SortableHead({
       <button
         type="button"
         onClick={() => onSort(sortKey)}
-        className="hover:text-primary inline-flex items-center gap-1"
+        className="hover:text-primary inline-flex items-center gap-1 uppercase"
       >
         {label}
         <span aria-hidden="true">
