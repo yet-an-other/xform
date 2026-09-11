@@ -228,6 +228,43 @@ const USER_COMPARATORS: Record<SortKey, UserComparator> = {
   },
 };
 
+// The users view — the sort selection and the disabled-visibility toggle —
+// persists in the browser store (ADR-0009): it survives a reload on this
+// browser, never reaches the panel, and resets when site data is cleared.
+const USERS_VIEW_KEY = "xform.users-view";
+
+type UsersView = { showDisabled: boolean; sort: UserSort };
+
+function parseStoredSort(value: unknown): UserSort {
+  if (typeof value !== "object" || value === null) return null;
+  const { key, direction } = value as { key?: unknown; direction?: unknown };
+  if (direction !== "ascending" && direction !== "descending") return null;
+  if (key !== "email" && key !== "traffic" && key !== "lastSeen") return null;
+  return { key, direction };
+}
+
+function loadUsersView(): UsersView {
+  try {
+    const stored = window.localStorage.getItem(USERS_VIEW_KEY);
+    if (stored === null) return { showDisabled: false, sort: null };
+    const parsed: unknown = JSON.parse(stored);
+    if (typeof parsed !== "object" || parsed === null) return { showDisabled: false, sort: null };
+    const { showDisabled, sort } = parsed as { showDisabled?: unknown; sort?: unknown };
+    return { showDisabled: showDisabled === true, sort: parseStoredSort(sort) };
+  } catch {
+    // A corrupt value falls back to the defaults — never trusted (ADR-0009).
+    return { showDisabled: false, sort: null };
+  }
+}
+
+function saveUsersView(view: UsersView) {
+  try {
+    window.localStorage.setItem(USERS_VIEW_KEY, JSON.stringify(view));
+  } catch {
+    // A blocked or full store drops the preference; the view still works.
+  }
+}
+
 function SortableHead({
   label,
   sortKey,
@@ -269,22 +306,30 @@ function UsersTable({
   onOpenEdit: (email: string, opener: HTMLButtonElement) => void;
   onOpenAdd: (opener: HTMLButtonElement) => void;
 }) {
-  const [showDisabled, setShowDisabled] = useState(false);
-  const [sort, setSort] = useState<UserSort>(null);
+  // One view object, so both selections persist together (ADR-0009).
+  const [view, setView] = useState<UsersView>(loadUsersView);
+  const { showDisabled, sort } = view;
   const disabledCount = snapshot.users.filter((user) => user.disabled).length;
   const visible = showDisabled
     ? [...snapshot.users]
     : snapshot.users.filter((user) => !user.disabled);
 
+  useEffect(() => {
+    saveUsersView(view);
+  }, [view]);
+
   function selectSort(key: SortKey) {
-    setSort((current) => ({
-      key,
-      direction:
-        current?.key === key
-          ? current.direction === "ascending"
-            ? "descending"
-            : "ascending"
-          : DEFAULT_SORT_DIRECTIONS[key],
+    setView((current) => ({
+      ...current,
+      sort: {
+        key,
+        direction:
+          current.sort?.key === key
+            ? current.sort.direction === "ascending"
+              ? "descending"
+              : "ascending"
+            : DEFAULT_SORT_DIRECTIONS[key],
+      },
     }));
   }
 
@@ -320,7 +365,7 @@ function UsersTable({
           {disabledCount > 0 ? (
             <button
               type="button"
-              onClick={() => setShowDisabled((shown) => !shown)}
+              onClick={() => setView((current) => ({ ...current, showDisabled: !current.showDisabled }))}
               className="border-border text-muted-foreground hover:text-foreground rounded-lg border px-2.5 py-1 text-[0.7rem] font-bold tracking-[0.08em] uppercase"
             >
               {showDisabled ? "Hide disabled" : `Show disabled (${disabledCount})`}
@@ -342,7 +387,10 @@ function UsersTable({
           overflow. */}
       <Table className="min-w-[68.5rem] table-fixed">
         <TableHeader>
-          <TableRow className="text-muted-foreground text-[0.7rem] font-bold tracking-[0.08em] uppercase hover:bg-transparent">
+          {/* Users table header (users-header prototype, option A): the
+              card-colored fill with a hairline top edge and a stronger
+              lower edge reads as one band, distinct from the rows. */}
+          <TableRow className="bg-card/75 text-muted-foreground text-[0.7rem] font-bold tracking-[0.08em] uppercase shadow-[inset_0_1px_0_rgba(52,70,90,0.48),inset_0_-1px_0_var(--color-border-strong)] border-b-transparent hover:bg-transparent">
             <TableHead className="w-10 px-5" aria-label="Online" />
             <SortableHead label="User" sortKey="email" sort={sort} onSort={selectSort} />
             <TableHead className="w-48">Protocol</TableHead>

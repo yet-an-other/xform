@@ -165,3 +165,7 @@ _Avoid_: cached, outdated, frozen
 **Degraded**:
 The panel's mode when xray is stopped or unreachable — the dashboard stays up, host stats stay live, xray-derived data is stale or absent.
 _Avoid_: error mode, offline mode, maintenance mode
+
+**Users view**:
+The per-browser arrangement of the users table: the sort selection and the disabled-visibility toggle, kept in the browser's own store (ADR-0009). The panel holds no copy and never sees it; a fresh browser shows API order with disabled users hidden.
+_Avoid_: preferences, settings, profile

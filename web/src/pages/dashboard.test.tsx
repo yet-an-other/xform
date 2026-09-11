@@ -1,5 +1,5 @@
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { json, stats, xrayRunning } from "@/test/fixtures";
 import { decodeQr, modulesFromPathData } from "@/test/qr-decode";
@@ -756,6 +756,96 @@ describe("users table", () => {
     expect(aliceRow).toHaveTextContent("2m ago");
     expect(aliceRow).toHaveTextContent("stale");
   });
+});
+
+describe("users view persistence", () => {
+  // ADR-0009: the sort selection and the disabled-visibility toggle live in
+  // the browser store and must survive a remount. jsdom does not implement
+  // localStorage (like the clipboard), so the tests install a memory store.
+  const VIEW_KEY = "xform.users-view";
+
+  beforeEach(() => {
+    const store = new Map<string, string>();
+    Object.defineProperty(window, "localStorage", {
+      configurable: true,
+      value: {
+        getItem: (key: string) => (store.has(key) ? (store.get(key) as string) : null),
+        setItem: (key: string, value: string) => void store.set(key, String(value)),
+        removeItem: (key: string) => void store.delete(key),
+      },
+    });
+  });
+
+  afterEach(() => {
+    Reflect.deleteProperty(window, "localStorage");
+  });
+
+  it("keeps the sort selection across a remount", async () => {
+    stubEndpoints({
+      server: () => json(stats),
+      xray: () => json(xrayRunning),
+      users: () => json(usersSnapshot),
+    });
+
+    const { unmount } = render(<Dashboard onUnauthenticated={() => {}} />);
+    const table = await screen.findByRole("region", { name: "Users" });
+    const trafficHeader = within(table).getByRole("columnheader", { name: "Traffic" });
+    fireEvent.click(within(trafficHeader).getByRole("button"));
+    expect(trafficHeader).toHaveAttribute("aria-sort", "descending");
+    expect(storedView()).toEqual(
+      JSON.stringify({ showDisabled: false, sort: { key: "traffic", direction: "descending" } }),
+    );
+
+    unmount();
+    render(<Dashboard onUnauthenticated={() => {}} />);
+    const reloaded = await screen.findByRole("region", { name: "Users" });
+    expect(within(reloaded).getByRole("columnheader", { name: "Traffic" })).toHaveAttribute("aria-sort", "descending");
+  });
+
+  it("keeps the disabled-visibility toggle across a remount", async () => {
+    stubEndpoints({
+      server: () => json(stats),
+      xray: () => json(xrayRunning),
+      users: () =>
+        json({
+          ...usersSnapshot,
+          users: [usersSnapshot.users[0], { ...usersSnapshot.users[1], disabled: true }],
+        }),
+    });
+
+    const { unmount } = render(<Dashboard onUnauthenticated={() => {}} />);
+    const table = await screen.findByRole("region", { name: "Users" });
+    fireEvent.click(within(table).getByRole("button", { name: /show disabled/i }));
+    expect(within(table).getByRole("row", { name: /bob@example\.com/ })).toBeInTheDocument();
+
+    unmount();
+    render(<Dashboard onUnauthenticated={() => {}} />);
+    const reloaded = await screen.findByRole("region", { name: "Users" });
+    expect(within(reloaded).getByRole("button", { name: /hide disabled/i })).toBeInTheDocument();
+    expect(within(reloaded).getByRole("row", { name: /bob@example\.com/ })).toBeInTheDocument();
+  });
+
+  it("falls back to defaults when the stored view is corrupt", async () => {
+    window.localStorage.setItem(VIEW_KEY, "{not json");
+    stubEndpoints({
+      server: () => json(stats),
+      xray: () => json(xrayRunning),
+      users: () =>
+        json({
+          ...usersSnapshot,
+          users: [usersSnapshot.users[0], { ...usersSnapshot.users[1], disabled: true }],
+        }),
+    });
+
+    render(<Dashboard onUnauthenticated={() => {}} />);
+    const table = await screen.findByRole("region", { name: "Users" });
+    expect(within(table).getByRole("columnheader", { name: "User" })).toHaveAttribute("aria-sort", "none");
+    expect(within(table).queryByRole("row", { name: /bob@example\.com/ })).not.toBeInTheDocument();
+  });
+
+  function storedView() {
+    return window.localStorage.getItem(VIEW_KEY);
+  }
 });
 
 describe("add user", () => {
