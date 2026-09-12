@@ -251,6 +251,10 @@ func TestTrustedProxyAdmitsOneAssertionAndStripsTrustHeaders(t *testing.T) {
 	request.Header.Set("X-Auth-Request-Access-Token", "id-token")
 	request.Header.Set("Cookie", "gateway_session=operator-secret")
 	request.Header.Set("X-Forwarded-For", "203.0.113.10")
+	request.Header.Set("X-Forwarded-Server", "spoofed.example.test")
+	request.Header.Set("X-Original-Method", "POST")
+	request.Header.Set("X-Forwarded-Uri", "/spoofed")
+	request.Header.Set("X-Auth-Request-Redirect", "/spoofed")
 	response := httptest.NewRecorder()
 
 	gateway.Handler(next).ServeHTTP(response, request)
@@ -262,7 +266,7 @@ func TestTrustedProxyAdmitsOneAssertionAndStripsTrustHeaders(t *testing.T) {
 		t.Fatal("valid assertion did not reach the application")
 	}
 	for _, name := range []string{
-		"X-Xform-Authenticated", "Authorization", "X-Forwarded-User", "X-Auth-Request-Access-Token", "X-Forwarded-For", "Cookie",
+		"X-Xform-Authenticated", "Authorization", "X-Forwarded-User", "X-Auth-Request-Access-Token", "X-Forwarded-For", "X-Forwarded-Server", "X-Original-Method", "X-Forwarded-Uri", "X-Auth-Request-Redirect", "Cookie",
 	} {
 		if values := headerValuesForTest(seen.Header, name); len(values) != 0 {
 			t.Errorf("application received %s, want it stripped", name)

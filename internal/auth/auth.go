@@ -175,13 +175,13 @@ var trustedHeaders = [...]string{
 	"X-Xform-Authenticated", "Authorization", "Proxy-Authorization", "Forwarded", "Cookie",
 	"X-Forwarded-For", "X-Forwarded-Host", "X-Forwarded-Port", "X-Forwarded-Proto",
 	"X-Forwarded-User", "X-Forwarded-Email", "X-Forwarded-Groups", "X-Forwarded-Preferred-Username",
-	"X-Forwarded-Access-Token", "X-Forwarded-Authorization", "X-Forwarded-Client-Cert",
+	"X-Forwarded-Access-Token", "X-Forwarded-Authorization", "X-Forwarded-Client-Cert", "X-Forwarded-Server",
 	"X-Auth-Request-User", "X-Auth-Request-Email", "X-Auth-Request-Groups",
-	"X-Auth-Request-Preferred-Username", "X-Auth-Request-Token", "X-Auth-Request-Access-Token",
+	"X-Auth-Request-Preferred-Username", "X-Auth-Request-Token", "X-Auth-Request-Access-Token", "X-Auth-Request-Redirect",
 	"X-Auth-Request-Id-Token", "X-Auth-Request-IdToken", "X-Access-Token", "X-ID-Token", "X-Id-Token",
 	"Remote-User", "Remote-Email", "Remote-Groups", "X-Remote-User", "X-Remote-Email", "X-Remote-Groups",
 	"X-Authenticated-User", "X-Authenticated-Email", "X-User", "X-Email", "X-Groups", "X-Group",
-	"X-Real-IP", "X-Original-URL", "X-Original-URI", "X-SSL-Client-Cert", "X-Client-Cert",
+	"X-Real-IP", "X-Original-URL", "X-Original-URI", "X-Original-Method", "X-Forwarded-Uri", "X-SSL-Client-Cert", "X-Client-Cert",
 }
 
 func headerValues(headers http.Header, name string) []string {

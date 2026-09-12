@@ -92,11 +92,11 @@ Two same-origin shapes are supported (see [ADR-0001](docs/adr/0001-two-same-orig
 - **Embedded (default)** — the binary above serves the dashboard itself; nothing else to install.
 - **Embedded, fronted by a proxy** — nginx terminates TLS and proxies everything to the binary, which still serves the embedded dashboard. Reference config: [`deploy/nginx-all-proxy.conf.example`](deploy/nginx-all-proxy.conf.example).
 - **Proxy-hosted** — nginx serves the built dashboard and proxies `/api/*` to the binary on loopback. Reference config: [`deploy/nginx.conf.example`](deploy/nginx.conf.example); systemd unit: [`deploy/xform.service`](deploy/xform.service).
-- **Trusted proxy, embedded root** — nginx can own the public Authentication gateway and proxy admitted requests to xform's protected Unix socket. Reference config, setup, and deterministic smoke test: [`deploy/trusted-proxy/nginx/`](deploy/trusted-proxy/nginx/).
+- **Trusted proxy, nginx** — nginx can own the public Authentication gateway for embedded or proxy-hosted static Dashboards at root or under `/xform/`, proxying admitted API requests to xform's protected Unix socket. Reference configs, setup, and the deterministic four-shape smoke matrix: [`deploy/trusted-proxy/nginx/`](deploy/trusted-proxy/nginx/).
 
 The API emits no CORS headers; the dashboard is always served same-origin.
 
-**Subpath mounting**: the dashboard is built mount-point agnostic (relative asset and API URLs), so either shape can hang under a subpath of an existing vhost (e.g. `https://HOST/xform/`) instead of a dedicated one. The proxy strips the prefix from nginx's original request URI so encoded email bytes remain encoded, and the bare subpath redirects to its trailing-slash form. Commented subpath variants ship in both reference configs.
+**Subpath mounting**: the dashboard is built mount-point agnostic (relative asset and API URLs), so either shape can hang under a subpath of an existing vhost (e.g. `https://HOST/xform/`) instead of a dedicated one. The gateway strips the prefix from nginx's original request URI only on the xform hop so encoded email bytes remain encoded, scopes authentication endpoints and cookies under the mount, and redirects the bare subpath to its trailing-slash form. Complete Trusted proxy nginx templates and a matrix smoke test ship in [`deploy/trusted-proxy/nginx/`](deploy/trusted-proxy/nginx/); the generic proxy examples retain commented subpath variants for unauthenticated deployments.
 
 ## Install on the host
 

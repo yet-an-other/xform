@@ -13,7 +13,7 @@ from http import HTTPStatus
 from http.cookies import SimpleCookie
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from socketserver import ThreadingMixIn
-from urllib.parse import urlsplit
+from urllib.parse import quote, urlsplit
 
 
 class QuietHandler(BaseHTTPRequestHandler):
@@ -26,16 +26,40 @@ class QuietHandler(BaseHTTPRequestHandler):
 class ForwardAuthHandler(QuietHandler):
     def do_GET(self) -> None:  # noqa: N802 - stdlib handler API
         path = urlsplit(self.path).path
-        if path == "/oauth2/auth":
+        if path.endswith("/oauth2/auth"):
             self.handle_auth()
             return
-        if path == "/oauth2/start":
+        if path.endswith("/oauth2/start"):
+            prefix = path[: -len("/oauth2/start")]
+            location = prefix + "/fake-idp"
+            query = urlsplit(self.path).query
+            redirect_target = self.headers.get("X-Auth-Request-Redirect")
+            if redirect_target and "rd=" not in query:
+                location += "?rd=" + quote(redirect_target, safe="")
+            elif query:
+                location += "?" + query
             self.send_response(HTTPStatus.FOUND)
-            self.send_header("Location", "/fake-idp" + ("?" + self.path.split("?", 1)[1] if "?" in self.path else ""))
+            self.send_header("Location", location)
             self.send_header("Content-Length", "0")
             self.end_headers()
             return
-        if path in {"/oauth2/callback", "/oauth2/sign_out", "/fake-idp"} or path.startswith("/oauth2/"):
+        if path.endswith("/oauth2/callback"):
+            prefix = path[: -len("/oauth2/callback")]
+            cookie_path = prefix + "/" if prefix else "/"
+            self.send_response(HTTPStatus.OK)
+            self.send_header("Set-Cookie", f"xform_test_auth=admit; Path={cookie_path}; HttpOnly")
+            self.send_header("Content-Length", "0")
+            self.end_headers()
+            return
+        if path.endswith("/oauth2/sign_out"):
+            prefix = path[: -len("/oauth2/sign_out")]
+            cookie_path = prefix + "/" if prefix else "/"
+            self.send_response(HTTPStatus.OK)
+            self.send_header("Set-Cookie", f"xform_test_auth=; Path={cookie_path}; Max-Age=0")
+            self.send_header("Content-Length", "0")
+            self.end_headers()
+            return
+        if path.endswith("/fake-idp") or "/oauth2/" in path:
             self.send_text(HTTPStatus.OK, "fake gateway endpoint")
             return
         self.send_text(HTTPStatus.NOT_FOUND, "not found")
@@ -75,15 +99,50 @@ class PanelHandler(QuietHandler):
         "Cookie",
         "Authorization",
         "Proxy-Authorization",
+        "Forwarded",
         "X-Xform-Authenticated",
+        "X-Forwarded-For",
+        "X-Forwarded-Host",
+        "X-Forwarded-Port",
+        "X-Forwarded-Proto",
+        "X-Forwarded-Server",
+        "X-Forwarded-Uri",
         "X-Forwarded-User",
         "X-Forwarded-Email",
+        "X-Forwarded-Groups",
+        "X-Forwarded-Preferred-Username",
         "X-Forwarded-Access-Token",
+        "X-Forwarded-Authorization",
+        "X-Forwarded-Client-Cert",
+        "X-Auth-Request-User",
         "X-Auth-Request-Email",
+        "X-Auth-Request-Groups",
+        "X-Auth-Request-Preferred-Username",
+        "X-Auth-Request-Token",
         "X-Auth-Request-Access-Token",
+        "X-Auth-Request-Redirect",
+        "X-Auth-Request-Id-Token",
+        "X-Auth-Request-IdToken",
         "X-Access-Token",
         "X-ID-Token",
-        "X-Forwarded-For",
+        "X-Id-Token",
+        "Remote-User",
+        "Remote-Email",
+        "Remote-Groups",
+        "X-Remote-User",
+        "X-Remote-Email",
+        "X-Remote-Groups",
+        "X-Authenticated-User",
+        "X-Authenticated-Email",
+        "X-User",
+        "X-Email",
+        "X-Groups",
+        "X-Group",
+        "X-Original-URL",
+        "X-Original-URI",
+        "X-Original-Method",
+        "X-SSL-Client-Cert",
+        "X-Client-Cert",
         "X-Real-IP",
     )
 

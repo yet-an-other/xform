@@ -1,19 +1,9 @@
-# xform Trusted proxy gateway — embedded Dashboard, root mount
+# xform Trusted proxy gateway — static Dashboard, root mount
 #
-# Render the five deployment values before loading this file. Do not
-# run envsubst without naming those values: it would replace nginx's own
-# $variables. The Admission secret is deliberately absent from this repository.
-#
-# Required host setup:
-#   - xform listens on ${XFORM_SOCKET} in trusted_proxy mode.
-#   - the nginx worker account can traverse the socket directory and read/write
-#     the 0660 socket through the shared gateway group.
-#   - oauth2-proxy listens on ${OAUTH2_PROXY_UPSTREAM} and serves /oauth2/*.
-#   - XFORM_TRUSTED_PROXY_SECRET in xform equals the rendered secret below.
-#
-# For a production TLS listener, set NGINX_LISTEN to "443 ssl" and configure
-# the certificate directives for the public host. The smoke harness renders a
-# plain loopback listener instead.
+# Render only the five deployment placeholders. nginx serves the built SPA
+# from /var/www/xform/dist and sends only authenticated API requests to the
+# xform Unix socket. The Admission assertion and all credential-like headers
+# are applied on that upstream hop, never to static files or oauth2-proxy.
 
 user ${NGINX_USER};
 worker_processes 1;
@@ -43,12 +33,13 @@ http {
         server_name _;
 
 
-        # Uncomment and adapt these in a TLS-enabled public vhost.
-        # ssl_certificate     /etc/letsencrypt/live/panel.example.net/fullchain.pem;
-        # ssl_certificate_key /etc/letsencrypt/live/panel.example.net/privkey.pem;
+        root /var/www/xform/dist;
+        index index.html;
+        disable_symlinks on;
 
-        # The internal auth subrequest preserves the browser cookie for
-        # oauth2-proxy, but never uses client-supplied auth headers as trust.
+        # Configure TLS in the enclosing public vhost, or set NGINX_LISTEN to
+        # "443 ssl" and add the certificate directives here.
+
         location = /oauth2/auth {
             internal;
             add_header Cache-Control "no-store" always;
@@ -71,8 +62,6 @@ http {
             proxy_set_header Proxy-Authorization "";
         }
 
-        # oauth2-proxy owns sign-in, callback, and local Panel sign-out. These
-        # endpoints are reachable without forward authentication.
         location = /oauth2 {
             add_header Cache-Control "no-store" always;
             return 308 /oauth2/$is_args$args;
@@ -89,8 +78,6 @@ http {
             proxy_set_header X-Auth-Request-Redirect $request_uri;
         }
 
-        # Every API request remains an API-shaped 401 on failed authentication.
-        # It must not follow the document sign-in redirect into HTML.
         location = /api {
             auth_request /oauth2/auth;
             error_page 401 = @api_unauthorized;
@@ -107,13 +94,19 @@ http {
             return 401 '{"error":"unauthenticated"}';
         }
 
-        # Documents, the embedded Dashboard, and its assets use the same auth
-        # check. A 401 is the only response redirected to the public sign-in
-        # endpoint; upstream failures remain fail-closed errors.
+        # Auth-gate assets as well as index/deep-link documents. A missing
+        # asset is a 404; other missing paths use the SPA fallback by design.
+        location ^~ /assets/ {
+            auth_request /oauth2/auth;
+            error_page 401 = /_xform_oauth2_start;
+            add_header Cache-Control "public, max-age=31536000, immutable" always;
+            try_files $uri =404;
+        }
         location / {
             auth_request /oauth2/auth;
             error_page 401 = /_xform_oauth2_start;
-            proxy_pass http://xform_panel$request_uri;
+            add_header Cache-Control "no-cache";
+            try_files $uri $uri/ /index.html;
         }
         # Proxy the sign-in start internally so the original request URI can
         # travel in a header without being reparsed as a nested query string.
@@ -135,10 +128,9 @@ http {
             proxy_set_header Proxy-Authorization "";
         }
 
-        # Every protected proxy hop overwrites the complete set of headers that
-        # could carry a client assertion, identity, token, or authorization.
-        # The value is injected only because auth_request succeeded: auth_request
-        # returns before proxy_pass runs on denial or an upstream error.
+        # Protected API hops overwrite every assertion, identity, token,
+        # authorization, cookie, and forwarding header. auth_request completes
+        # before these xform proxy settings can be used.
         proxy_set_header Host $http_host;
         proxy_set_header Connection "";
         proxy_set_header X-Xform-Authenticated ${XFORM_TRUSTED_PROXY_SECRET};
