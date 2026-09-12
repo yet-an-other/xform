@@ -670,7 +670,13 @@ function XrayRow({ xray, rosterSize }: { xray: XrayStatus; rosterSize: number | 
   );
 }
 
-export function Dashboard({ onUnauthenticated }: { onUnauthenticated: () => void }) {
+export function Dashboard({
+  onAuthenticated,
+  onUnauthenticated,
+}: {
+  onAuthenticated?: () => void;
+  onUnauthenticated: (error?: UnauthenticatedError) => void;
+}) {
   const [stats, setStats] = useState<HostStats | null>(null);
   const [xray, setXray] = useState<XrayStatus | null>(null);
   const [users, setUsers] = useState<UsersSnapshot | null>(null);
@@ -691,12 +697,12 @@ export function Dashboard({ onUnauthenticated }: { onUnauthenticated: () => void
   // snapshot: reopening always starts with an initial load (SPEC §6).
   const closeDialog = useCallback(() => setDialog(null), []);
 
-  // An expired Session is the Dashboard's business, not a dialog's: whichever
-  // dialog's Collection meets a 401 hands it back here, and the pairing —
-  // close, then return to login (SPEC §6) — is written once.
-  const sessionExpired = useCallback(() => {
+  // An authentication 401 is the Dashboard's business, not a dialog's:
+  // whichever dialog's Collection meets it hands it back here, and the dialog
+  // closes before the App decides between Password login and gateway reload.
+  const sessionExpired = useCallback((error?: UnauthenticatedError) => {
     setDialog(null);
-    onUnauthenticated();
+    onUnauthenticated(error);
   }, [onUnauthenticated]);
 
   useEffect(() => {
@@ -704,12 +710,26 @@ export function Dashboard({ onUnauthenticated }: { onUnauthenticated: () => void
 
     async function poll() {
       try {
-        // One cycle, three observations: host, xray, and users.
-        const [serverStats, xrayStats, usersSnapshot] = await Promise.all([
+        // One cycle, three observations: host, xray, and users. Inspect all
+        // results before surfacing a generic failure: a trusted 401 must win
+        // even when another endpoint fails first.
+        const observations = await Promise.allSettled([
           fetchServerStats(controller.signal),
           fetchXrayStatus(controller.signal),
           fetchUsers(controller.signal),
         ]);
+        const unauthenticated = observations.find(
+          (result): result is PromiseRejectedResult =>
+            result.status === "rejected" && result.reason instanceof UnauthenticatedError,
+        );
+        if (unauthenticated) throw unauthenticated.reason;
+        const failed = observations.find(
+          (result): result is PromiseRejectedResult => result.status === "rejected",
+        );
+        if (failed) throw failed.reason;
+        const [serverStats, xrayStats, usersSnapshot] = observations.map(
+          (result) => (result as PromiseFulfilledResult<HostStats | XrayStatus | UsersSnapshot>).value,
+        ) as [HostStats, XrayStatus, UsersSnapshot];
         setStats(serverStats);
         setXray(xrayStats);
         setUsers(usersSnapshot);
@@ -717,7 +737,7 @@ export function Dashboard({ onUnauthenticated }: { onUnauthenticated: () => void
         setError(null);
       } catch (cause) {
         if (cause instanceof UnauthenticatedError) {
-          onUnauthenticated();
+          onUnauthenticated(cause);
           return;
         }
         if (!controller.signal.aborted) {
@@ -727,10 +747,15 @@ export function Dashboard({ onUnauthenticated }: { onUnauthenticated: () => void
       // Panel identity rides the same five-second cycle (uptime is
       // re-fetched, never extrapolated), but stays cosmetic: on failure the
       // header keeps the last-known version and uptime instead of erroring
-      // the whole dashboard.
+      // the whole Dashboard.
       fetchPanelInfo(controller.signal)
-        .then(setPanel)
-        .catch(() => {});
+        .then((panelInfo) => {
+          onAuthenticated?.();
+          setPanel(panelInfo);
+        })
+        .catch((cause) => {
+          if (cause instanceof UnauthenticatedError) onUnauthenticated(cause);
+        });
     }
 
     void poll();
@@ -739,7 +764,7 @@ export function Dashboard({ onUnauthenticated }: { onUnauthenticated: () => void
       window.clearInterval(interval);
       controller.abort();
     };
-  }, [onUnauthenticated]);
+  }, [onAuthenticated, onUnauthenticated]);
 
   async function signOut() {
     try {
@@ -782,13 +807,15 @@ export function Dashboard({ onUnauthenticated }: { onUnauthenticated: () => void
         <HeaderMeta>
           refreshing every 5s{updatedAt ? ` · updated ${formatTime24(updatedAt)}` : ""}
         </HeaderMeta>
-        <button
-          type="button"
-          onClick={() => void signOut()}
-          className="border-border text-muted-foreground hover:text-foreground rounded-lg border px-3 py-1.5 text-[0.78rem] font-bold tracking-[0.08em] uppercase"
-        >
-          Log out
-        </button>
+        {panel !== null && panel.authentication_mode !== "trusted_proxy" ? (
+          <button
+            type="button"
+            onClick={() => void signOut()}
+            className="border-border text-muted-foreground hover:text-foreground rounded-lg border px-3 py-1.5 text-[0.78rem] font-bold tracking-[0.08em] uppercase"
+          >
+            Log out
+          </button>
+        ) : null}
       </header>
 
       {degraded ? (

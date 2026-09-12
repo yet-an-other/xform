@@ -10,6 +10,7 @@ import (
 	"crypto/subtle"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"strings"
@@ -23,8 +24,7 @@ type Mode string
 const (
 	// ModePassword is the existing shared-password mode.
 	ModePassword Mode = "password"
-	// ModeTrustedProxy is reserved for the Authentication gateway mode added
-	// by the next authentication slice.
+	// ModeTrustedProxy delegates admission to a same-Host Authentication gateway.
 	ModeTrustedProxy Mode = "trusted_proxy"
 )
 
@@ -54,19 +54,26 @@ type Admission interface {
 type Gateway struct {
 	mode     Mode
 	sessions sessionStore
+	// trustedHash is the SHA-256 digest of the Admission secret. The clear
+	// assertion is never retained, logged, or passed to application handlers.
+	trustedHash [32]byte
 }
 
 // New constructs the currently supported authentication mode. An empty mode
 // is treated as the documented Password default; configuration normally
 // supplies the explicit value before this constructor is called.
-func New(mode string, password string, now func() time.Time) (*Gateway, error) {
+func New(mode string, credential string, now func() time.Time) (*Gateway, error) {
 	if mode == "" {
 		mode = string(ModePassword)
 	}
-	if Mode(mode) != ModePassword {
+	switch Mode(mode) {
+	case ModePassword:
+		return NewPassword(credential, now), nil
+	case ModeTrustedProxy:
+		return NewTrustedProxy(credential, now)
+	default:
 		return nil, fmt.Errorf("unsupported authentication mode %q", mode)
 	}
-	return NewPassword(password, now), nil
 }
 
 // NewPassword constructs Password authentication. Configuration rejects an
@@ -77,6 +84,29 @@ func NewPassword(password string, now func() time.Time) *Gateway {
 		now = time.Now
 	}
 	return newGateway(ModePassword, newSessionStore(password, now))
+}
+
+// NewTrustedProxy constructs admission for a same-Host Authentication
+// gateway. The secret is hashed immediately and is not retained in cleartext.
+func NewTrustedProxy(secret string, _ func() time.Time) (*Gateway, error) {
+	if err := ValidateTrustedProxySecret(secret); err != nil {
+		return nil, err
+	}
+	return &Gateway{mode: ModeTrustedProxy, trustedHash: sha256.Sum256([]byte(secret))}, nil
+}
+
+// ValidateTrustedProxySecret enforces the wire-format needed for an Admission
+// secret. It never includes the candidate in its error.
+func ValidateTrustedProxySecret(secret string) error {
+	if len(secret) != 64 {
+		return errors.New("trusted proxy secret must contain exactly 64 lowercase hexadecimal characters")
+	}
+	for _, character := range secret {
+		if !(character >= '0' && character <= '9') && !(character >= 'a' && character <= 'f') {
+			return errors.New("trusted proxy secret must contain exactly 64 lowercase hexadecimal characters")
+		}
+	}
+	return nil
 }
 
 func newGateway(mode Mode, sessions sessionStore) *Gateway {
@@ -90,20 +120,28 @@ func (gateway *Gateway) Mode() string {
 	return string(gateway.mode)
 }
 
-// Handler wraps the application handler with Password route admission.
-// Dashboard documents and the GET health route remain public. Every other
-// /api/ route requires a live Session; unknown API routes are protected too.
+// Handler wraps the application handler with mode-specific admission.
+// Password mode keeps the Dashboard document public; trusted mode protects the
+// whole xform origin because the gateway owns the public sign-in boundary.
 func (gateway *Gateway) Handler(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+		if isHealthRequest(request) {
+			if gateway.mode == ModeTrustedProxy {
+				stripTrustedHeaders(request.Header)
+			}
+			next.ServeHTTP(response, request)
+			return
+		}
+		if gateway.mode == ModeTrustedProxy {
+			gateway.requireTrustedAssertion(response, request, next)
+			return
+		}
 		switch {
 		case request.Method == http.MethodPost && request.URL.Path == "/api/v1/login":
 			gateway.login(response, request)
 			return
 		case request.Method == http.MethodPost && request.URL.Path == "/api/v1/logout":
 			gateway.logout(response, request)
-			return
-		case isHealthRequest(request):
-			next.ServeHTTP(response, request)
 			return
 		case strings.HasPrefix(request.URL.Path, "/api/"):
 			gateway.requireSession(response, request, next)
@@ -113,6 +151,58 @@ func (gateway *Gateway) Handler(next http.Handler) http.Handler {
 			return
 		}
 	})
+}
+
+func (gateway *Gateway) requireTrustedAssertion(response http.ResponseWriter, request *http.Request, next http.Handler) {
+	response.Header().Set("Cache-Control", "no-store")
+	values := headerValues(request.Header, "X-Xform-Authenticated")
+	if len(values) != 1 {
+		gateway.unauthorized(response)
+		return
+	}
+	candidateHash := sha256.Sum256([]byte(values[0]))
+	if subtle.ConstantTimeCompare(candidateHash[:], gateway.trustedHash[:]) != 1 {
+		gateway.unauthorized(response)
+		return
+	}
+	// Never let gateway identity, token, forwarding, or assertion headers
+	// become application inputs. Admission is solely the exact assertion.
+	stripTrustedHeaders(request.Header)
+	next.ServeHTTP(response, request)
+}
+
+var trustedHeaders = [...]string{
+	"X-Xform-Authenticated", "Authorization", "Proxy-Authorization", "Forwarded", "Cookie",
+	"X-Forwarded-For", "X-Forwarded-Host", "X-Forwarded-Port", "X-Forwarded-Proto",
+	"X-Forwarded-User", "X-Forwarded-Email", "X-Forwarded-Groups", "X-Forwarded-Preferred-Username",
+	"X-Forwarded-Access-Token", "X-Forwarded-Authorization", "X-Forwarded-Client-Cert",
+	"X-Auth-Request-User", "X-Auth-Request-Email", "X-Auth-Request-Groups",
+	"X-Auth-Request-Preferred-Username", "X-Auth-Request-Token", "X-Auth-Request-Access-Token",
+	"X-Auth-Request-Id-Token", "X-Auth-Request-IdToken", "X-Access-Token", "X-ID-Token", "X-Id-Token",
+	"Remote-User", "Remote-Email", "Remote-Groups", "X-Remote-User", "X-Remote-Email", "X-Remote-Groups",
+	"X-Authenticated-User", "X-Authenticated-Email", "X-User", "X-Email", "X-Groups", "X-Group",
+	"X-Real-IP", "X-Original-URL", "X-Original-URI", "X-SSL-Client-Cert", "X-Client-Cert",
+}
+
+func headerValues(headers http.Header, name string) []string {
+	var values []string
+	for key, entries := range headers {
+		if strings.EqualFold(key, name) {
+			values = append(values, entries...)
+		}
+	}
+	return values
+}
+
+func stripTrustedHeaders(headers http.Header) {
+	for key := range headers {
+		for _, trustedHeader := range trustedHeaders {
+			if strings.EqualFold(key, trustedHeader) {
+				delete(headers, key)
+				break
+			}
+		}
+	}
 }
 
 func isHealthRequest(request *http.Request) bool {
@@ -188,15 +278,20 @@ func (gateway *Gateway) unauthorized(response http.ResponseWriter) {
 // compatibility facade in internal/session. Application code should use
 // Handler instead, which keeps Session storage behind this module.
 func (gateway *Gateway) Login(password string) (string, bool, error) {
+	if gateway.sessions == nil {
+		return "", false, errors.New("password authentication is disabled")
+	}
 	return gateway.sessions.Login(password)
 }
 
 func (gateway *Gateway) Validate(token string) bool {
-	return gateway.sessions.Validate(token)
+	return gateway.sessions != nil && gateway.sessions.Validate(token)
 }
 
 func (gateway *Gateway) Logout(token string) {
-	gateway.sessions.Logout(token)
+	if gateway.sessions != nil {
+		gateway.sessions.Logout(token)
+	}
 }
 
 type sessions struct {

@@ -20,10 +20,9 @@ export interface Collection<T> {
 }
 
 export interface CollectionOptions {
-  // onExpired is called instead of surfacing a 401 as an error: an expired
-  // Session is the Dashboard's business, not a dialog's (SPEC §6). The collection
-  // stops for good — no error, no retry, no further ticks.
-  onExpired: () => void;
+  // onExpired is called instead of surfacing a 401 as an error. It carries the
+  // typed mode so trusted failures can return to the Authentication gateway.
+  onExpired: (error?: UnauthenticatedError) => void;
   // intervalMs re-collects on a cadence, for data that keeps moving while the
   // dialog is open. Operational snapshots leave it unset: they are collected
   // when an admin asks and never on a timer (ADR-0006).
@@ -100,7 +99,7 @@ export function useCollection<T>(
           inFlight = false;
           if (cause instanceof UnauthenticatedError) {
             stop();
-            expired.current();
+            expired.current(cause);
             return;
           }
           // The last value stays put: a failed refresh keeps showing what it

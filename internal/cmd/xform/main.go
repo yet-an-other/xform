@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"net"
 	"net/http"
 	"os"
 	"os/signal"
@@ -50,7 +51,11 @@ func main() {
 		os.Exit(1)
 	}
 
-	authentication, err := auth.New(cfg.AuthMode, cfg.Password, time.Now)
+	credential := cfg.Password
+	if cfg.AuthMode == string(auth.ModeTrustedProxy) {
+		credential = cfg.TrustedProxySecret
+	}
+	authentication, err := auth.New(cfg.AuthMode, credential, time.Now)
 	if err != nil {
 		slog.Error("configure authentication", "error", err)
 		os.Exit(1)
@@ -111,7 +116,12 @@ func main() {
 		configWatcher.Changes(),
 	).WithPurgeNotifier(usersCollector)
 	rosterService.Start(shutdownSignal)
-	httpListener, err := listener.Listen(cfg.ListenAddress)
+	var httpListener net.Listener
+	if cfg.AuthMode == string(auth.ModeTrustedProxy) {
+		httpListener, err = listener.ListenTrusted(cfg.ListenAddress)
+	} else {
+		httpListener, err = listener.Listen(cfg.ListenAddress)
+	}
 	if err != nil {
 		slog.Error("listen xform", "address", cfg.ListenAddress, "error", err)
 		os.Exit(1)

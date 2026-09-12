@@ -14,7 +14,7 @@ interface AddUserModalProps {
   inbounds: InboundOption[];
   opener: RefObject<HTMLElement | null>;
   onClose: () => void;
-  onExpired: () => void;
+  onExpired: (error?: UnauthenticatedError) => void;
 }
 
 // AddUserModal is the + Add user dialog (user-management spec §6): email,
@@ -52,7 +52,7 @@ export function AddUserModal({ inbounds, opener, onClose, onExpired }: AddUserMo
       onClose();
     } catch (cause) {
       if (cause instanceof UnauthenticatedError) {
-        onExpired();
+        onExpired(cause);
         return;
       }
       setError(cause instanceof ConflictError ? conflictText(cause.reason) : "Could not reach the panel.");

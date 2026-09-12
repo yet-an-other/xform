@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/yet-an-other/xform/internal/api"
+	"github.com/yet-an-other/xform/internal/auth"
 	"github.com/yet-an-other/xform/internal/hoststats"
 	"github.com/yet-an-other/xform/internal/session"
 	"github.com/yet-an-other/xform/internal/users"
@@ -490,6 +491,56 @@ func TestPanelEndpointReturnsTheReleaseVersion(t *testing.T) {
 // TestPanelEndpointReportsCurrentUptime proves the endpoint evaluates the
 // uptime source per request (SPEC §5): the dashboard polls it every
 // five seconds, so each response carries the value at request time.
+func TestPanelEndpointReportsTrustedProxyModeAndNoPasswordRoutes(t *testing.T) {
+	secret := strings.Repeat("ab", 32)
+	gateway, err := auth.NewTrustedProxy(secret, time.Now)
+	if err != nil {
+		t.Fatalf("construct trusted proxy gateway: %v", err)
+	}
+	handler := api.New(fixedHostStats{}, fixedXrayStatus{}, fixedUsers{}, fixedProfileSources{}, &stubRoster{}, api.OperationalSources{}, gateway, http.NotFoundHandler(), testPanelInfo)
+
+	for _, path := range []string{"/", "/api/v1/panel", "/api/v1/login", "/api/v1/logout"} {
+		t.Run("unauthenticated "+path, func(t *testing.T) {
+			request := httptest.NewRequest(http.MethodGet, path, nil)
+			if path == "/api/v1/login" || path == "/api/v1/logout" {
+				request.Method = http.MethodPost
+			}
+			response := httptest.NewRecorder()
+			handler.ServeHTTP(response, request)
+			if response.Code != http.StatusUnauthorized {
+				t.Fatalf("status = %d, want 401", response.Code)
+			}
+		})
+	}
+
+	request := httptest.NewRequest(http.MethodGet, "/api/v1/panel", nil)
+	request.Header.Set("X-Xform-Authenticated", secret)
+	response := httptest.NewRecorder()
+	handler.ServeHTTP(response, request)
+	if response.Code != http.StatusOK {
+		t.Fatalf("trusted panel status = %d, want 200; body = %s", response.Code, response.Body.String())
+	}
+	var payload struct {
+		AuthenticationMode string `json:"authentication_mode"`
+	}
+	if err := json.Unmarshal(response.Body.Bytes(), &payload); err != nil {
+		t.Fatalf("decode panel response: %v", err)
+	}
+	if payload.AuthenticationMode != "trusted_proxy" {
+		t.Errorf("authentication_mode = %q, want trusted_proxy", payload.AuthenticationMode)
+	}
+
+	// The password route is absent even after admission. The trusted gateway
+	// must not accidentally expose the Password authentication flow.
+	request = httptest.NewRequest(http.MethodPost, "/api/v1/login", strings.NewReader(`{"password":"anything"}`))
+	request.Header.Set("X-Xform-Authenticated", secret)
+	response = httptest.NewRecorder()
+	handler.ServeHTTP(response, request)
+	if response.Code != http.StatusNotFound {
+		t.Fatalf("admitted login route status = %d, want 404", response.Code)
+	}
+}
+
 func TestPanelEndpointReportsCurrentUptime(t *testing.T) {
 	elapsed := 4_831
 	panel := testPanelInfo

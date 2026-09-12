@@ -22,7 +22,7 @@ interface EditUserModalProps {
   inbounds: InboundOption[];
   opener: RefObject<HTMLElement | null>;
   onClose: () => void;
-  onExpired: () => void;
+  onExpired: (error?: UnauthenticatedError) => void;
 }
 
 // EditUserModal is the edit dialog (user-management spec §6, issues #54 and
@@ -85,7 +85,7 @@ export function EditUserModal({ user, inbounds, opener, onClose, onExpired }: Ed
       onClose();
     } catch (cause) {
       if (cause instanceof UnauthenticatedError) {
-        onExpired();
+        onExpired(cause);
         return;
       }
       if (cause instanceof UserNotFoundError) {

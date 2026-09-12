@@ -46,6 +46,51 @@ func Listen(address string) (net.Listener, error) {
 	return listenUnix(path)
 }
 
+// ListenTrusted creates the transport used by Trusted proxy authentication.
+// TCP is both configured and enforced as loopback-only; the latter matters
+// when a listener is handed an ephemeral address or its configuration changes.
+func ListenTrusted(address string) (net.Listener, error) {
+	if strings.HasPrefix(address, unixPrefix) {
+		return Listen(address)
+	}
+	host, _, err := net.SplitHostPort(address)
+	if err != nil {
+		return nil, errors.New("trusted proxy TCP listener must use a loopback IP address")
+	}
+	ip := net.ParseIP(host)
+	if ip == nil || !ip.IsLoopback() {
+		return nil, errors.New("trusted proxy TCP listener must use a loopback IP address")
+	}
+	listener, err := net.Listen("tcp", address)
+	if err != nil {
+		return nil, err
+	}
+	tcpListener, ok := listener.(*net.TCPListener)
+	if !ok {
+		_ = listener.Close()
+		return nil, errors.New("trusted proxy listener is not TCP")
+	}
+	return &loopbackTCPListener{TCPListener: tcpListener}, nil
+}
+
+type loopbackTCPListener struct {
+	*net.TCPListener
+}
+
+func (listener *loopbackTCPListener) Accept() (net.Conn, error) {
+	for {
+		connection, err := listener.AcceptTCP()
+		if err != nil {
+			return nil, err
+		}
+		remote, ok := connection.RemoteAddr().(*net.TCPAddr)
+		if ok && remote.IP.IsLoopback() {
+			return connection, nil
+		}
+		_ = connection.Close()
+	}
+}
+
 func listenUnix(path string) (net.Listener, error) {
 	socket, err := newSocketPath(path)
 	if err != nil {

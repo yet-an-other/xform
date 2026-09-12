@@ -18,6 +18,7 @@ const stats = {
 
 afterEach(() => {
   cleanup();
+  sessionStorage.clear();
   vi.unstubAllGlobals();
 });
 
@@ -37,7 +38,7 @@ function stubApi() {
         return new Response(null, { status: 204 });
       }
       if (!authed) {
-        return new Response('{"error":"unauthenticated"}', { status: 401 });
+        return new Response('{"error":"unauthenticated","authentication_mode":"password"}', { status: 401 });
       }
       if (url.endsWith("api/v1/users")) {
         return new Response(JSON.stringify({ collected_at: 1_723_800_000, stale: false, users: [] }), {
@@ -93,5 +94,35 @@ describe("auth flow", () => {
     fireEvent.click(await screen.findByRole("button", { name: /log out/i }));
 
     expect(await screen.findByLabelText(/password/i)).toBeInTheDocument();
+  });
+
+  it("does not fall back to a password form after a trusted gateway failure", async () => {
+    sessionStorage.setItem("xform_trusted_auth_redirect", "1");
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () =>
+        new Response('{"error":"unauthenticated","authentication_mode":"trusted_proxy"}', {
+          status: 401,
+          headers: { "Content-Type": "application/json" },
+        }),
+      ),
+    );
+    render(<App />);
+
+    expect(await screen.findByRole("alert")).toHaveTextContent(/authentication gateway did not admit/i);
+    expect(screen.queryByLabelText(/password/i)).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /log in/i })).not.toBeInTheDocument();
+  });
+
+  it("treats an untyped gateway 401 as a trusted failure", async () => {
+    sessionStorage.setItem("xform_trusted_auth_redirect", "1");
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => new Response('{"error":"unauthenticated"}', { status: 401 })),
+    );
+    render(<App />);
+
+    expect(await screen.findByRole("alert")).toBeInTheDocument();
+    expect(screen.queryByLabelText(/password/i)).not.toBeInTheDocument();
   });
 });

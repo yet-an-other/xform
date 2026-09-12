@@ -10,7 +10,7 @@ import {
   formatSpeed,
   formatTime24,
 } from "@/lib/format";
-import { fetchUserDetail } from "@/lib/api";
+import { fetchUserDetail, type UnauthenticatedError } from "@/lib/api";
 import { useCollection } from "@/lib/collection";
 import { cn } from "@/lib/utils";
 
@@ -18,7 +18,7 @@ interface UserDetailsModalProps {
   email: string;
   opener: RefObject<HTMLElement | null>;
   onClose: () => void;
-  onExpired: () => void;
+  onExpired: (error?: UnauthenticatedError) => void;
 }
 
 const DETAIL_POLL_INTERVAL_MS = 5_000;

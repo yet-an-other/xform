@@ -186,3 +186,167 @@ func cookieNamed(t *testing.T, response *httptest.ResponseRecorder, name string)
 	t.Fatalf("response did not set %s cookie", name)
 	return nil
 }
+
+var trustedProxySecret = strings.Repeat("ab", 32)
+
+func TestTrustedProxyRejectsMissingWrongAndDuplicateAssertions(t *testing.T) {
+	gateway, err := auth.NewTrustedProxy(trustedProxySecret, time.Now)
+	if err != nil {
+		t.Fatalf("construct trusted proxy gateway: %v", err)
+	}
+
+	requests := map[string]func(*http.Request){
+		"missing": func(*http.Request) {},
+		"forwarding identity only": func(request *http.Request) {
+			request.Header.Set("X-Forwarded-User", "operator@example.com")
+			request.Header.Set("X-Auth-Request-Email", "operator@example.com")
+		},
+		"wrong": func(request *http.Request) {
+			request.Header.Set("X-Xform-Authenticated", strings.Repeat("cd", 32))
+		},
+		"duplicate": func(request *http.Request) {
+			request.Header.Add("X-Xform-Authenticated", trustedProxySecret)
+			request.Header.Add("X-Xform-Authenticated", trustedProxySecret)
+		},
+	}
+	for name, configure := range requests {
+		t.Run(name, func(t *testing.T) {
+			request := httptest.NewRequest(http.MethodGet, "/api/v1/server", nil)
+			configure(request)
+			response := httptest.NewRecorder()
+			gateway.Handler(nextHandler()).ServeHTTP(response, request)
+
+			if response.Code != http.StatusUnauthorized {
+				t.Fatalf("status = %d, want 401", response.Code)
+			}
+			assertJSON(t, response, map[string]string{
+				"error":               "unauthenticated",
+				"authentication_mode": "trusted_proxy",
+			})
+			if response.Header().Get("Cache-Control") != "no-store" {
+				t.Errorf("Cache-Control = %q, want no-store", response.Header().Get("Cache-Control"))
+			}
+			if response.Header().Get("X-Application") != "" {
+				t.Fatal("rejected request reached the application")
+			}
+		})
+	}
+}
+
+func TestTrustedProxyAdmitsOneAssertionAndStripsTrustHeaders(t *testing.T) {
+	gateway, err := auth.NewTrustedProxy(trustedProxySecret, time.Now)
+	if err != nil {
+		t.Fatalf("construct trusted proxy gateway: %v", err)
+	}
+
+	var seen *http.Request
+	next := http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+		seen = request
+		response.WriteHeader(http.StatusNoContent)
+	})
+	request := httptest.NewRequest(http.MethodGet, "/api/v1/server", nil)
+	request.Header.Set("X-Xform-Authenticated", trustedProxySecret)
+	request.Header.Set("Authorization", "Bearer identity-token")
+	request.Header.Set("X-Forwarded-User", "operator@example.com")
+	request.Header.Set("X-Auth-Request-Access-Token", "id-token")
+	request.Header.Set("Cookie", "gateway_session=operator-secret")
+	request.Header.Set("X-Forwarded-For", "203.0.113.10")
+	response := httptest.NewRecorder()
+
+	gateway.Handler(next).ServeHTTP(response, request)
+
+	if response.Code != http.StatusNoContent {
+		t.Fatalf("admitted status = %d, want 204", response.Code)
+	}
+	if seen == nil {
+		t.Fatal("valid assertion did not reach the application")
+	}
+	for _, name := range []string{
+		"X-Xform-Authenticated", "Authorization", "X-Forwarded-User", "X-Auth-Request-Access-Token", "X-Forwarded-For", "Cookie",
+	} {
+		if values := headerValuesForTest(seen.Header, name); len(values) != 0 {
+			t.Errorf("application received %s, want it stripped", name)
+		}
+	}
+}
+
+func TestTrustedProxyHealthIsOpenAndAssertionFree(t *testing.T) {
+	gateway, err := auth.NewTrustedProxy(trustedProxySecret, time.Now)
+	if err != nil {
+		t.Fatalf("construct trusted proxy gateway: %v", err)
+	}
+	var seen *http.Request
+	next := http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+		seen = request
+		response.WriteHeader(http.StatusNoContent)
+	})
+	for _, assertion := range []string{"", trustedProxySecret} {
+		seen = nil
+		request := httptest.NewRequest(http.MethodGet, "/api/v1/healthz", nil)
+		if assertion != "" {
+			request.Header.Set("X-Xform-Authenticated", assertion)
+		}
+		response := httptest.NewRecorder()
+
+		gateway.Handler(next).ServeHTTP(response, request)
+
+		if response.Code != http.StatusNoContent || seen == nil {
+			t.Fatalf("health assertion-present=%t = %d/%v, want application 204", assertion != "", response.Code, seen != nil)
+		}
+		if values := headerValuesForTest(seen.Header, "X-Xform-Authenticated"); len(values) != 0 {
+			t.Error("health handler received the assertion, want it stripped")
+		}
+	}
+}
+
+func TestTrustedProxyRejectsPasswordSessionRoutes(t *testing.T) {
+	gateway, err := auth.NewTrustedProxy(trustedProxySecret, time.Now)
+	if err != nil {
+		t.Fatalf("construct trusted proxy gateway: %v", err)
+	}
+	for _, path := range []string{"/api/v1/login", "/api/v1/logout"} {
+		t.Run(path, func(t *testing.T) {
+			response := request(gateway, http.MethodPost, path, `{"password":"anything"}`, nil)
+			if response.Code != http.StatusUnauthorized {
+				t.Fatalf("without assertion status = %d, want 401", response.Code)
+			}
+			assertJSON(t, response, map[string]string{
+				"error":               "unauthenticated",
+				"authentication_mode": "trusted_proxy",
+			})
+		})
+	}
+}
+
+func TestTrustedProxyConstructorValidatesSecretWithoutEchoingIt(t *testing.T) {
+	secrets := []struct {
+		name   string
+		secret string
+	}{
+		{name: "empty", secret: ""},
+		{name: "short", secret: strings.Repeat("ab", 31)},
+		{name: "uppercase", secret: strings.Repeat("AB", 32)},
+		{name: "non hexadecimal", secret: strings.Repeat("ag", 32)},
+	}
+	for _, test := range secrets {
+		t.Run(test.name, func(t *testing.T) {
+			gateway, err := auth.NewTrustedProxy(test.secret, time.Now)
+			if gateway != nil || err == nil {
+				t.Fatalf("secret length/content %d accepted, gateway=%v err=%v", len(test.secret), gateway, err)
+			}
+			if test.secret != "" && strings.Contains(err.Error(), test.secret) {
+				t.Error("constructor error echoed the Admission secret")
+			}
+		})
+	}
+}
+
+func headerValuesForTest(headers http.Header, name string) []string {
+	var values []string
+	for key, entries := range headers {
+		if strings.EqualFold(key, name) {
+			values = append(values, entries...)
+		}
+	}
+	return values
+}

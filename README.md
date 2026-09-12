@@ -29,7 +29,7 @@ cd internal && go build -o ../xform ./cmd/xform
 XFORM_PASSWORD=change-me ./xform
 ```
 
-The panel listens on `127.0.0.1:9090` by default (override with `XFORM_LISTEN`). Open <http://127.0.0.1:9090> and log in with the `XFORM_PASSWORD` value. All `/api/*` endpoints except `login`/`healthz` require the `xform_session` cookie (SPEC.md §5).
+The panel listens on `127.0.0.1:9090` by default (override with `XFORM_LISTEN`). In Password authentication, open <http://127.0.0.1:9090> and log in with the `XFORM_PASSWORD` value. Trusted proxy authentication puts a same-Host Authentication gateway in front of the Panel instead; the gateway admits requests with a shared non-identifying assertion. All `/api/*` endpoints except `login`/`healthz` require the `xform_session` cookie in Password mode (SPEC.md §5).
 
 The xray service status is live from three host-level sources: the systemd unit (running/stopped, uptime — `XFORM_XRAY_UNIT` is honored), the binary (version), and the loopback gRPC StatsService (process memory/goroutines, speeds, traffic totals, online counts — `XFORM_XRAY_API`). An active unit whose stats API doesn't answer reports `unreachable` (SPEC.md §3 degraded mode). The users table is live too: per-user durable traffic totals accumulate in SQLite (`XFORM_DB`) and survive xray restarts, with current speeds from counter deltas; when the stats API is unreachable the table serves the last-known snapshot with `stale: true`. Presence is live as well — online status, online IPs, and durable last seen from the online RPCs, persisted so they survive disconnects and xray restarts; on xray versions predating `GetAllOnlineUsers` presence is omitted (last seen falls back to the traffic-delta heuristic). Protocol/security from the config parse (`XFORM_XRAY_CONFIG`) is a later slice.
 
@@ -40,8 +40,9 @@ All runtime settings are environment variables (defaults from SPEC.md §7):
 | Variable | Default | Purpose |
 | --- | --- | --- |
 | `XFORM_LISTEN` | `127.0.0.1:9090` | Panel listen address; also `unix:/absolute/path` |
-| `XFORM_AUTH_MODE` | `password` | Authentication mode; Password is currently supported |
-| `XFORM_PASSWORD` | none — **required** | Password authentication secret (constant-time compare) |
+| `XFORM_AUTH_MODE` | `password` | Authentication mode: `password` or `trusted_proxy` |
+| `XFORM_PASSWORD` | none — **required in Password mode** | Password authentication secret (constant-time compare) |
+| `XFORM_TRUSTED_PROXY_SECRET` | none — **required in Trusted proxy mode** | Exactly 64 lowercase hexadecimal characters shared with the Authentication gateway |
 | `XFORM_XRAY_API` | `127.0.0.1:8080` | xray gRPC StatsService address |
 | `XFORM_XRAY_CONFIG` | `/usr/local/etc/xray/config.json` | xray config file (user roster) |
 | `XFORM_DB` | `/var/lib/xform/xform.db` | SQLite database file |
@@ -65,7 +66,15 @@ For example, before starting the service, create `/run/xform` with the Panel
 user as owner, the gateway's group as group, and mode `2750` so the socket
 inherits the gateway group while only the Panel can replace it. Then set
 `XFORM_LISTEN` to the socket path. TCP addresses keep the existing `net.Listen`
-behavior.
+behavior; Trusted proxy mode additionally accepts only literal loopback TCP
+addresses and filters non-loopback peers.
+
+Trusted proxy mode requires `XFORM_PASSWORD` to be unset and
+`XFORM_TRUSTED_PROXY_SECRET` to be set. The gateway must be the only path to
+xform: each non-health request must carry exactly one matching
+`X-Xform-Authenticated` header. The assertion and common identity/token
+headers are removed before application handlers run; xform creates no Session
+in this mode. Health remains available without the assertion.
 
 ## Deployment shapes
 

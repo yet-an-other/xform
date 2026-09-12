@@ -136,11 +136,7 @@ describe("host stats", () => {
     const onUnauthenticated = vi.fn();
     render(<Dashboard onUnauthenticated={onUnauthenticated} />);
 
-    await act(async () => {
-      await Promise.resolve();
-    });
-
-    expect(onUnauthenticated).toHaveBeenCalledTimes(1);
+    await waitFor(() => expect(onUnauthenticated).toHaveBeenCalledTimes(1));
   });
 
   it("yields to the login page when the xray endpoint answers 401", async () => {
@@ -148,11 +144,7 @@ describe("host stats", () => {
     const onUnauthenticated = vi.fn();
     render(<Dashboard onUnauthenticated={onUnauthenticated} />);
 
-    await act(async () => {
-      await Promise.resolve();
-    });
-
-    expect(onUnauthenticated).toHaveBeenCalledTimes(1);
+    await waitFor(() => expect(onUnauthenticated).toHaveBeenCalledTimes(1));
   });
 
   it("keeps the session and shows an error when logout cannot reach the panel", async () => {
@@ -246,7 +238,22 @@ describe("header", () => {
     expect(
       await within(banner).findByText(/refreshing every 5s · updated \d{2}:\d{2}:\d{2}/),
     ).toBeInTheDocument();
-    expect(within(banner).getByRole("button", { name: /log out/i })).toBeInTheDocument();
+    expect(await within(banner).findByRole("button", { name: /log out/i })).toBeInTheDocument();
+  });
+
+  it("does not offer local logout in trusted mode", async () => {
+    stubEndpoints({
+      server: () => json(stats),
+      xray: () => json(xrayRunning),
+      panel: () => json({ version: "v0.0.0-test", uptime_seconds: 300, authentication_mode: "trusted_proxy" }),
+    });
+
+    render(<Dashboard onUnauthenticated={() => {}} />);
+
+    const banner = await screen.findByRole("banner");
+    await waitFor(() => {
+      expect(within(banner).queryByRole("button", { name: /log out/i })).not.toBeInTheDocument();
+    });
   });
 
   it("marks the xray group stopped without an uptime, banner carrying the detail", async () => {

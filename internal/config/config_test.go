@@ -2,6 +2,7 @@ package config_test
 
 import (
 	"os"
+	"strings"
 	"testing"
 
 	"github.com/yet-an-other/xform/internal/config"
@@ -15,6 +16,7 @@ func clearEnv(t *testing.T) {
 		"XFORM_LISTEN",
 		"XFORM_AUTH_MODE",
 		"XFORM_PASSWORD",
+		"XFORM_TRUSTED_PROXY_SECRET",
 		"XFORM_XRAY_API",
 		"XFORM_XRAY_CONFIG",
 		"XFORM_CONNECTIONS_CONFIG",
@@ -122,12 +124,94 @@ func TestLoadRequiresPassword(t *testing.T) {
 	}
 }
 
-func TestLoadRejectsUnsupportedAuthenticationMode(t *testing.T) {
+func TestLoadTrustedProxyMode(t *testing.T) {
 	clearEnv(t)
 	t.Setenv("XFORM_AUTH_MODE", "trusted_proxy")
-	t.Setenv("XFORM_PASSWORD", "ignored")
+	t.Setenv("XFORM_TRUSTED_PROXY_SECRET", strings.Repeat("ab", 32))
+
+	cfg, err := config.Load()
+	if err != nil {
+		t.Fatalf("load trusted proxy config: %v", err)
+	}
+	if cfg.AuthMode != "trusted_proxy" {
+		t.Errorf("AuthMode = %q, want trusted_proxy", cfg.AuthMode)
+	}
+	if cfg.Password != "" {
+		t.Errorf("Password = %q, want empty in trusted proxy mode", cfg.Password)
+	}
+	if cfg.TrustedProxySecret != strings.Repeat("ab", 32) {
+		t.Error("trusted proxy secret was not loaded")
+	}
+}
+
+func TestLoadRejectsUnsafeTrustedProxyConfiguration(t *testing.T) {
+	tests := []struct {
+		name     string
+		secret   string
+		listen   string
+		password string
+	}{
+		{name: "missing secret", listen: "127.0.0.1:9090"},
+		{name: "short secret", secret: "ab", listen: "127.0.0.1:9090"},
+		{name: "uppercase secret", secret: strings.Repeat("AB", 32), listen: "127.0.0.1:9090"},
+		{name: "non hexadecimal secret", secret: strings.Repeat("ag", 32), listen: "127.0.0.1:9090"},
+		{name: "password also configured", secret: strings.Repeat("ab", 32), password: "password", listen: "127.0.0.1:9090"},
+		{name: "wildcard listener", secret: strings.Repeat("ab", 32), listen: "0.0.0.0:9090"},
+		{name: "hostname listener", secret: strings.Repeat("ab", 32), listen: "localhost:9090"},
+		{name: "non loopback listener", secret: strings.Repeat("ab", 32), listen: "192.0.2.10:9090"},
+		{name: "missing TCP port", secret: strings.Repeat("ab", 32), listen: "127.0.0.1"},
+		{name: "relative Unix path", secret: strings.Repeat("ab", 32), listen: "unix:xform.sock"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			clearEnv(t)
+			t.Setenv("XFORM_AUTH_MODE", "trusted_proxy")
+			t.Setenv("XFORM_TRUSTED_PROXY_SECRET", test.secret)
+			t.Setenv("XFORM_LISTEN", test.listen)
+			if test.password != "" {
+				t.Setenv("XFORM_PASSWORD", test.password)
+			}
+
+			_, err := config.Load()
+			if err == nil {
+				t.Fatal("load accepted unsafe trusted proxy configuration")
+			}
+			if test.secret != "" && strings.Contains(err.Error(), test.secret) {
+				t.Fatalf("configuration error contains the Admission secret: %q", err)
+			}
+		})
+	}
+}
+
+func TestLoadRejectsTrustedSecretInPasswordMode(t *testing.T) {
+	clearEnv(t)
+	t.Setenv("XFORM_PASSWORD", "password")
+	t.Setenv("XFORM_TRUSTED_PROXY_SECRET", strings.Repeat("ab", 32))
 
 	if _, err := config.Load(); err == nil {
-		t.Fatal("load accepted trusted_proxy before its mode is implemented")
+		t.Fatal("load accepted trusted proxy settings in password mode")
+	}
+}
+
+func TestLoadAcceptsTrustedUnixAndIPv6LoopbackListeners(t *testing.T) {
+	for _, listen := range []string{"unix:/run/xform/xform.sock", "[::1]:9090"} {
+		t.Run(listen, func(t *testing.T) {
+			clearEnv(t)
+			t.Setenv("XFORM_AUTH_MODE", "trusted_proxy")
+			t.Setenv("XFORM_TRUSTED_PROXY_SECRET", strings.Repeat("ab", 32))
+			t.Setenv("XFORM_LISTEN", listen)
+			if _, err := config.Load(); err != nil {
+				t.Fatalf("load %q: %v", listen, err)
+			}
+		})
+	}
+}
+
+func TestLoadRejectsUnknownAuthenticationMode(t *testing.T) {
+	clearEnv(t)
+	t.Setenv("XFORM_AUTH_MODE", "something_else")
+
+	if _, err := config.Load(); err == nil {
+		t.Fatal("load accepted an unknown authentication mode")
 	}
 }

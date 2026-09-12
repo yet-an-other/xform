@@ -2,13 +2,13 @@ import { useCallback, type RefObject } from "react";
 
 import { CopyButton } from "@/components/copy-button";
 import { Modal, ModalClose, ModalFooter } from "@/components/ui/modal";
-import { fetchConfigSnapshot } from "@/lib/api";
+import { fetchConfigSnapshot, type UnauthenticatedError } from "@/lib/api";
 import { useCollection } from "@/lib/collection";
 
 interface ConfigSnapshotModalProps {
   opener: RefObject<HTMLElement | null>;
   onClose: () => void;
-  onExpired: () => void;
+  onExpired: (error?: UnauthenticatedError) => void;
 }
 
 // ConfigSnapshotModal shows the exact text of the configured xray file

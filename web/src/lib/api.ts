@@ -16,12 +16,17 @@ export interface HostStats {
   load_avg: [number, number, number];
 }
 
-// UnauthenticatedError means the session is absent or expired (401) — the
-// app answers by showing the login page, not an error banner.
+export type AuthenticationMode = "password" | "trusted_proxy";
+
+// UnauthenticatedError carries the panel's mode so trusted failures can
+// return to the Authentication gateway instead of rendering a password form.
 export class UnauthenticatedError extends Error {
-  constructor() {
+  readonly authenticationMode: AuthenticationMode | undefined;
+
+  constructor(authenticationMode?: AuthenticationMode) {
     super("unauthenticated");
     this.name = "UnauthenticatedError";
+    this.authenticationMode = authenticationMode;
   }
 }
 
@@ -45,6 +50,12 @@ export interface XrayStatus {
   unique_ips_online: number | null;
 }
 
+async function unauthenticated(response: Response): Promise<UnauthenticatedError> {
+  const body = (await response.json().catch(() => null)) as { authentication_mode?: unknown } | null;
+  const mode = body?.authentication_mode;
+  return new UnauthenticatedError(mode === "password" || mode === "trusted_proxy" ? mode : undefined);
+}
+
 async function getJSON<T>(path: string, signal?: AbortSignal): Promise<T> {
   const response = await fetch(path, {
     cache: "no-store",
@@ -52,7 +63,7 @@ async function getJSON<T>(path: string, signal?: AbortSignal): Promise<T> {
     signal,
   });
   if (response.status === 401) {
-    throw new UnauthenticatedError();
+    throw await unauthenticated(response);
   }
   if (!response.ok) {
     throw new Error(`panel returned ${response.status}`);
@@ -182,7 +193,7 @@ async function mutate(method: string, path: string, body: unknown): Promise<Muta
     body: JSON.stringify(body),
   });
   if (response.status === 401) {
-    throw new UnauthenticatedError();
+    throw await unauthenticated(response);
   }
   if (response.status === 409) {
     const reason = await response
@@ -239,7 +250,7 @@ async function mutateSync(method: string, path: string): Promise<RosterSync> {
     headers: { Accept: "application/json" },
   });
   if (response.status === 401) {
-    throw new UnauthenticatedError();
+    throw await unauthenticated(response);
   }
   if (!response.ok) {
     throw new Error(`panel returned ${response.status}`);
@@ -376,7 +387,7 @@ export function fetchUserDetail(email: string, signal?: AbortSignal): Promise<Us
 export interface PanelInfo {
   version: string;
   uptime_seconds: number;
-  authentication_mode: "password" | "trusted_proxy";
+  authentication_mode: AuthenticationMode;
 }
 
 export function fetchPanelInfo(signal?: AbortSignal): Promise<PanelInfo> {
@@ -485,7 +496,7 @@ async function getSnapshot<T>(path: string, signal?: AbortSignal): Promise<T> {
     signal,
   });
   if (response.status === 401) {
-    throw new UnauthenticatedError();
+    throw await unauthenticated(response);
   }
   if (!response.ok) {
     const reason = await response

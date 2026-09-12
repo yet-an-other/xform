@@ -26,6 +26,45 @@ func TestListenServesHTTPOverTCP(t *testing.T) {
 	})
 }
 
+func TestListenTrustedRejectsNonLoopbackTCPAddresses(t *testing.T) {
+	for _, address := range []string{"0.0.0.0:0", "[::]:0", "192.0.2.10:0", "localhost:0", "127.0.0.1"} {
+		t.Run(address, func(t *testing.T) {
+			if listener, err := ListenTrusted(address); err == nil {
+				_ = listener.Close()
+				t.Fatalf("ListenTrusted(%q) succeeded, want an error", address)
+			}
+		})
+	}
+}
+
+func TestListenTrustedServesLoopbackTCP(t *testing.T) {
+	listener, err := ListenTrusted("127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("ListenTrusted() error = %v", err)
+	}
+	if listener.Addr().Network() != "tcp" {
+		t.Fatalf("listener network = %q, want tcp", listener.Addr().Network())
+	}
+
+	serveHTTPAndClose(t, listener, "http://"+listener.Addr().String(), func(ctx context.Context) (net.Conn, error) {
+		return (&net.Dialer{}).DialContext(ctx, "tcp", listener.Addr().String())
+	})
+}
+
+func TestListenTrustedUsesPrivateUnixSocket(t *testing.T) {
+	socketPath := filepath.Join(t.TempDir(), "xform.sock")
+	listener, err := ListenTrusted("unix:" + socketPath)
+	if err != nil {
+		t.Fatalf("ListenTrusted() error = %v", err)
+	}
+	if listener.Addr().Network() != "unix" {
+		t.Fatalf("listener network = %q, want unix", listener.Addr().Network())
+	}
+	if err := listener.Close(); err != nil {
+		t.Fatalf("listener.Close() error = %v", err)
+	}
+}
+
 func TestListenServesHTTPOverUnixSocket(t *testing.T) {
 	socketPath := filepath.Join(t.TempDir(), "xform.sock")
 	listener, err := Listen("unix:" + socketPath)

@@ -1,7 +1,7 @@
 import { useCallback, useState, type RefObject } from "react";
 
 import { Modal, ModalClose, ModalFooter } from "@/components/ui/modal";
-import { fetchLogSnapshot, type LogSource } from "@/lib/api";
+import { fetchLogSnapshot, type LogSource, type UnauthenticatedError } from "@/lib/api";
 import { useCollection } from "@/lib/collection";
 import { entryPriority, formatEntryTime, formatSnapshotTime, logMessage, logSource, priorityLabel } from "@/lib/log-entry";
 import { cn } from "@/lib/utils";
@@ -10,7 +10,7 @@ interface LogSnapshotModalProps {
   source: LogSource;
   opener: RefObject<HTMLElement | null>;
   onClose: () => void;
-  onExpired: () => void;
+  onExpired: (error?: UnauthenticatedError) => void;
 }
 
 const TITLES: Record<LogSource, string> = { panel: "Panel logs", xray: "xray logs" };
