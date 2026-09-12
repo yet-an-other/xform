@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Deterministic forward-auth and Unix-socket Panel doubles for the nginx smoke test."""
+"""Deterministic forward-auth and Panel doubles for gateway smoke tests."""
 
 from __future__ import annotations
 
@@ -113,6 +113,7 @@ class PanelHandler(QuietHandler):
         "X-Forwarded-Preferred-Username",
         "X-Forwarded-Access-Token",
         "X-Forwarded-Authorization",
+        "X-Forwarded-Id-Token",
         "X-Forwarded-Client-Cert",
         "X-Auth-Request-User",
         "X-Auth-Request-Email",
@@ -134,6 +135,7 @@ class PanelHandler(QuietHandler):
         "X-Remote-Groups",
         "X-Authenticated-User",
         "X-Authenticated-Email",
+        "X-Authenticated-Groups",
         "X-User",
         "X-Email",
         "X-Groups",
@@ -192,7 +194,7 @@ class UnixHTTPServer(ThreadingMixIn, HTTPServer):
 
 
 class Servers:
-    def __init__(self, auth: HTTPServer, panel: HTTPServer, socket_path: str) -> None:
+    def __init__(self, auth: HTTPServer, panel: HTTPServer, socket_path: str | None) -> None:
         self.auth = auth
         self.panel = panel
         self.socket_path = socket_path
@@ -210,10 +212,11 @@ class Servers:
             self.panel.shutdown()
             self.auth.server_close()
             self.panel.server_close()
-            try:
-                os.unlink(self.socket_path)
-            except FileNotFoundError:
-                pass
+            if self.socket_path is not None:
+                try:
+                    os.unlink(self.socket_path)
+                except FileNotFoundError:
+                    pass
 
     def stop(self, _signum: int, _frame: object) -> None:
         self.stopping.set()
@@ -223,12 +226,17 @@ def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--auth-address", default="127.0.0.1")
     parser.add_argument("--auth-port", type=int, required=True)
-    parser.add_argument("--socket", required=True)
+    panel = parser.add_mutually_exclusive_group(required=True)
+    panel.add_argument("--socket")
+    panel.add_argument("--panel-port", type=int)
     args = parser.parse_args()
 
     auth = ThreadingHTTPServer((args.auth_address, args.auth_port), ForwardAuthHandler)
-    panel = UnixHTTPServer(args.socket, PanelHandler)
-    servers = Servers(auth, panel, args.socket)
+    if args.socket is not None:
+        panel_server = UnixHTTPServer(args.socket, PanelHandler)
+    else:
+        panel_server = ThreadingHTTPServer(("127.0.0.1", args.panel_port), PanelHandler)
+    servers = Servers(auth, panel_server, args.socket)
     signal.signal(signal.SIGINT, servers.stop)
     signal.signal(signal.SIGTERM, servers.stop)
     servers.serve()

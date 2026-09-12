@@ -1,0 +1,154 @@
+# xform Trusted proxy gateway — embedded Dashboard, /xform/ mount
+#
+# Dynamic Traefik v3 file-provider configuration. Render the three markers,
+# then start Traefik with an entry point named `web` and this file provider.
+# The xform service remains a literal loopback TCP HTTP upstream; Traefik
+# must run on the Host or with host networking.
+#
+# Markers:
+#   __OAUTH2_PROXY_PORT__       oauth2-proxy loopback TCP port (for example 4180)
+#   __XFORM_PORT__              xform loopback TCP port (for example 9090)
+#   __XFORM_TRUSTED_PROXY_SECRET__  generated 64-hex Admission assertion
+
+http:
+  routers:
+    oauth2-auth-private:
+      rule: "Path(`/xform/oauth2/auth`)"
+      entryPoints: [web]
+      priority: 210
+      middlewares: [no-store, auth-not-found]
+      service: noop@internal
+    oauth2-bare:
+      rule: "Path(`/xform/oauth2`)"
+      entryPoints: [web]
+      priority: 200
+      middlewares: [no-store, oauth2-slash]
+      service: oauth2-proxy
+    oauth2:
+      rule: "PathPrefix(`/xform/oauth2/`)"
+      entryPoints: [web]
+      priority: 190
+      middlewares: [no-store]
+      service: oauth2-proxy
+    mount-bare:
+      rule: "Path(`/xform`)"
+      entryPoints: [web]
+      priority: 180
+      middlewares: [mount-slash]
+      service: xform
+    api:
+      rule: "Path(`/xform/api`) || PathPrefix(`/xform/api/`)"
+      entryPoints: [web]
+      priority: 100
+      middlewares: [no-store, forward-auth, admission, strip-mount]
+      service: xform
+    panel:
+      rule: "PathPrefix(`/xform/`)"
+      entryPoints: [web]
+      priority: 1
+      middlewares: [no-store, document-errors, forward-auth, admission, strip-mount]
+      service: xform
+
+  middlewares:
+    auth-not-found:
+      errors:
+        status: ["418"]
+        statusRewrites:
+          "418": "404"
+        service: noop@internal
+        query: "/"
+    no-store:
+      headers:
+        customResponseHeaders:
+          Cache-Control: "no-store"
+    oauth2-slash:
+      redirectRegex:
+        regex: "^([a-z][a-z0-9+.-]*://[^/]+/xform/oauth2)(\\?.*)?$"
+        replacement: "${1}/${2}"
+        permanent: true
+    mount-slash:
+      redirectRegex:
+        regex: "^([a-z][a-z0-9+.-]*://[^/]+/xform)(\\?.*)?$"
+        replacement: "${1}/${2}"
+        permanent: true
+    forward-auth:
+      forwardAuth:
+        address: "http://127.0.0.1:__OAUTH2_PROXY_PORT__/xform/oauth2/auth"
+        trustForwardHeader: false
+        preserveLocationHeader: true
+        # Traefik adds its own X-Forwarded-* context. Only the browser
+        # session cookie is copied from the original request.
+        authRequestHeaders:
+          - Cookie
+    document-errors:
+      errors:
+        status: ["401"]
+        statusRewrites:
+          "401": "302"
+        service: oauth2-proxy
+        query: "/xform/oauth2/start?rd={url}"
+    admission:
+      headers:
+        customRequestHeaders:
+          X-Xform-Authenticated: "__XFORM_TRUSTED_PROXY_SECRET__"
+          Cookie: ""
+          Authorization: ""
+          Proxy-Authorization: ""
+          Forwarded: ""
+          X-Auth-Request-User: ""
+          X-Auth-Request-Email: ""
+          X-Auth-Request-Groups: ""
+          X-Auth-Request-Preferred-Username: ""
+          X-Auth-Request-Token: ""
+          X-Auth-Request-Access-Token: ""
+          X-Auth-Request-Id-Token: ""
+          X-Auth-Request-IdToken: ""
+          X-Auth-Request-Redirect: ""
+          X-Access-Token: ""
+          X-ID-Token: ""
+          X-Id-Token: ""
+          Remote-User: ""
+          Remote-Email: ""
+          Remote-Groups: ""
+          X-Remote-User: ""
+          X-Remote-Email: ""
+          X-Remote-Groups: ""
+          X-Authenticated-User: ""
+          X-Authenticated-Email: ""
+          X-Authenticated-Groups: ""
+          X-User: ""
+          X-Email: ""
+          X-Groups: ""
+          X-Group: ""
+          X-Original-URL: ""
+          X-Original-URI: ""
+          X-Original-Method: ""
+          X-SSL-Client-Cert: ""
+          X-Client-Cert: ""
+          X-Forwarded-User: ""
+          X-Forwarded-Email: ""
+          X-Forwarded-Groups: ""
+          X-Forwarded-Preferred-Username: ""
+          X-Forwarded-Access-Token: ""
+          X-Forwarded-Authorization: ""
+          X-Forwarded-Id-Token: ""
+          X-Forwarded-Client-Cert: ""
+          X-Real-IP: ""
+    strip-mount:
+      stripPrefix:
+        prefixes:
+          - "/xform"
+
+  services:
+    oauth2-proxy:
+      loadBalancer:
+        passHostHeader: true
+        servers:
+          - url: "http://127.0.0.1:__OAUTH2_PROXY_PORT__"
+            preservePath: true
+    xform:
+      loadBalancer:
+        passHostHeader: true
+        servers:
+          - url: "http://127.0.0.1:__XFORM_PORT__"
+            preservePath: true

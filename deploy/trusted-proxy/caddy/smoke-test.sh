@@ -5,7 +5,7 @@ set -eu
 
 root=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 fake="$root/../nginx/fake-forward-auth.py"
-image=${CADDY_IMAGE:-caddy:2.10.2-alpine@sha256:55cc489b0b057671f28154c12e6efd8dc866439d973c017a384b80e6966859ea}
+image=${CADDY_IMAGE:-caddy:2.10.2-alpine@sha256:4c6e91c6ed0e2fa03efd5b44747b625fec79bc9cd06ac5235a779726618e530d}
 workdir=$(mktemp -d)
 fake_pid=
 caddy_pid=
@@ -162,14 +162,14 @@ run_case() {
             -v "$caddy_config:/etc/caddy/Caddyfile:ro" \
             -v "$socket_dir:/run/xform:ro" \
             -v "$static_root:/var/www/xform/dist:ro" \
-            "$image" validate --config /etc/caddy/Caddyfile --adapter caddyfile >/dev/null
+            "$image" caddy validate --config /etc/caddy/Caddyfile --adapter caddyfile >/dev/null
 
         caddy_container="xform-caddy-smoke-$$-$case_name-$start_attempt"
         docker run --rm --name "$caddy_container" --network host --user 0:0 \
             -v "$caddy_config:/etc/caddy/Caddyfile:ro" \
             -v "$socket_dir:/run/xform:ro" \
             -v "$static_root:/var/www/xform/dist:ro" \
-            "$image" run --config /etc/caddy/Caddyfile --adapter caddyfile \
+            "$image" caddy run --config /etc/caddy/Caddyfile --adapter caddyfile \
             >"$workdir/$case_name.caddy.log" 2>&1 &
         caddy_pid=$!
 

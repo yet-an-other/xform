@@ -210,7 +210,7 @@ the nginx matrix, a temporary static build fixture, and no identity provider.
 It needs Docker, curl, and Python 3:
 
 ```sh
-CADDY_IMAGE=caddy:2.10.2-alpine@sha256:55cc489b0b057671f28154c12e6efd8dc866439d973c017a384b80e6966859ea \
+CADDY_IMAGE=caddy:2.10.2-alpine@sha256:4c6e91c6ed0e2fa03efd5b44747b625fec79bc9cd06ac5235a779726618e530d \
   ./smoke-test.sh
 ```
 
