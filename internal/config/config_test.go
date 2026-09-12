@@ -13,6 +13,7 @@ func clearEnv(t *testing.T) {
 	t.Helper()
 	for _, name := range []string{
 		"XFORM_LISTEN",
+		"XFORM_AUTH_MODE",
 		"XFORM_PASSWORD",
 		"XFORM_XRAY_API",
 		"XFORM_XRAY_CONFIG",
@@ -41,6 +42,9 @@ func TestLoadDefaults(t *testing.T) {
 	if cfg.ListenAddress != "127.0.0.1:9090" {
 		t.Errorf("ListenAddress = %q, want %q", cfg.ListenAddress, "127.0.0.1:9090")
 	}
+	if cfg.AuthMode != "password" {
+		t.Errorf("AuthMode = %q, want password", cfg.AuthMode)
+	}
 	if cfg.XrayAPIAddress != "127.0.0.1:8080" {
 		t.Errorf("XrayAPIAddress = %q, want %q", cfg.XrayAPIAddress, "127.0.0.1:8080")
 	}
@@ -67,6 +71,7 @@ func TestLoadDefaults(t *testing.T) {
 func TestLoadReadsEnvOverrides(t *testing.T) {
 	clearEnv(t)
 	t.Setenv("XFORM_LISTEN", "0.0.0.0:8080")
+	t.Setenv("XFORM_AUTH_MODE", "password")
 	t.Setenv("XFORM_PASSWORD", "s3cret")
 	t.Setenv("XFORM_XRAY_API", "127.0.0.1:10086")
 	t.Setenv("XFORM_XRAY_CONFIG", "/etc/xray/config.json")
@@ -82,6 +87,9 @@ func TestLoadReadsEnvOverrides(t *testing.T) {
 
 	if cfg.ListenAddress != "0.0.0.0:8080" {
 		t.Errorf("ListenAddress = %q, want the XFORM_LISTEN override", cfg.ListenAddress)
+	}
+	if cfg.AuthMode != "password" {
+		t.Errorf("AuthMode = %q, want password", cfg.AuthMode)
 	}
 	if cfg.Password != "s3cret" {
 		t.Errorf("Password = %q, want the XFORM_PASSWORD override", cfg.Password)
@@ -111,5 +119,15 @@ func TestLoadRequiresPassword(t *testing.T) {
 
 	if _, err := config.Load(); err == nil {
 		t.Fatal("load succeeded without XFORM_PASSWORD, want an error (SPEC.md §7 requires it)")
+	}
+}
+
+func TestLoadRejectsUnsupportedAuthenticationMode(t *testing.T) {
+	clearEnv(t)
+	t.Setenv("XFORM_AUTH_MODE", "trusted_proxy")
+	t.Setenv("XFORM_PASSWORD", "ignored")
+
+	if _, err := config.Load(); err == nil {
+		t.Fatal("load accepted trusted_proxy before its mode is implemented")
 	}
 }

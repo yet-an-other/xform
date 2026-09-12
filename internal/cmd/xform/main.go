@@ -14,6 +14,7 @@ import (
 
 	"github.com/yet-an-other/xform/internal/advertisements"
 	"github.com/yet-an-other/xform/internal/api"
+	"github.com/yet-an-other/xform/internal/auth"
 	"github.com/yet-an-other/xform/internal/config"
 	"github.com/yet-an-other/xform/internal/configsnapshot"
 	"github.com/yet-an-other/xform/internal/geoip"
@@ -22,7 +23,6 @@ import (
 	"github.com/yet-an-other/xform/internal/logging"
 	"github.com/yet-an-other/xform/internal/profiles"
 	"github.com/yet-an-other/xform/internal/roster"
-	"github.com/yet-an-other/xform/internal/session"
 	"github.com/yet-an-other/xform/internal/users"
 	"github.com/yet-an-other/xform/internal/xrayconfig"
 	"github.com/yet-an-other/xform/internal/xraygrpc"
@@ -46,6 +46,12 @@ func main() {
 	cfg, err := config.Load()
 	if err != nil {
 		slog.Error("load configuration", "error", err)
+		os.Exit(1)
+	}
+
+	authentication, err := auth.New(cfg.AuthMode, cfg.Password, time.Now)
+	if err != nil {
+		slog.Error("configure authentication", "error", err)
 		os.Exit(1)
 	}
 
@@ -104,8 +110,6 @@ func main() {
 		configWatcher.Changes(),
 	).WithPurgeNotifier(usersCollector)
 	rosterService.Start(shutdownSignal)
-	sessions := session.NewManager(cfg.Password, time.Now)
-
 	server := &http.Server{
 		Addr: cfg.ListenAddress,
 		Handler: newHandler(
@@ -121,7 +125,7 @@ func main() {
 				Logs:   journal.NewReader(cfg.JournalctlPath, journalUnit),
 				Config: configsnapshot.NewReader(cfg.XrayConfigPath),
 			},
-			sessions,
+			authentication,
 			cfg,
 		),
 		ReadHeaderTimeout: 5 * time.Second,
@@ -145,7 +149,7 @@ func main() {
 		"db", cfg.DBPath,
 		"xray_unit", cfg.XrayUnitName,
 		"journal_xray_unit", journalUnit,
-		"password_set", cfg.Password != "",
+		"authentication_mode", authentication.Mode(),
 	)
 	if err := server.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 		slog.Error("serve xform", "error", err)
@@ -184,9 +188,12 @@ func (s currentProfileSources) Current() profiles.Sources {
 	return profiles.SourcesFromSnapshots(s.xray.Snapshot(), s.advertisements.Snapshot())
 }
 
-func newHandler(snapshots *hoststats.Cache, statuses *xraystatus.Cache, usersCache *users.Cache, profileSources currentProfileSources, rosterService *roster.Service, operational api.OperationalSources, sessions *session.Manager, cfg config.Config) http.Handler {
-	panel := api.PanelInfo{Version: version, XrayAPIEndpoint: cfg.XrayAPIAddress, Uptime: api.UptimeSeconds(processStart, time.Now)}
-	return api.New(snapshots, statuses, usersCache, profileSources, rosterService, operational, sessions, newDashboardHandler(), panel)
+func newHandler(snapshots *hoststats.Cache, statuses *xraystatus.Cache, usersCache *users.Cache, profileSources currentProfileSources, rosterService *roster.Service, operational api.OperationalSources, authentication *auth.Gateway, cfg config.Config) http.Handler {
+	panel := api.PanelInfo{
+		Version: version, XrayAPIEndpoint: cfg.XrayAPIAddress,
+		Uptime: api.UptimeSeconds(processStart, time.Now),
+	}
+	return api.New(snapshots, statuses, usersCache, profileSources, rosterService, operational, authentication, newDashboardHandler(), panel)
 }
 
 // configViewSource adapts the config watcher to the roster's inbound-view

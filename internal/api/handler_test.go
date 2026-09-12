@@ -473,13 +473,17 @@ func TestPanelEndpointReturnsTheReleaseVersion(t *testing.T) {
 		t.Errorf("Cache-Control = %q, want no-store", got)
 	}
 	var payload struct {
-		Version string `json:"version"`
+		Version            string `json:"version"`
+		AuthenticationMode string `json:"authentication_mode"`
 	}
 	if err := json.Unmarshal(response.Body.Bytes(), &payload); err != nil {
 		t.Fatalf("decode response: %v", err)
 	}
 	if payload.Version != testPanelInfo.Version {
 		t.Errorf("version = %q, want %q", payload.Version, testPanelInfo.Version)
+	}
+	if payload.AuthenticationMode != "password" {
+		t.Errorf("authentication_mode = %q, want password", payload.AuthenticationMode)
 	}
 }
 
@@ -563,6 +567,18 @@ func (failingSessions) Login(string) (string, bool, error) {
 }
 func (failingSessions) Validate(string) bool { return false }
 func (failingSessions) Logout(string)        {}
+func (failingSessions) Mode() string         { return "password" }
+func (f failingSessions) Handler(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+		if request.Method == http.MethodPost && request.URL.Path == "/api/v1/login" {
+			if _, _, err := f.Login(""); err != nil {
+				response.WriteHeader(http.StatusInternalServerError)
+				return
+			}
+		}
+		next.ServeHTTP(response, request)
+	})
+}
 
 func TestLoginFailureInSessionManagerIs500Not401(t *testing.T) {
 	handler := api.New(fixedHostStats{}, fixedXrayStatus{}, fixedUsers{}, fixedProfileSources{}, &stubRoster{}, api.OperationalSources{}, failingSessions{}, http.NotFoundHandler(), testPanelInfo)

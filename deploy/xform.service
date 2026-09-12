@@ -77,6 +77,8 @@ RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
 
 # Same-origin through a reverse proxy or SSH tunnel only; never expose directly.
 Environment=XFORM_LISTEN=127.0.0.1:9090
+# Explicit Password authentication is the current supported mode.
+Environment=XFORM_AUTH_MODE=password
 # REQUIRED: the panel refuses to start without a login password.
 # Environment=XFORM_PASSWORD=change-me
 # Environment=XFORM_XRAY_API=127.0.0.1:8080

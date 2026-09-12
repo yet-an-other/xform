@@ -39,7 +39,8 @@ All runtime settings are environment variables (defaults from SPEC.md §7):
 | Variable | Default | Purpose |
 | --- | --- | --- |
 | `XFORM_LISTEN` | `127.0.0.1:9090` | Panel listen address |
-| `XFORM_PASSWORD` | none — **required** | Login password (constant-time compare) |
+| `XFORM_AUTH_MODE` | `password` | Authentication mode; Password is currently supported |
+| `XFORM_PASSWORD` | none — **required** | Password authentication secret (constant-time compare) |
 | `XFORM_XRAY_API` | `127.0.0.1:8080` | xray gRPC StatsService address |
 | `XFORM_XRAY_CONFIG` | `/usr/local/etc/xray/config.json` | xray config file (user roster) |
 | `XFORM_DB` | `/var/lib/xform/xform.db` | SQLite database file |

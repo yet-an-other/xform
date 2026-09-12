@@ -11,24 +11,18 @@ import (
 	"strings"
 	"time"
 
+	"github.com/yet-an-other/xform/internal/auth"
 	"github.com/yet-an-other/xform/internal/configsnapshot"
 	"github.com/yet-an-other/xform/internal/hoststats"
 	"github.com/yet-an-other/xform/internal/journal"
 	"github.com/yet-an-other/xform/internal/profiles"
 	"github.com/yet-an-other/xform/internal/roster"
-	"github.com/yet-an-other/xform/internal/session"
 	"github.com/yet-an-other/xform/internal/users"
 	"github.com/yet-an-other/xform/internal/xraystatus"
 )
 
 type hostStatsSnapshots interface {
 	Latest(context.Context) (hoststats.Stats, error)
-}
-
-type sessionManager interface {
-	Login(password string) (token string, ok bool, err error)
-	Validate(token string) bool
-	Logout(token string)
 }
 
 type xrayStatuses interface {
@@ -73,8 +67,6 @@ type configSnapshots interface {
 	Read(ctx context.Context) (configsnapshot.Snapshot, error)
 }
 
-const sessionCookieName = "xform_session"
-
 // PanelInfo is the panel's own identity, exposed through the API: the
 // release version (ldflags-stamped at build time) and the configured xray
 // gRPC endpoint, which the dashboard names in its degraded banner. Uptime
@@ -100,8 +92,9 @@ func UptimeSeconds(start time.Time, now func() time.Time) func() int64 {
 // process uptime, re-read on every request — the dashboard polls it every
 // five seconds instead of extrapolating in the browser.
 type panelResponse struct {
-	Version       string `json:"version"`
-	UptimeSeconds int64  `json:"uptime_seconds"`
+	Version            string `json:"version"`
+	UptimeSeconds      int64  `json:"uptime_seconds"`
+	AuthenticationMode string `json:"authentication_mode"`
 }
 
 // xrayResponse is GET /api/v1/xray: the observed Status plus the
@@ -112,68 +105,28 @@ type xrayResponse struct {
 	APIEndpoint string `json:"api_endpoint"`
 }
 
-// New returns the HTTP handler for the API and dashboard. Every /api/ route
-// except login and healthz requires a session (SPEC.md §5); the dashboard
-// itself loads openly and lets the SPA route to its login page on 401.
+// New returns the application handler for the API and dashboard. Operator
+// admission is supplied by the authentication seam and wraps this handler at
+// the end; the application routes do not know about Sessions or cookies.
 // Mutations additionally reject cross-site requests (user-management spec §5).
-func New(snapshots hostStatsSnapshots, xray xrayStatuses, usersSource usersSnapshots, profileSources connectionProfileSources, rosterSource rosterMutations, operational OperationalSources, sessions sessionManager, dashboard http.Handler, panel PanelInfo) http.Handler {
+func New(snapshots hostStatsSnapshots, xray xrayStatuses, usersSource usersSnapshots, profileSources connectionProfileSources, rosterSource rosterMutations, operational OperationalSources, authenticationGateway auth.Admission, dashboard http.Handler, panel PanelInfo) http.Handler {
 	noStore := func(next http.HandlerFunc) http.HandlerFunc {
 		return func(response http.ResponseWriter, request *http.Request) {
 			response.Header().Set("Cache-Control", "no-store")
 			next(response, request)
 		}
 	}
-	requireSession := func(next http.HandlerFunc) http.HandlerFunc {
-		return func(response http.ResponseWriter, request *http.Request) {
-			cookie, err := request.Cookie(sessionCookieName)
-			if err != nil || !sessions.Validate(cookie.Value) {
-				writeJSON(response, http.StatusUnauthorized, map[string]string{"error": "unauthenticated"})
-				return
-			}
-			// Slide both sides of the 24h expiry: the store entry (via
-			// Validate) and the cookie's Max-Age.
-			setSessionCookie(response, cookie.Value)
-			next(response, request)
-		}
-	}
 
 	mux := http.NewServeMux()
-	mux.HandleFunc("POST /api/v1/login", func(response http.ResponseWriter, request *http.Request) {
-		var body struct {
-			Password string `json:"password"`
-		}
-		if err := json.NewDecoder(request.Body).Decode(&body); err != nil || body.Password == "" {
-			writeJSON(response, http.StatusBadRequest, map[string]string{"error": "invalid request"})
-			return
-		}
-		token, ok, err := sessions.Login(body.Password)
-		if err != nil {
-			writeJSON(response, http.StatusInternalServerError, map[string]string{"error": "login unavailable"})
-			return
-		}
-		if !ok {
-			writeJSON(response, http.StatusUnauthorized, map[string]string{"error": "invalid password"})
-			return
-		}
-		setSessionCookie(response, token)
-		response.WriteHeader(http.StatusNoContent)
-	})
-	mux.HandleFunc("POST /api/v1/logout", requireSession(func(response http.ResponseWriter, request *http.Request) {
-		cookie, _ := request.Cookie(sessionCookieName) // requireSession guarantees it
-		sessions.Logout(cookie.Value)
-		http.SetCookie(response, &http.Cookie{
-			Name: sessionCookieName, MaxAge: -1, Path: "/",
-			HttpOnly: true, Secure: true, SameSite: http.SameSiteLaxMode,
-		})
-		response.WriteHeader(http.StatusNoContent)
-	}))
 	mux.HandleFunc("GET /api/v1/healthz", func(response http.ResponseWriter, _ *http.Request) {
 		writeJSON(response, http.StatusOK, map[string]string{"status": "ok"})
 	})
-	mux.HandleFunc("GET /api/v1/panel", noStore(requireSession(func(response http.ResponseWriter, _ *http.Request) {
-		writeJSON(response, http.StatusOK, panelResponse{Version: panel.Version, UptimeSeconds: panel.Uptime()})
-	})))
-	mux.HandleFunc("GET /api/v1/server", requireSession(func(response http.ResponseWriter, request *http.Request) {
+	mux.HandleFunc("GET /api/v1/panel", noStore(func(response http.ResponseWriter, _ *http.Request) {
+		writeJSON(response, http.StatusOK, panelResponse{
+			Version: panel.Version, UptimeSeconds: panel.Uptime(), AuthenticationMode: authenticationGateway.Mode(),
+		})
+	}))
+	mux.HandleFunc("GET /api/v1/server", func(response http.ResponseWriter, request *http.Request) {
 		response.Header().Set("Cache-Control", "no-store")
 		stats, err := snapshots.Latest(request.Context())
 		if err != nil {
@@ -182,8 +135,8 @@ func New(snapshots hostStatsSnapshots, xray xrayStatuses, usersSource usersSnaps
 		}
 
 		writeJSON(response, http.StatusOK, stats)
-	}))
-	mux.HandleFunc("GET /api/v1/xray", requireSession(func(response http.ResponseWriter, request *http.Request) {
+	})
+	mux.HandleFunc("GET /api/v1/xray", func(response http.ResponseWriter, request *http.Request) {
 		response.Header().Set("Cache-Control", "no-store")
 		status, err := xray.Latest(request.Context())
 		if err != nil {
@@ -195,8 +148,8 @@ func New(snapshots hostStatsSnapshots, xray xrayStatuses, usersSource usersSnaps
 		}
 
 		writeJSON(response, http.StatusOK, xrayResponse{Status: status, APIEndpoint: panel.XrayAPIEndpoint})
-	}))
-	mux.HandleFunc("GET /api/v1/users", requireSession(func(response http.ResponseWriter, request *http.Request) {
+	})
+	mux.HandleFunc("GET /api/v1/users", func(response http.ResponseWriter, request *http.Request) {
 		response.Header().Set("Cache-Control", "no-store")
 		snapshot, err := usersSource.Latest(request.Context())
 		if err != nil {
@@ -220,8 +173,8 @@ func New(snapshots hostStatsSnapshots, xray xrayStatuses, usersSource usersSnaps
 			RosterSync:  rosterSource.Sync(),
 			Inbounds:    rosterSource.InboundOptions(),
 		})
-	}))
-	mux.HandleFunc("POST /api/v1/users", noStore(requireSession(sameSiteOnly(func(response http.ResponseWriter, request *http.Request) {
+	})
+	mux.HandleFunc("POST /api/v1/users", noStore(sameSiteOnly(func(response http.ResponseWriter, request *http.Request) {
 		var body struct {
 			Email    string   `json:"email"`
 			ClientID string   `json:"client_id"`
@@ -236,8 +189,8 @@ func New(snapshots hostStatsSnapshots, xray xrayStatuses, usersSource usersSnaps
 			return
 		}
 		writeJSON(response, http.StatusCreated, mutationResponse{User: result.User, RosterSync: result.Sync})
-	}))))
-	mux.HandleFunc("PATCH /api/v1/users/{email}", noStore(requireSession(sameSiteOnly(func(response http.ResponseWriter, request *http.Request) {
+	})))
+	mux.HandleFunc("PATCH /api/v1/users/{email}", noStore(sameSiteOnly(func(response http.ResponseWriter, request *http.Request) {
 		var body struct {
 			ClientID string   `json:"client_id"` // absent keeps the stored credential
 			Inbounds []string `json:"inbounds"`  // absent keeps; an explicit array sets (empty detaches all)
@@ -253,8 +206,8 @@ func New(snapshots hostStatsSnapshots, xray xrayStatuses, usersSource usersSnaps
 			return
 		}
 		writeJSON(response, http.StatusOK, mutationResponse{User: result.User, RosterSync: result.Sync})
-	}))))
-	mux.HandleFunc("POST /api/v1/users/{email}/disable", noStore(requireSession(sameSiteOnly(func(response http.ResponseWriter, request *http.Request) {
+	})))
+	mux.HandleFunc("POST /api/v1/users/{email}/disable", noStore(sameSiteOnly(func(response http.ResponseWriter, request *http.Request) {
 		sync, disabled, err := rosterSource.Disable(request.Context(), request.PathValue("email"))
 		if writeMutationError(response, err) {
 			return
@@ -267,15 +220,15 @@ func New(snapshots hostStatsSnapshots, xray xrayStatuses, usersSource usersSnaps
 		// A live disable answers with the Roster sync state so the dialog can
 		// tell applied from still-retrying (spec §5).
 		writeJSON(response, http.StatusOK, syncResponse{RosterSync: sync})
-	}))))
-	mux.HandleFunc("POST /api/v1/users/{email}/enable", noStore(requireSession(sameSiteOnly(func(response http.ResponseWriter, request *http.Request) {
+	})))
+	mux.HandleFunc("POST /api/v1/users/{email}/enable", noStore(sameSiteOnly(func(response http.ResponseWriter, request *http.Request) {
 		result, err := rosterSource.Enable(request.Context(), request.PathValue("email"))
 		if writeMutationError(response, err) {
 			return
 		}
 		writeJSON(response, http.StatusOK, mutationResponse{User: result.User, RosterSync: result.Sync})
-	}))))
-	mux.HandleFunc("DELETE /api/v1/users/{email}", noStore(requireSession(sameSiteOnly(func(response http.ResponseWriter, request *http.Request) {
+	})))
+	mux.HandleFunc("DELETE /api/v1/users/{email}", noStore(sameSiteOnly(func(response http.ResponseWriter, request *http.Request) {
 		sync, deleted, err := rosterSource.Delete(request.Context(), request.PathValue("email"))
 		if writeMutationError(response, err) {
 			return
@@ -288,8 +241,8 @@ func New(snapshots hostStatsSnapshots, xray xrayStatuses, usersSource usersSnaps
 		// A stored delete answers with the Roster sync state — the purge
 		// lands once the removal applies (ADR-0007, issue #59).
 		writeJSON(response, http.StatusOK, syncResponse{RosterSync: sync})
-	}))))
-	mux.HandleFunc("GET /api/v1/users/{email}", noStore(requireSession(func(response http.ResponseWriter, request *http.Request) {
+	})))
+	mux.HandleFunc("GET /api/v1/users/{email}", noStore(func(response http.ResponseWriter, request *http.Request) {
 		if malformedUserEmailEscape(request.RequestURI) {
 			writeJSON(response, http.StatusBadRequest, map[string]string{"error": "invalid_request"})
 			return
@@ -315,15 +268,15 @@ func New(snapshots hostStatsSnapshots, xray xrayStatuses, usersSource usersSnaps
 			return
 		}
 		writeJSON(response, http.StatusNotFound, map[string]string{"error": "not_found"})
-	})))
-	mux.HandleFunc("GET /api/v1/logs/panel", noStore(requireSession(logSnapshotHandler(operational.Logs, journal.SourcePanel))))
-	mux.HandleFunc("GET /api/v1/logs/xray", noStore(requireSession(xrayLogSnapshotHandler(operational.Logs))))
-	mux.HandleFunc("GET /api/v1/xray/config", noStore(requireSession(configSnapshotHandler(operational.Config))))
-	mux.Handle("/api/", requireSession(func(response http.ResponseWriter, _ *http.Request) {
+	}))
+	mux.HandleFunc("GET /api/v1/logs/panel", noStore(logSnapshotHandler(operational.Logs, journal.SourcePanel)))
+	mux.HandleFunc("GET /api/v1/logs/xray", noStore(xrayLogSnapshotHandler(operational.Logs)))
+	mux.HandleFunc("GET /api/v1/xray/config", noStore(configSnapshotHandler(operational.Config)))
+	mux.Handle("/api/", http.HandlerFunc(func(response http.ResponseWriter, _ *http.Request) {
 		writeJSON(response, http.StatusNotFound, map[string]string{"error": "not found"})
 	}))
 	mux.Handle("/", dashboard)
-	return mux
+	return authenticationGateway.Handler(mux)
 }
 
 // userRow is one users-table row plus its write-side mark: pending while
@@ -428,17 +381,6 @@ func splitHostPort(hostPort string) (string, string) {
 		return hostPort, ""
 	}
 	return host, port
-}
-
-// setSessionCookie issues the session cookie per SPEC.md §5: HttpOnly,
-// SameSite=Lax, Secure always (browsers exempt localhost, and every other
-// access path is TLS-terminated).
-func setSessionCookie(response http.ResponseWriter, token string) {
-	http.SetCookie(response, &http.Cookie{
-		Name: sessionCookieName, Value: token, Path: "/",
-		MaxAge:   int(session.TTL.Seconds()),
-		HttpOnly: true, Secure: true, SameSite: http.SameSiteLaxMode,
-	})
 }
 
 func writeJSON(response http.ResponseWriter, status int, value any) {
