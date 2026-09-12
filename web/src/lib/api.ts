@@ -380,14 +380,15 @@ export function fetchUserDetail(email: string, signal?: AbortSignal): Promise<Us
 }
 
 // PanelInfo is the panel's own identity (SPEC §5): the release
-// version stamped into the binary at build time, current process uptime, and
-// the active Authentication mode. Fetched every poll — the dashboard refreshes
-// uptime from the API in the five-second cycle instead of extrapolating it
-// in the browser.
+// version stamped into the binary at build time, current process uptime, the
+// active Authentication mode, and the optional Trusted proxy Panel sign-out
+// path. Fetched every poll — the dashboard refreshes uptime from the API in
+// the five-second cycle instead of extrapolating it in the browser.
 export interface PanelInfo {
   version: string;
   uptime_seconds: number;
   authentication_mode: AuthenticationMode;
+  sign_out_url?: string;
 }
 
 export function fetchPanelInfo(signal?: AbortSignal): Promise<PanelInfo> {

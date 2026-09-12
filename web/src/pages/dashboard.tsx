@@ -807,7 +807,14 @@ export function Dashboard({
         <HeaderMeta>
           refreshing every 5s{updatedAt ? ` · updated ${formatTime24(updatedAt)}` : ""}
         </HeaderMeta>
-        {panel !== null && panel.authentication_mode !== "trusted_proxy" ? (
+        {panel?.authentication_mode === "trusted_proxy" && panel.sign_out_url ? (
+          <a
+            href={panel.sign_out_url}
+            className="border-border text-muted-foreground hover:text-foreground rounded-lg border px-3 py-1.5 text-[0.78rem] font-bold tracking-[0.08em] uppercase"
+          >
+            Sign out of Panel
+          </a>
+        ) : panel !== null && panel.authentication_mode !== "trusted_proxy" ? (
           <button
             type="button"
             onClick={() => void signOut()}

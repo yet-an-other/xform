@@ -491,6 +491,50 @@ func TestPanelEndpointReturnsTheReleaseVersion(t *testing.T) {
 // TestPanelEndpointReportsCurrentUptime proves the endpoint evaluates the
 // uptime source per request (SPEC §5): the dashboard polls it every
 // five seconds, so each response carries the value at request time.
+func TestPanelEndpointReportsTrustedProxySignOutURL(t *testing.T) {
+	secret := strings.Repeat("ab", 32)
+	gateway, err := auth.NewTrustedProxy(secret, time.Now)
+	if err != nil {
+		t.Fatalf("construct trusted proxy gateway: %v", err)
+	}
+	panel := testPanelInfo
+	panel.SignOutURL = "/oauth2/sign_out?rd=%2F"
+	handler := api.New(fixedHostStats{}, fixedXrayStatus{}, fixedUsers{}, fixedProfileSources{}, &stubRoster{}, api.OperationalSources{}, gateway, http.NotFoundHandler(), panel)
+
+	request := httptest.NewRequest(http.MethodGet, "/api/v1/panel", nil)
+	request.Header.Set("X-Xform-Authenticated", secret)
+	response := httptest.NewRecorder()
+	handler.ServeHTTP(response, request)
+	if response.Code != http.StatusOK {
+		t.Fatalf("trusted panel status = %d, want 200; body = %s", response.Code, response.Body.String())
+	}
+	var payload map[string]any
+	if err := json.Unmarshal(response.Body.Bytes(), &payload); err != nil {
+		t.Fatalf("decode panel response: %v", err)
+	}
+	if payload["sign_out_url"] != panel.SignOutURL {
+		t.Errorf("sign_out_url = %v, want %q", payload["sign_out_url"], panel.SignOutURL)
+	}
+}
+
+func TestPanelEndpointOmitsSignOutURLForPasswordMode(t *testing.T) {
+	panel := testPanelInfo
+	panel.SignOutURL = "/oauth2/sign_out"
+	handler := api.New(fixedHostStats{}, fixedXrayStatus{}, fixedUsers{}, fixedProfileSources{}, &stubRoster{}, api.OperationalSources{}, session.NewManager(testPassword, time.Now), http.NotFoundHandler(), panel)
+	request := httptest.NewRequest(http.MethodGet, "/api/v1/panel", nil)
+	request.AddCookie(login(t, handler, testPassword))
+	response := httptest.NewRecorder()
+	handler.ServeHTTP(response, request)
+
+	var payload map[string]json.RawMessage
+	if err := json.Unmarshal(response.Body.Bytes(), &payload); err != nil {
+		t.Fatalf("decode panel response: %v", err)
+	}
+	if _, present := payload["sign_out_url"]; present {
+		t.Errorf("password panel response contains sign_out_url: %s", response.Body.String())
+	}
+}
+
 func TestPanelEndpointReportsTrustedProxyModeAndNoPasswordRoutes(t *testing.T) {
 	secret := strings.Repeat("ab", 32)
 	gateway, err := auth.NewTrustedProxy(secret, time.Now)
@@ -521,13 +565,17 @@ func TestPanelEndpointReportsTrustedProxyModeAndNoPasswordRoutes(t *testing.T) {
 		t.Fatalf("trusted panel status = %d, want 200; body = %s", response.Code, response.Body.String())
 	}
 	var payload struct {
-		AuthenticationMode string `json:"authentication_mode"`
+		AuthenticationMode string  `json:"authentication_mode"`
+		SignOutURL         *string `json:"sign_out_url"`
 	}
 	if err := json.Unmarshal(response.Body.Bytes(), &payload); err != nil {
 		t.Fatalf("decode panel response: %v", err)
 	}
 	if payload.AuthenticationMode != "trusted_proxy" {
 		t.Errorf("authentication_mode = %q, want trusted_proxy", payload.AuthenticationMode)
+	}
+	if payload.SignOutURL != nil {
+		t.Errorf("sign_out_url = %q, want omitted when unconfigured", *payload.SignOutURL)
 	}
 
 	// The password route is absent even after admission. The trusted gateway

@@ -86,6 +86,9 @@ Environment=XFORM_LISTEN=127.0.0.1:9090
 Environment=XFORM_AUTH_MODE=password
 # REQUIRED: the panel refuses to start without a login password.
 # Environment=XFORM_PASSWORD=change-me
+# In trusted_proxy mode, optionally expose the gateway's local sign-out path.
+# It must be a path beginning with one slash; it may include a query.
+# Environment=XFORM_TRUSTED_PROXY_SIGN_OUT_URL=/oauth2/sign_out
 # Environment=XFORM_XRAY_API=127.0.0.1:8080
 # XFORM_XRAY_CONFIG default is /usr/local/etc/xray/config.json; ReadWritePaths
 # above must name its directory.

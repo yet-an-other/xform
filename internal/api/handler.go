@@ -68,13 +68,14 @@ type configSnapshots interface {
 }
 
 // PanelInfo is the panel's own identity, exposed through the API: the
-// release version (ldflags-stamped at build time) and the configured xray
-// gRPC endpoint, which the dashboard names in its degraded banner. Uptime
-// reports elapsed whole seconds since the panel process started (OP-1);
-// UptimeSeconds builds it from a monotonic start time.
+// release version (ldflags-stamped at build time), the configured xray gRPC
+// endpoint, and the optional Trusted proxy Panel sign-out path. Uptime reports
+// elapsed whole seconds since the panel process started (OP-1); UptimeSeconds
+// builds it from a monotonic start time.
 type PanelInfo struct {
 	Version         string
 	XrayAPIEndpoint string
+	SignOutURL      string
 	Uptime          func() int64
 }
 
@@ -90,11 +91,13 @@ func UptimeSeconds(start time.Time, now func() time.Time) func() int64 {
 
 // panelResponse is GET /api/v1/panel: the panel identity plus the current
 // process uptime, re-read on every request — the dashboard polls it every
-// five seconds instead of extrapolating in the browser.
+// five seconds instead of extrapolating in the browser. Trusted proxy mode
+// includes sign_out_url only when the optional path is configured.
 type panelResponse struct {
 	Version            string `json:"version"`
 	UptimeSeconds      int64  `json:"uptime_seconds"`
 	AuthenticationMode string `json:"authentication_mode"`
+	SignOutURL         string `json:"sign_out_url,omitempty"`
 }
 
 // xrayResponse is GET /api/v1/xray: the observed Status plus the
@@ -122,9 +125,13 @@ func New(snapshots hostStatsSnapshots, xray xrayStatuses, usersSource usersSnaps
 		writeJSON(response, http.StatusOK, map[string]string{"status": "ok"})
 	})
 	mux.HandleFunc("GET /api/v1/panel", noStore(func(response http.ResponseWriter, _ *http.Request) {
-		writeJSON(response, http.StatusOK, panelResponse{
+		responsePayload := panelResponse{
 			Version: panel.Version, UptimeSeconds: panel.Uptime(), AuthenticationMode: authenticationGateway.Mode(),
-		})
+		}
+		if authenticationGateway.Mode() == string(auth.ModeTrustedProxy) {
+			responsePayload.SignOutURL = panel.SignOutURL
+		}
+		writeJSON(response, http.StatusOK, responsePayload)
 	}))
 	mux.HandleFunc("GET /api/v1/server", func(response http.ResponseWriter, request *http.Request) {
 		response.Header().Set("Cache-Control", "no-store")

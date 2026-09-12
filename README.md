@@ -43,6 +43,7 @@ All runtime settings are environment variables (defaults from SPEC.md §7):
 | `XFORM_AUTH_MODE` | `password` | Authentication mode: `password` or `trusted_proxy` |
 | `XFORM_PASSWORD` | none — **required in Password mode** | Password authentication secret (constant-time compare) |
 | `XFORM_TRUSTED_PROXY_SECRET` | none — **required in Trusted proxy mode** | Exactly 64 lowercase hexadecimal characters shared with the Authentication gateway |
+| `XFORM_TRUSTED_PROXY_SIGN_OUT_URL` | unset | Optional same-origin absolute path for Panel sign-out, with an optional query |
 | `XFORM_XRAY_API` | `127.0.0.1:8080` | xray gRPC StatsService address |
 | `XFORM_XRAY_CONFIG` | `/usr/local/etc/xray/config.json` | xray config file (user roster) |
 | `XFORM_DB` | `/var/lib/xform/xform.db` | SQLite database file |
@@ -70,11 +71,19 @@ behavior; Trusted proxy mode additionally accepts only literal loopback TCP
 addresses and filters non-loopback peers.
 
 Trusted proxy mode requires `XFORM_PASSWORD` to be unset and
-`XFORM_TRUSTED_PROXY_SECRET` to be set. The gateway must be the only path to
-xform: each non-health request must carry exactly one matching
-`X-Xform-Authenticated` header. The assertion and common identity/token
-headers are removed before application handlers run; xform creates no Session
-in this mode. Health remains available without the assertion.
+`XFORM_TRUSTED_PROXY_SECRET` to be set. The optional
+`XFORM_TRUSTED_PROXY_SIGN_OUT_URL` must begin with one `/` and may carry a
+query, but cannot contain a scheme, host, fragment, control character,
+backslash, or leading `//`. The Panel reports a configured path as `sign_out_url`
+and renders a full-page Sign out of Panel link; when unset it renders no exit
+action. This clears the gateway session only — it does not promise to end an
+identity-provider session and never calls Password logout.
+
+The gateway must be the only path to xform: each non-health request must carry
+exactly one matching `X-Xform-Authenticated` header. The assertion and common
+identity/token headers are removed before application handlers run; xform
+creates no Session in this mode. Health remains available without the
+assertion.
 
 ## Deployment shapes
 

@@ -241,7 +241,7 @@ describe("header", () => {
     expect(await within(banner).findByRole("button", { name: /log out/i })).toBeInTheDocument();
   });
 
-  it("does not offer local logout in trusted mode", async () => {
+  it("offers no exit action when trusted sign-out is not configured", async () => {
     stubEndpoints({
       server: () => json(stats),
       xray: () => json(xrayRunning),
@@ -253,7 +253,28 @@ describe("header", () => {
     const banner = await screen.findByRole("banner");
     await waitFor(() => {
       expect(within(banner).queryByRole("button", { name: /log out/i })).not.toBeInTheDocument();
+      expect(within(banner).queryByRole("link", { name: /sign out of panel/i })).not.toBeInTheDocument();
     });
+  });
+
+  it("navigates to the configured trusted-proxy sign-out path", async () => {
+    stubEndpoints({
+      server: () => json(stats),
+      xray: () => json(xrayRunning),
+      panel: () => json({
+        version: "v0.0.0-test",
+        uptime_seconds: 300,
+        authentication_mode: "trusted_proxy",
+        sign_out_url: "/oauth2/sign_out?rd=%2F",
+      }),
+    });
+
+    render(<Dashboard onUnauthenticated={() => {}} />);
+
+    const banner = await screen.findByRole("banner");
+    const signOut = await within(banner).findByRole("link", { name: /sign out of panel/i });
+    expect(signOut).toHaveAttribute("href", "/oauth2/sign_out?rd=%2F");
+    expect(within(banner).queryByRole("button", { name: /log out/i })).not.toBeInTheDocument();
   });
 
   it("marks the xray group stopped without an uptime, banner carrying the detail", async () => {

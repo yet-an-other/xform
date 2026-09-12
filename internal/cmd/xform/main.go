@@ -216,7 +216,8 @@ func (s currentProfileSources) Current() profiles.Sources {
 func newHandler(snapshots *hoststats.Cache, statuses *xraystatus.Cache, usersCache *users.Cache, profileSources currentProfileSources, rosterService *roster.Service, operational api.OperationalSources, authentication *auth.Gateway, cfg config.Config) http.Handler {
 	panel := api.PanelInfo{
 		Version: version, XrayAPIEndpoint: cfg.XrayAPIAddress,
-		Uptime: api.UptimeSeconds(processStart, time.Now),
+		SignOutURL: cfg.TrustedProxySignOutURL,
+		Uptime:     api.UptimeSeconds(processStart, time.Now),
 	}
 	return api.New(snapshots, statuses, usersCache, profileSources, rosterService, operational, authentication, newDashboardHandler(), panel)
 }

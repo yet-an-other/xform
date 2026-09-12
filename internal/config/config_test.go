@@ -17,6 +17,7 @@ func clearEnv(t *testing.T) {
 		"XFORM_AUTH_MODE",
 		"XFORM_PASSWORD",
 		"XFORM_TRUSTED_PROXY_SECRET",
+		"XFORM_TRUSTED_PROXY_SIGN_OUT_URL",
 		"XFORM_XRAY_API",
 		"XFORM_XRAY_CONFIG",
 		"XFORM_CONNECTIONS_CONFIG",
@@ -128,6 +129,7 @@ func TestLoadTrustedProxyMode(t *testing.T) {
 	clearEnv(t)
 	t.Setenv("XFORM_AUTH_MODE", "trusted_proxy")
 	t.Setenv("XFORM_TRUSTED_PROXY_SECRET", strings.Repeat("ab", 32))
+	t.Setenv("XFORM_TRUSTED_PROXY_SIGN_OUT_URL", "/oauth2/sign_out?rd=%2F")
 
 	cfg, err := config.Load()
 	if err != nil {
@@ -141,6 +143,43 @@ func TestLoadTrustedProxyMode(t *testing.T) {
 	}
 	if cfg.TrustedProxySecret != strings.Repeat("ab", 32) {
 		t.Error("trusted proxy secret was not loaded")
+	}
+	if cfg.TrustedProxySignOutURL != "/oauth2/sign_out?rd=%2F" {
+		t.Errorf("TrustedProxySignOutURL = %q, want the configured path", cfg.TrustedProxySignOutURL)
+	}
+}
+
+func TestLoadRejectsUnsafeTrustedProxySignOutURL(t *testing.T) {
+	for _, signOutURL := range []string{
+		"https://gateway.example.com/signout",
+		"//gateway.example.com/signout",
+		"oauth2/signout",
+		"/oauth2/signout#fragment",
+		"/oauth2/signout#",
+		"/oauth2\\signout",
+		"/oauth2/signout%zz",
+		"/oauth2/signout?rd=%zz",
+		"/oauth2/signout\n",
+	} {
+		t.Run(signOutURL, func(t *testing.T) {
+			clearEnv(t)
+			t.Setenv("XFORM_AUTH_MODE", "trusted_proxy")
+			t.Setenv("XFORM_TRUSTED_PROXY_SECRET", strings.Repeat("ab", 32))
+			t.Setenv("XFORM_TRUSTED_PROXY_SIGN_OUT_URL", signOutURL)
+			if _, err := config.Load(); err == nil {
+				t.Fatalf("load accepted unsafe sign-out URL %q", signOutURL)
+			}
+		})
+	}
+}
+
+func TestLoadRejectsTrustedProxySignOutURLInPasswordMode(t *testing.T) {
+	clearEnv(t)
+	t.Setenv("XFORM_PASSWORD", "password")
+	t.Setenv("XFORM_TRUSTED_PROXY_SIGN_OUT_URL", "/oauth2/sign_out")
+
+	if _, err := config.Load(); err == nil {
+		t.Fatal("load accepted trusted-proxy sign-out URL in password mode")
 	}
 }
 
