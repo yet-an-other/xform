@@ -179,9 +179,9 @@ These examples rely on Traefik v3.5.3 behavior:
 - `headers.customRequestHeaders` uses an empty value to remove a request
   header. It runs after successful `forwardAuth`; the static secret replaces,
   rather than accepts, a client assertion.
-- `stripPrefix` runs after authentication and preserves the path remainder;
-  rerun the smoke test after any Traefik upgrade because escaped path
-  normalization is security-sensitive.
+- `stripPrefix` runs after authentication but before the final Admission
+  header scrub, and preserves the path remainder; rerun the smoke test after
+  any Traefik upgrade because escaped path normalization is security-sensitive.
 - `passHostHeader` is explicit on both services. The loopback URL is
   intentionally not a Unix or bridge-network address.
 

@@ -265,8 +265,23 @@ run_case() {
         -H 'X-Forwarded-Preferred-Username: spoofed@example.test' \
         -H 'X-Forwarded-Access-Token: spoofed-access-token' \
         -H 'X-Forwarded-Authorization: spoofed-authorization' \
+        -H 'X-Forwarded-Id-Token: spoofed-id-token' \
+        -H 'X-Forwarded-IdToken: spoofed-id-token' \
+        -H 'X-Forwarded-Method: spoofed-method' \
+        -H 'X-Forwarded-Query: spoofed-query' \
+        -H 'X-Forwarded-Prefix: spoofed-prefix' \
+        -H 'X-Forwarded-Protocol: spoofed-protocol' \
+        -H 'X-Forwarded-Scheme: spoofed-scheme' \
         -H 'X-Forwarded-Client-Cert: spoofed-certificate' \
         -H 'X-Forwarded-Port: 443' \
+        -H 'X-Authenticated-Groups: spoofed-group' \
+        -H 'X-Authenticated-Preferred-Username: spoofed@example.test' \
+        -H 'X-Authenticated-Token: spoofed-token' \
+        -H 'X-Authenticated-Access-Token: spoofed-access-token' \
+        -H 'X-Authenticated-Authorization: spoofed-authorization' \
+        -H 'X-Authenticated-Id-Token: spoofed-id-token' \
+        -H 'X-Authenticated-IdToken: spoofed-id-token' \
+        -H 'X-Authenticated-Client-Cert: spoofed-certificate' \
         -H 'X-Auth-Request-User: spoofed@example.test' \
         -H 'X-Auth-Request-Email: spoofed@example.test' \
         -H 'X-Auth-Request-Groups: spoofed-group' \
@@ -275,6 +290,7 @@ run_case() {
         -H 'X-Auth-Request-Access-Token: spoofed-access-token' \
         -H 'X-Auth-Request-Id-Token: spoofed-id-token' \
         -H 'X-Auth-Request-IdToken: spoofed-id-token' \
+        -H 'X-Auth-Request-Client-Cert: spoofed-certificate' \
         -H 'X-Access-Token: spoofed-access-token' \
         -H 'X-ID-Token: spoofed-id-token' \
         -H 'X-Original-Method: spoofed-method' \
@@ -334,6 +350,13 @@ for name in (
     "X-Forwarded-Preferred-Username",
     "X-Forwarded-Access-Token",
     "X-Forwarded-Authorization",
+    "X-Forwarded-Id-Token",
+    "X-Forwarded-IdToken",
+    "X-Forwarded-Method",
+    "X-Forwarded-Query",
+    "X-Forwarded-Prefix",
+    "X-Forwarded-Protocol",
+    "X-Forwarded-Scheme",
     "X-Forwarded-Client-Cert",
     "X-Auth-Request-User",
     "X-Auth-Request-Email",
@@ -344,6 +367,7 @@ for name in (
     "X-Auth-Request-Redirect",
     "X-Auth-Request-Id-Token",
     "X-Auth-Request-IdToken",
+    "X-Auth-Request-Client-Cert",
     "X-Access-Token",
     "X-ID-Token",
     "X-Id-Token",
@@ -355,6 +379,14 @@ for name in (
     "X-Remote-Groups",
     "X-Authenticated-User",
     "X-Authenticated-Email",
+    "X-Authenticated-Groups",
+    "X-Authenticated-Preferred-Username",
+    "X-Authenticated-Token",
+    "X-Authenticated-Access-Token",
+    "X-Authenticated-Authorization",
+    "X-Authenticated-Id-Token",
+    "X-Authenticated-IdToken",
+    "X-Authenticated-Client-Cert",
     "X-User",
     "X-Email",
     "X-Groups",

@@ -40,13 +40,13 @@ http:
       rule: "Path(`/xform/api`) || PathPrefix(`/xform/api/`)"
       entryPoints: [web]
       priority: 100
-      middlewares: [no-store, forward-auth, admission, strip-mount]
+      middlewares: [no-store, forward-auth, strip-mount, admission]
       service: xform
     panel:
       rule: "PathPrefix(`/xform/`)"
       entryPoints: [web]
       priority: 1
-      middlewares: [no-store, document-errors, forward-auth, admission, strip-mount]
+      middlewares: [no-store, document-errors, forward-auth, strip-mount, admission]
       service: xform
 
   middlewares:
@@ -95,6 +95,18 @@ http:
           Authorization: ""
           Proxy-Authorization: ""
           Forwarded: ""
+          X-Forwarded-For: ""
+          X-Forwarded-Host: ""
+          X-Forwarded-Port: ""
+          X-Forwarded-Proto: ""
+          X-Forwarded-Server: ""
+          X-Forwarded-Uri: ""
+          X-Forwarded-Method: ""
+          X-Forwarded-Query: ""
+          X-Forwarded-Prefix: ""
+          X-Forwarded-Protocol: ""
+          X-Forwarded-Scheme: ""
+          X-Forwarded-IdToken: ""
           X-Auth-Request-User: ""
           X-Auth-Request-Email: ""
           X-Auth-Request-Groups: ""
@@ -103,6 +115,7 @@ http:
           X-Auth-Request-Access-Token: ""
           X-Auth-Request-Id-Token: ""
           X-Auth-Request-IdToken: ""
+          X-Auth-Request-Client-Cert: ""
           X-Auth-Request-Redirect: ""
           X-Access-Token: ""
           X-ID-Token: ""
@@ -116,6 +129,13 @@ http:
           X-Authenticated-User: ""
           X-Authenticated-Email: ""
           X-Authenticated-Groups: ""
+          X-Authenticated-Preferred-Username: ""
+          X-Authenticated-Token: ""
+          X-Authenticated-Access-Token: ""
+          X-Authenticated-Authorization: ""
+          X-Authenticated-Id-Token: ""
+          X-Authenticated-IdToken: ""
+          X-Authenticated-Client-Cert: ""
           X-User: ""
           X-Email: ""
           X-Groups: ""

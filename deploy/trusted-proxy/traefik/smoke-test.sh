@@ -283,6 +283,7 @@ PY
         -H 'X-Forwarded-Access-Token: spoofed-access-token' \
         -H 'X-Forwarded-Authorization: spoofed-authorization' \
         -H 'X-Forwarded-Id-Token: spoofed-id-token' \
+        -H 'X-Forwarded-IdToken: spoofed-id-token' \
         -H 'X-Forwarded-Client-Cert: spoofed-certificate' \
         -H 'X-Auth-Request-User: spoofed@example.test' \
         -H 'X-Auth-Request-Email: spoofed@example.test' \
@@ -305,6 +306,13 @@ PY
         -H 'X-Authenticated-User: spoofed@example.test' \
         -H 'X-Authenticated-Email: spoofed@example.test' \
         -H 'X-Authenticated-Groups: spoofed-group' \
+        -H 'X-Authenticated-Preferred-Username: spoofed@example.test' \
+        -H 'X-Authenticated-Token: spoofed-token' \
+        -H 'X-Authenticated-Access-Token: spoofed-access-token' \
+        -H 'X-Authenticated-Authorization: spoofed-authorization' \
+        -H 'X-Authenticated-Id-Token: spoofed-id-token' \
+        -H 'X-Authenticated-IdToken: spoofed-id-token' \
+        -H 'X-Authenticated-Client-Cert: spoofed-certificate' \
         -H 'X-User: spoofed@example.test' \
         -H 'X-Email: spoofed@example.test' \
         -H 'X-Groups: spoofed-group' \
@@ -333,6 +341,9 @@ if headers["X-Xform-Authenticated"] != os.environ["EXPECTED_ASSERTION"]:
     raise SystemExit("Panel did not receive the configured Admission assertion")
 for name in (
     "Cookie", "Authorization", "Proxy-Authorization", "Forwarded",
+    "X-Forwarded-For", "X-Forwarded-Host", "X-Forwarded-Port",
+    "X-Forwarded-Proto", "X-Forwarded-Server", "X-Forwarded-Uri",
+    "X-Forwarded-Method", "X-Forwarded-Query", "X-Forwarded-Prefix",
     "X-Forwarded-User", "X-Forwarded-Email", "X-Forwarded-Groups",
     "X-Forwarded-Preferred-Username", "X-Forwarded-Access-Token",
     "X-Forwarded-Authorization", "X-Forwarded-Id-Token",
