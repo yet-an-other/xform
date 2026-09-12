@@ -55,7 +55,7 @@ mkdir -p "$socket_dir"
 python3 "$fake" --auth-port "$auth_port" --socket "$socket_path" >"$workdir/fake.log" 2>&1 &
 fake_pid=$!
 for _ in $(seq 1 100); do
-    if [ -S "$socket_path" ] && curl -sS --connect-timeout 1 -o /dev/null "http://127.0.0.1:$auth_port/oauth2/auth" 2>/dev/null; then
+    if [ -S "$socket_path" ] && curl -sS --connect-timeout 1 --max-time 1 -o /dev/null "http://127.0.0.1:$auth_port/oauth2/auth" 2>/dev/null; then
         break
     fi
     kill -0 "$fake_pid" 2>/dev/null || {
@@ -99,7 +99,7 @@ docker run --rm --name "$nginx_container" --network host \
 nginx_pid=$!
 base="http://127.0.0.1:$listen_port"
 for _ in $(seq 1 100); do
-    if curl -sS --connect-timeout 1 -o /dev/null "$base/oauth2/start?rd=%2F" 2>/dev/null; then
+    if curl -sS --connect-timeout 1 --max-time 1 -o /dev/null "$base/oauth2/start?rd=%2F" 2>/dev/null; then
         break
     fi
     kill -0 "$nginx_pid" 2>/dev/null || {
@@ -115,7 +115,7 @@ request() {
     shift
     headers="$workdir/$name.headers"
     body="$workdir/$name.body"
-    status=$(curl -sS --path-as-is -D "$headers" -o "$body" -w '%{http_code}' "$@")
+    status=$(curl -sS --path-as-is --max-time 5 -D "$headers" -o "$body" -w '%{http_code}' "$@")
     printf '%s' "$status"
 }
 
