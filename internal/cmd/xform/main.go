@@ -20,6 +20,7 @@ import (
 	"github.com/yet-an-other/xform/internal/geoip"
 	"github.com/yet-an-other/xform/internal/hoststats"
 	"github.com/yet-an-other/xform/internal/journal"
+	"github.com/yet-an-other/xform/internal/listener"
 	"github.com/yet-an-other/xform/internal/logging"
 	"github.com/yet-an-other/xform/internal/profiles"
 	"github.com/yet-an-other/xform/internal/roster"
@@ -110,6 +111,16 @@ func main() {
 		configWatcher.Changes(),
 	).WithPurgeNotifier(usersCollector)
 	rosterService.Start(shutdownSignal)
+	httpListener, err := listener.Listen(cfg.ListenAddress)
+	if err != nil {
+		slog.Error("listen xform", "address", cfg.ListenAddress, "error", err)
+		os.Exit(1)
+	}
+	defer func() {
+		if err := httpListener.Close(); err != nil {
+			slog.Error("close xform listener", "error", err)
+		}
+	}()
 	server := &http.Server{
 		Addr: cfg.ListenAddress,
 		Handler: newHandler(
@@ -151,7 +162,11 @@ func main() {
 		"journal_xray_unit", journalUnit,
 		"authentication_mode", authentication.Mode(),
 	)
-	if err := server.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+	if err := server.Serve(httpListener); err != nil && !errors.Is(err, http.ErrServerClosed) {
+		// Serve can return for a reason other than the signal path. Close the
+		// listener explicitly before os.Exit so a pathname socket is not left
+		// behind merely because defers do not run during process exit.
+		_ = httpListener.Close()
 		slog.Error("serve xform", "error", err)
 		os.Exit(1)
 	}

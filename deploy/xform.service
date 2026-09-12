@@ -31,7 +31,7 @@ StateDirectory=xform
 # here instead. The whitelist lifts only the mount-namespace wall — the
 # xform user still needs DAC write access (setfacl, see README), and both
 # are required for user management to apply.
-ReadWritePaths=/usr/local/etc/xray
+ReadWritePaths=/usr/local/etc/xray /run/xform
 
 # Log snapshots. Both this unit and the configured xray service log into one
 # dedicated journal namespace, and the xform user gets read ACLs on that
@@ -77,6 +77,11 @@ RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
 
 # Same-origin through a reverse proxy or SSH tunnel only; never expose directly.
 Environment=XFORM_LISTEN=127.0.0.1:9090
+# A same-Host gateway may use a protected Unix socket instead. Create the
+# parent first (owned by xform and the gateway group, mode 2750 so the socket
+# inherits the gateway group); xform does not create or chown it, and creates
+# the socket itself as mode 0660.
+# Environment=XFORM_LISTEN=unix:/run/xform/xform.sock
 # Explicit Password authentication is the current supported mode.
 Environment=XFORM_AUTH_MODE=password
 # REQUIRED: the panel refuses to start without a login password.

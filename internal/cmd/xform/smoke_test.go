@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"syscall"
 	"testing"
 	"time"
 
@@ -113,4 +114,92 @@ func TestPanelBootsAndListens(t *testing.T) {
 		time.Sleep(50 * time.Millisecond)
 	}
 	t.Fatalf("the panel never listened on %s; boot log:\n%s", address, boot.String())
+}
+
+func TestPanelBootsAndCleansUpUnixSocket(t *testing.T) {
+	if testing.Short() {
+		t.Skip("boots the real binary")
+	}
+	probe, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	if _, err := (xraystatus.SystemdUnit{}).CanonicalID(probe, "xray.service"); err != nil {
+		t.Skipf("no systemd here; the boot would stop at the journal gate: %v", err)
+	}
+
+	binary := filepath.Join(t.TempDir(), "xform")
+	build := exec.Command("go", "build", "-o", binary, ".")
+	if out, err := build.CombinedOutput(); err != nil {
+		t.Fatalf("build the panel: %v\n%s", err, out)
+	}
+
+	dir := t.TempDir()
+	socketPath := filepath.Join(dir, "xform.sock")
+	fakeJournalctl := filepath.Join(dir, "journalctl")
+	if err := os.WriteFile(fakeJournalctl, []byte("#!/bin/sh\n"), 0o755); err != nil {
+		t.Fatalf("write fake journalctl: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "config.json"), []byte(`{"inbounds":[]}`), 0o600); err != nil {
+		t.Fatalf("write config fixture: %v", err)
+	}
+
+	panel := exec.Command(binary)
+	panel.Env = append(os.Environ(),
+		"XFORM_PASSWORD=smoke",
+		"XFORM_DB="+filepath.Join(dir, "xform.db"),
+		"XFORM_LISTEN=unix:"+socketPath,
+		"XFORM_XRAY_API=127.0.0.1:1", // nothing there: degraded, never fatal
+		"XFORM_XRAY_CONFIG="+filepath.Join(dir, "config.json"),
+		"XFORM_JOURNALCTL="+fakeJournalctl,
+	)
+	var boot syncBuffer
+	panel.Stdout = &boot
+	panel.Stderr = &boot
+	if err := panel.Start(); err != nil {
+		t.Fatalf("start the panel: %v", err)
+	}
+	t.Cleanup(func() {
+		_ = panel.Process.Kill()
+		_, _ = panel.Process.Wait()
+	})
+
+	client := &http.Client{Transport: &http.Transport{DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
+		return (&net.Dialer{}).DialContext(ctx, "unix", socketPath)
+	}}}
+	defer client.CloseIdleConnections()
+	deadline := time.Now().Add(10 * time.Second)
+	ready := false
+	for time.Now().Before(deadline) {
+		response, err := client.Get("http://xform.test/api/v1/healthz")
+		if err == nil {
+			_ = response.Body.Close()
+			if response.StatusCode == http.StatusOK {
+				ready = true
+				break
+			}
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	if !ready {
+		t.Fatalf("the panel did not answer healthz over %s; boot log:\n%s", socketPath, boot.String())
+	}
+	if _, err := os.Lstat(socketPath); err != nil {
+		t.Fatalf("panel never created %s: %v\nboot log:\n%s", socketPath, err, boot.String())
+	}
+
+	if err := panel.Process.Signal(syscall.SIGTERM); err != nil {
+		t.Fatalf("signal the panel: %v", err)
+	}
+	wait := make(chan error, 1)
+	go func() { wait <- panel.Wait() }()
+	select {
+	case err := <-wait:
+		if err != nil {
+			t.Fatalf("panel shutdown: %v\nboot log:\n%s", err, boot.String())
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("panel did not shut down after SIGTERM")
+	}
+	if _, err := os.Lstat(socketPath); !os.IsNotExist(err) {
+		t.Fatalf("socket after graceful shutdown error = %v, want it removed", err)
+	}
 }

@@ -13,6 +13,7 @@ internal/xraystatus/  xray service status collector (unit state, version, runtim
 internal/xraygrpc/    xray gRPC StatsService client
 internal/reconcile/   raw-counter reconciliation (durable totals + speed estimates)
 internal/config/      XFORM_* environment configuration
+internal/listener/    TCP and protected Unix HTTP listener lifecycle
 internal/cmd/xform/   the binary: wiring, embedded dashboard, committed dist/
 web/                  pure TypeScript: React 19 + Vite + Tailwind v4 + shadcn/ui
 deploy/               nginx reference configs, systemd units, and the updater script
@@ -38,7 +39,7 @@ All runtime settings are environment variables (defaults from SPEC.md §7):
 
 | Variable | Default | Purpose |
 | --- | --- | --- |
-| `XFORM_LISTEN` | `127.0.0.1:9090` | Panel listen address |
+| `XFORM_LISTEN` | `127.0.0.1:9090` | Panel listen address; also `unix:/absolute/path` |
 | `XFORM_AUTH_MODE` | `password` | Authentication mode; Password is currently supported |
 | `XFORM_PASSWORD` | none — **required** | Password authentication secret (constant-time compare) |
 | `XFORM_XRAY_API` | `127.0.0.1:8080` | xray gRPC StatsService address |
@@ -53,6 +54,18 @@ absolute and resolve to a regular file this user can execute, and the xray unit
 must resolve through systemd to one canonical `.service` identity — shorthand,
 globs, and templates without an instance are rejected. A journalctl that later
 disappears costs the panel its log snapshots only; monitoring keeps running.
+
+`XFORM_LISTEN=unix:/run/xform/xform.sock` selects a protected pathname Unix
+listener. The parent directory must already exist and be protected for the
+Panel and its same-Host gateway; xform does not create or chown it. xform
+creates the socket with mode `0660`, rejects symlinks, regular files, foreign
+owners, and live sockets, and removes only the socket it created during a
+graceful shutdown. A stale socket owned by the Panel user may be replaced.
+For example, before starting the service, create `/run/xform` with the Panel
+user as owner, the gateway's group as group, and mode `2750` so the socket
+inherits the gateway group while only the Panel can replace it. Then set
+`XFORM_LISTEN` to the socket path. TCP addresses keep the existing `net.Listen`
+behavior.
 
 ## Deployment shapes
 
