@@ -95,6 +95,7 @@ Two same-origin shapes are supported (see [ADR-0001](docs/adr/0001-two-same-orig
 - **Trusted proxy, nginx** — nginx can own the public Authentication gateway for embedded or proxy-hosted static Dashboards at root or under `/xform/`, proxying admitted API requests to xform's protected Unix socket. Reference configs, setup, and the deterministic four-shape smoke matrix: [`deploy/trusted-proxy/nginx/`](deploy/trusted-proxy/nginx/).
 - **Trusted proxy, Caddy** — Caddy v2 provides the same four-shape gateway matrix with oauth2-proxy, protected Unix-socket proxying, and static SPA serving: [`deploy/trusted-proxy/caddy/`](deploy/trusted-proxy/caddy/).
 - **Trusted proxy, Traefik** — Traefik v3 provides embedded root and `/xform/` gateway examples with oauth2-proxy and a loopback TCP xform hop: [`deploy/trusted-proxy/traefik/`](deploy/trusted-proxy/traefik/). Traefik has no supported Unix HTTP upstream or local static-file server; proxy-hosted static Dashboards require a separate static-file service on the same public origin.
+- **Trusted proxy identity provider** — the maintained ZITADEL + oauth2-proxy root/subpath configuration, exact-email allowlist, hardened systemd unit, config test, and real-tenant checklist live in [`deploy/trusted-proxy/oauth2-proxy/`](deploy/trusted-proxy/oauth2-proxy/).
 
 The API emits no CORS headers; the dashboard is always served same-origin.
 

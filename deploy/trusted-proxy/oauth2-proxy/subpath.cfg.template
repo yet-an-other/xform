@@ -1,0 +1,64 @@
+# xform Trusted proxy authentication — oauth2-proxy /xform/ mount
+#
+# Render with render-config.sh. The renderer replaces only the public origin,
+# ZITADEL issuer, and client ID. Secrets stay in the files named below.
+# Tested with oauth2-proxy v7.15.4; config-test.sh uses the pinned image.
+#
+# This process is an authentication check, not xform's application proxy.
+# Keep its upstream as static://404. nginx or Caddy performs the admitted
+# request to xform and strips /xform only on that private hop. Traefik uses
+# the same public path and its loopback xform service.
+
+http_address = "127.0.0.1:4180"
+reverse_proxy = true
+# Only the same-Host gateway may supply forwarded request context.
+trusted_proxy_ips = ["127.0.0.1/32", "::1/128"]
+
+provider = "oidc"
+provider_display_name = "ZITADEL"
+oidc_issuer_url = "__ZITADEL_ISSUER_URL__"
+skip_oidc_discovery = false
+insecure_oidc_skip_issuer_verification = false
+insecure_oidc_allow_unverified_email = false
+insecure_oidc_skip_nonce = false
+oidc_email_claim = "email"
+user_id_claim = "email"
+scope = "openid email"
+code_challenge_method = "S256"
+client_id = "__ZITADEL_CLIENT_ID__"
+client_secret_file = "/etc/oauth2-proxy/xform/zitadel-client-secret"
+authenticated_emails_file = "/etc/oauth2-proxy/xform/authenticated-emails.txt"
+
+proxy_prefix = "/xform/oauth2"
+# Set xform's optional local Panel sign-out to /xform/oauth2/sign_out.
+redirect_url = "__XFORM_REDIRECT_URL__"
+upstreams = ["static://404"]
+skip_provider_button = true
+skip_jwt_bearer_tokens = false
+
+cookie_name = "__Secure-xform_oauth2"
+cookie_secret_file = "/etc/oauth2-proxy/xform/cookie-secret"
+cookie_path = "/xform/"
+cookie_secure = true
+cookie_httponly = true
+cookie_samesite = "lax"
+cookie_expire = "24h"
+cookie_refresh = "0s"
+session_cookie_minimal = true
+
+# oauth2-proxy must not send credentials or identity to any upstream. The
+# final gateway also scrubs these headers before the xform hop.
+pass_access_token = false
+pass_authorization_header = false
+pass_basic_auth = false
+pass_user_headers = false
+set_xauthrequest = false
+set_authorization_header = false
+set_basic_auth = false
+# Do not preserve a client value if a future header injector is enabled.
+skip_auth_strip_headers = false
+
+standard_logging = true
+auth_logging = true
+request_logging = false
+show_debug_on_error = false

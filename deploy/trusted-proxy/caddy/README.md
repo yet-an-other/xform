@@ -55,17 +55,18 @@ config files, or symlinks to private files below it. Caddy's `file_server`
 prevents path traversal outside its root, but Caddy v2.10.2 does not make
 symlinks a separate sandbox boundary.
 
-Generate independent values for the Admission assertion, the oauth2-proxy
-cookie secret, and the OIDC client secret. Never put any of them in this
-repository or logs:
+Create the shared Admission secret and xform systemd handoff described in
+`../oauth2-proxy/README.md`. Do not generate another value in this gateway
+setup. Before rendering Caddy, load that same file without printing it:
 
 ```sh
-export XFORM_TRUSTED_PROXY_SECRET="$(openssl rand -hex 32)"
-export OAUTH2_PROXY_COOKIE_SECRET="$(openssl rand -base64 32)"
+set -a
+. /etc/xform/trusted-proxy.env
+set +a
 ```
 
-The OIDC client secret belongs only in the identity-provider/oauth2-proxy
-secret store. It is not the xform Admission assertion.
+The OIDC client and oauth2-proxy cookie secrets are separate values owned by
+the oauth2-proxy setup. Keep all secrets out of this repository and logs.
 
 ## oauth2-proxy mount settings
 

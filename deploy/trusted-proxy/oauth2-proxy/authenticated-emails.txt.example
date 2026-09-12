@@ -1,0 +1,4 @@
+# One exact, verified ZITADEL email address per line.
+# Replace this reserved deny-by-default fixture before deployment. Do not use
+# a domain, '*', a role, or an unverified address here.
+operator@example.invalid

@@ -1,0 +1,38 @@
+[Unit]
+Description=oauth2-proxy for xform Trusted proxy authentication
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=oauth2-proxy
+Group=oauth2-proxy
+ExecStart=/usr/local/bin/oauth2-proxy --config=/etc/oauth2-proxy/xform/active.cfg
+Restart=on-failure
+RestartSec=5
+
+# oauth2-proxy only needs to read its rendered config, three secret/input
+# files, and contact ZITADEL over HTTPS. It never proxies the xform app.
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictNamespaces=true
+LockPersonality=true
+RestrictRealtime=true
+RestrictSUIDSGID=true
+MemoryDenyWriteExecute=true
+CapabilityBoundingSet=
+SystemCallFilter=@system-service
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+ReadOnlyPaths=/etc/oauth2-proxy/xform
+
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

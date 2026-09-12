@@ -50,18 +50,20 @@ install -d -o root -g xform-gateway -m 2750 /var/www/xform/dist
 # copy the contents of web/dist into /var/www/xform/dist
 ```
 
-Generate independent secrets; never copy a cookie or OIDC client secret into
-the Admission slot:
+Create the shared Admission secret and xform systemd handoff described in
+`../oauth2-proxy/README.md`. Do not generate another value in this gateway
+setup. Before rendering nginx, load that same file without printing it:
 
 ```sh
-export XFORM_TRUSTED_PROXY_SECRET="$(openssl rand -hex 32)"
-export OAUTH2_PROXY_COOKIE_SECRET="$(openssl rand -base64 32)"
+set -a
+. /etc/xform/trusted-proxy.env
+set +a
 ```
 
-The OIDC client secret is a third value, owned by the identity provider
-configuration. Keep all three in a root-readable secret store, not in this
-repository or command output. oauth2-proxy is not configured by these nginx
-files; its listener is expected at `127.0.0.1:4180`.
+The OIDC client and oauth2-proxy cookie secrets are separate values owned by
+the oauth2-proxy setup. Keep all secrets out of this repository and command
+output. oauth2-proxy is not configured by these nginx files; its listener is
+expected at `127.0.0.1:4180`.
 
 ## oauth2-proxy mount settings
 

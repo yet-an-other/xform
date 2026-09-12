@@ -44,3 +44,8 @@ jobs:
         env:
           TRAEFIK_IMAGE: traefik:v3.5.3@sha256:d6be8725d21b45bdd84b93ea01438256e0e3c94aa8fa51834fe87f37cd5d4af8
         run: deploy/trusted-proxy/traefik/smoke-test.sh
+
+      - name: Validate pinned oauth2-proxy Trusted proxy configurations
+        env:
+          OAUTH2_PROXY_IMAGE: quay.io/oauth2-proxy/oauth2-proxy:v7.15.4@sha256:b1b2021fe8f4004573e8d690dec6c7bb29cc44364572cf8510a05bf3a0ae2ded
+        run: deploy/trusted-proxy/oauth2-proxy/config-test.sh

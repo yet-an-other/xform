@@ -52,18 +52,20 @@ XFORM_TRUSTED_PROXY_SECRET=<generated 64-hex Admission secret>
 XFORM_TRUSTED_PROXY_SIGN_OUT_URL=/oauth2/sign_out
 ```
 
-Leave `XFORM_PASSWORD` unset. Generate independent values for the Admission
-assertion, oauth2-proxy cookie secret, and OIDC client secret. Never put any
-of them in this repository or logs:
+Leave `XFORM_PASSWORD` unset. Create the shared Admission secret and xform
+systemd handoff described in `../oauth2-proxy/README.md`. Do not generate
+another value in this gateway setup. Before rendering Traefik, load that same
+file without printing it:
 
 ```sh
-export XFORM_TRUSTED_PROXY_SECRET="$(openssl rand -hex 32)"
-export OAUTH2_PROXY_COOKIE_SECRET="$(openssl rand -base64 32)"
+set -a
+. /etc/xform/trusted-proxy.env
+set +a
 ```
 
-The OIDC client secret belongs only in the identity-provider/oauth2-proxy
-secret store. It is not the xform Admission assertion. For a subpath mount,
-set `XFORM_TRUSTED_PROXY_SIGN_OUT_URL=/xform/oauth2/sign_out`.
+The OIDC client and oauth2-proxy cookie secrets are separate values owned by
+the oauth2-proxy setup. Keep all secrets out of this repository and logs. For
+a subpath mount, set `XFORM_TRUSTED_PROXY_SIGN_OUT_URL=/xform/oauth2/sign_out`.
 
 ## oauth2-proxy mount settings
 
