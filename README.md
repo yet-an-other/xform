@@ -92,6 +92,7 @@ Two same-origin shapes are supported (see [ADR-0001](docs/adr/0001-two-same-orig
 - **Embedded (default)** — the binary above serves the dashboard itself; nothing else to install.
 - **Embedded, fronted by a proxy** — nginx terminates TLS and proxies everything to the binary, which still serves the embedded dashboard. Reference config: [`deploy/nginx-all-proxy.conf.example`](deploy/nginx-all-proxy.conf.example).
 - **Proxy-hosted** — nginx serves the built dashboard and proxies `/api/*` to the binary on loopback. Reference config: [`deploy/nginx.conf.example`](deploy/nginx.conf.example); systemd unit: [`deploy/xform.service`](deploy/xform.service).
+- **Trusted proxy, embedded root** — nginx can own the public Authentication gateway and proxy admitted requests to xform's protected Unix socket. Reference config, setup, and deterministic smoke test: [`deploy/trusted-proxy/nginx/`](deploy/trusted-proxy/nginx/).
 
 The API emits no CORS headers; the dashboard is always served same-origin.
 

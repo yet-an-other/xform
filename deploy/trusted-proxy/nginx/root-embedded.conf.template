@@ -1,0 +1,163 @@
+# xform Trusted proxy gateway — embedded Dashboard, root mount
+#
+# Render the four deployment values before loading this file. Do not
+# run envsubst without naming those values: it would replace nginx's own
+# $variables. The Admission secret is deliberately absent from this repository.
+#
+# Required host setup:
+#   - xform listens on ${XFORM_SOCKET} in trusted_proxy mode.
+#   - the nginx worker account can traverse the socket directory and read/write
+#     the 0660 socket through the shared gateway group.
+#   - oauth2-proxy listens on ${OAUTH2_PROXY_UPSTREAM} and serves /oauth2/*.
+#   - XFORM_TRUSTED_PROXY_SECRET in xform equals the rendered secret below.
+#
+# For a production TLS listener, set NGINX_LISTEN to "443 ssl" and configure
+# the certificate directives for the public host. The smoke harness renders a
+# plain loopback listener instead.
+
+user nginx;
+worker_processes 1;
+pid /run/nginx.pid;
+error_log /dev/stderr warn;
+
+events {
+    worker_connections 1024;
+}
+
+http {
+    include       /etc/nginx/mime.types;
+    default_type  application/octet-stream;
+    access_log    /dev/stdout;
+    sendfile      on;
+
+    upstream xform_panel {
+        server unix:${XFORM_SOCKET};
+    }
+
+    upstream oauth2_proxy {
+        server ${OAUTH2_PROXY_UPSTREAM};
+    }
+
+    server {
+        listen ${NGINX_LISTEN};
+        server_name _;
+
+        # Uncomment and adapt these in a TLS-enabled public vhost.
+        # ssl_certificate     /etc/letsencrypt/live/panel.example.net/fullchain.pem;
+        # ssl_certificate_key /etc/letsencrypt/live/panel.example.net/privkey.pem;
+
+        # The internal auth subrequest preserves the browser cookie for
+        # oauth2-proxy, but never uses client-supplied auth headers as trust.
+        location = /oauth2/auth {
+            internal;
+            proxy_pass http://oauth2_proxy;
+            proxy_pass_request_body off;
+            proxy_set_header Content-Length "";
+            proxy_set_header Host $http_host;
+            proxy_set_header X-Original-URI $request_uri;
+            proxy_set_header X-Original-Method $request_method;
+            proxy_set_header X-Forwarded-For $remote_addr;
+            proxy_set_header X-Forwarded-Host $http_host;
+            proxy_set_header X-Forwarded-Proto $scheme;
+            proxy_set_header X-Real-IP $remote_addr;
+            proxy_set_header X-Xform-Authenticated "";
+            proxy_set_header Authorization "";
+            proxy_set_header Proxy-Authorization "";
+        }
+
+        # oauth2-proxy owns sign-in, callback, and local Panel sign-out. These
+        # endpoints are reachable without forward authentication.
+        location = /oauth2 {
+            return 308 /oauth2/;
+        }
+        location ^~ /oauth2/ {
+            proxy_pass http://oauth2_proxy;
+            proxy_set_header Host $http_host;
+            proxy_set_header X-Forwarded-For $remote_addr;
+            proxy_set_header X-Forwarded-Host $http_host;
+            proxy_set_header X-Forwarded-Proto $scheme;
+            proxy_set_header X-Real-IP $remote_addr;
+        }
+
+        # Every API request remains an API-shaped 401 on failed authentication.
+        # It must not follow the document sign-in redirect into HTML.
+        location = /api {
+            auth_request /oauth2/auth;
+            error_page 401 = @api_unauthorized;
+            proxy_pass http://xform_panel$request_uri;
+        }
+        location ^~ /api/ {
+            auth_request /oauth2/auth;
+            error_page 401 = @api_unauthorized;
+            proxy_pass http://xform_panel$request_uri;
+        }
+        location @api_unauthorized {
+            default_type application/json;
+            add_header Cache-Control "no-store" always;
+            return 401 '{"error":"unauthenticated"}';
+        }
+
+        # Documents, the embedded Dashboard, and its assets use the same auth
+        # check. A 401 is the only response redirected to the public sign-in
+        # endpoint; upstream failures remain fail-closed errors.
+        location / {
+            auth_request /oauth2/auth;
+            error_page 401 = @oauth2_sign_in;
+            proxy_pass http://xform_panel$request_uri;
+        }
+        location @oauth2_sign_in {
+            return 302 /oauth2/start?rd=$request_uri;
+        }
+
+        # Every protected proxy hop overwrites the complete set of headers that
+        # could carry a client assertion, identity, token, or authorization.
+        # The value is injected only because auth_request succeeded: auth_request
+        # returns before proxy_pass runs on denial or an upstream error.
+        proxy_set_header Host $http_host;
+        proxy_set_header Connection "";
+        proxy_set_header X-Xform-Authenticated ${XFORM_TRUSTED_PROXY_SECRET};
+        proxy_set_header Authorization "";
+        proxy_set_header Proxy-Authorization "";
+        proxy_set_header Cookie "";
+        proxy_set_header Forwarded "";
+        proxy_set_header X-Forwarded-For "";
+        proxy_set_header X-Forwarded-Host "";
+        proxy_set_header X-Forwarded-Port "";
+        proxy_set_header X-Forwarded-Proto "";
+        proxy_set_header X-Forwarded-User "";
+        proxy_set_header X-Forwarded-Email "";
+        proxy_set_header X-Forwarded-Groups "";
+        proxy_set_header X-Forwarded-Preferred-Username "";
+        proxy_set_header X-Forwarded-Access-Token "";
+        proxy_set_header X-Forwarded-Authorization "";
+        proxy_set_header X-Forwarded-Client-Cert "";
+        proxy_set_header X-Auth-Request-User "";
+        proxy_set_header X-Auth-Request-Email "";
+        proxy_set_header X-Auth-Request-Groups "";
+        proxy_set_header X-Auth-Request-Preferred-Username "";
+        proxy_set_header X-Auth-Request-Token "";
+        proxy_set_header X-Auth-Request-Access-Token "";
+        proxy_set_header X-Auth-Request-Id-Token "";
+        proxy_set_header X-Auth-Request-IdToken "";
+        proxy_set_header X-Access-Token "";
+        proxy_set_header X-ID-Token "";
+        proxy_set_header X-Id-Token "";
+        proxy_set_header Remote-User "";
+        proxy_set_header Remote-Email "";
+        proxy_set_header Remote-Groups "";
+        proxy_set_header X-Remote-User "";
+        proxy_set_header X-Remote-Email "";
+        proxy_set_header X-Remote-Groups "";
+        proxy_set_header X-Authenticated-User "";
+        proxy_set_header X-Authenticated-Email "";
+        proxy_set_header X-User "";
+        proxy_set_header X-Email "";
+        proxy_set_header X-Groups "";
+        proxy_set_header X-Group "";
+        proxy_set_header X-Real-IP "";
+        proxy_set_header X-Original-URL "";
+        proxy_set_header X-Original-URI "";
+        proxy_set_header X-SSL-Client-Cert "";
+        proxy_set_header X-Client-Cert "";
+    }
+}

@@ -29,3 +29,8 @@ jobs:
       - name: Frontend test and typecheck
         working-directory: web
         run: npm ci && npm test && npm run typecheck
+
+      - name: Validate and smoke-test nginx Trusted proxy gateway
+        env:
+          NGINX_IMAGE: nginx:1.29.1-alpine@sha256:42a516af16b852e33b7682d5ef8acbd5d13fe08fecadc7ed98605ba5e3b26ab8
+        run: deploy/trusted-proxy/nginx/smoke-test.sh
