@@ -1,0 +1,190 @@
+# xform Trusted proxy gateway — static Dashboard, root mount
+#
+# Render the markers before loading this file. Do not run a generic
+# envsubst: Caddy placeholders such as {http.request.uri} are intentional.
+#
+# Markers:
+#   __CADDY_LISTEN__                  e.g. http://:443 or https://panel.example.net
+#   __OAUTH2_PROXY_UPSTREAM__         e.g. 127.0.0.1:4180
+#   __XFORM_UPSTREAM__                unix//run/xform/xform.sock
+#   __XFORM_TRUSTED_PROXY_SECRET__    generated 64-hex Admission assertion
+#   __STATIC_ROOT__                   e.g. /var/www/xform/dist
+#
+# oauth2-proxy must use the root /oauth2/ proxy prefix. The static root must
+# contain only the built Dashboard; keep it a dedicated directory without
+# symlinks to secrets.
+
+__CADDY_LISTEN__ {
+	root * __STATIC_ROOT__
+
+	route {
+		# This path is private to forward_auth. A browser must not call the
+		# oauth2-proxy auth check directly.
+		@oauth2_auth path /oauth2/auth
+		handle @oauth2_auth {
+			respond "not found" 404
+		}
+
+		# Keep the oauth2-proxy mount public. A bare mount gets its slash before
+		# oauth2-proxy sees it, and the original query is retained.
+		@oauth2_bare path /oauth2
+		handle @oauth2_bare {
+			route {
+				header >Cache-Control "no-store"
+				redir @oauth2_bare /oauth2/{http.request.uri.prefixed_query} 308
+			}
+		}
+		@oauth2_path path /oauth2/*
+		handle @oauth2_path {
+			route {
+				header >Cache-Control "no-store"
+				reverse_proxy __OAUTH2_PROXY_UPSTREAM__ {
+					header_up Host {http.request.hostport}
+					header_up X-Original-URL "{http.request.scheme}://{http.request.hostport}{http.request.uri}"
+					header_up X-Original-URI {http.request.uri}
+					header_up X-Original-Method {http.request.method}
+					header_up X-Auth-Request-Redirect {http.request.uri}
+					header_up X-Forwarded-Uri {http.request.uri}
+					header_up -X-Xform-Authenticated
+					header_up -Authorization
+					header_up -Proxy-Authorization
+				}
+			}
+		}
+
+		# API failures stay API-shaped. Only a genuine 401 becomes the
+		# unauthenticated response; a gateway failure fails closed as 502.
+		@api path /api /api/*
+		handle @api {
+			route {
+				forward_auth __OAUTH2_PROXY_UPSTREAM__ {
+					uri /oauth2/auth
+					header_up Host {http.request.hostport}
+					header_up X-Original-URL "{http.request.scheme}://{http.request.hostport}{http.request.uri}"
+					header_up X-Original-URI {http.request.uri}
+					header_up X-Original-Method {http.request.method}
+					header_up X-Auth-Request-Redirect {http.request.uri}
+					header_up X-Forwarded-Uri {http.request.uri}
+					header_up -X-Xform-Authenticated
+					header_up -Authorization
+					header_up -Proxy-Authorization
+					@api_unauthorized status 401
+					@api_auth_error status 3xx 4xx 5xx
+					handle_response @api_unauthorized {
+						header >Cache-Control "no-store"
+						respond `{"error":"unauthenticated"}` 401
+					}
+					handle_response @api_auth_error {
+						header >Cache-Control "no-store"
+						respond "authentication gateway unavailable" 502
+					}
+				}
+				reverse_proxy __XFORM_UPSTREAM__ {
+					header_up Host {http.request.hostport}
+					header_up X-Xform-Authenticated __XFORM_TRUSTED_PROXY_SECRET__
+					header_up -Cookie
+					header_up -Authorization
+					header_up -Proxy-Authorization
+					header_up -Forwarded
+					header_up -X-Forwarded-*
+					header_up -X-Auth-Request-*
+					header_up -X-Access-Token
+					header_up -X-ID-Token
+					header_up -X-Id-Token
+					header_up -Remote-*
+					header_up -X-Remote-*
+					header_up -X-Authenticated-*
+					header_up -X-User
+					header_up -X-Email
+					header_up -X-Groups
+					header_up -X-Group
+					header_up -X-Original-*
+					header_up -X-SSL-Client-Cert
+					header_up -X-Client-Cert
+					header_up -X-Real-IP
+				}
+			}
+		}
+
+		# Assets are authenticated before lookup. A missing asset is a real
+		# 404; it must not become the SPA shell.
+		@assets path /assets/*
+		handle @assets {
+			route {
+				forward_auth __OAUTH2_PROXY_UPSTREAM__ {
+					uri /oauth2/auth
+					header_up Host {http.request.hostport}
+					header_up X-Original-URL "{http.request.scheme}://{http.request.hostport}{http.request.uri}"
+					header_up X-Original-URI {http.request.uri}
+					header_up X-Original-Method {http.request.method}
+					header_up X-Auth-Request-Redirect {http.request.uri}
+					header_up X-Forwarded-Uri {http.request.uri}
+					header_up -X-Xform-Authenticated
+					header_up -Authorization
+					header_up -Proxy-Authorization
+					@asset_unauthorized status 401
+					@asset_auth_error status 3xx 4xx 5xx
+					handle_response @asset_unauthorized {
+						header >Cache-Control "no-store"
+						reverse_proxy __OAUTH2_PROXY_UPSTREAM__ {
+							method GET
+							rewrite /oauth2/start?
+							header_up Host {http.request.hostport}
+							header_up Cookie {http.request.header.Cookie}
+							header_up X-Auth-Request-Redirect {http.request.uri}
+							header_up -Authorization
+							header_up -Proxy-Authorization
+						}
+					}
+					handle_response @asset_auth_error {
+						header >Cache-Control "no-store"
+						respond "authentication gateway unavailable" 502
+					}
+				}
+				header >Cache-Control "public, max-age=31536000, immutable"
+				try_files {path} =404
+				file_server
+			}
+		}
+
+		# Documents use an authenticated SPA fallback. The file server's root is
+		# the only build root and no directory browsing is enabled.
+		handle {
+			route {
+				forward_auth __OAUTH2_PROXY_UPSTREAM__ {
+					uri /oauth2/auth
+					header_up Host {http.request.hostport}
+					header_up X-Original-URL "{http.request.scheme}://{http.request.hostport}{http.request.uri}"
+					header_up X-Original-URI {http.request.uri}
+					header_up X-Original-Method {http.request.method}
+					header_up X-Auth-Request-Redirect {http.request.uri}
+					header_up X-Forwarded-Uri {http.request.uri}
+					header_up -X-Xform-Authenticated
+					header_up -Authorization
+					header_up -Proxy-Authorization
+					@document_unauthorized status 401
+					@document_auth_error status 3xx 4xx 5xx
+					handle_response @document_unauthorized {
+						header >Cache-Control "no-store"
+						reverse_proxy __OAUTH2_PROXY_UPSTREAM__ {
+							method GET
+							rewrite /oauth2/start?
+							header_up Host {http.request.hostport}
+							header_up Cookie {http.request.header.Cookie}
+							header_up X-Auth-Request-Redirect {http.request.uri}
+							header_up -Authorization
+							header_up -Proxy-Authorization
+						}
+					}
+					handle_response @document_auth_error {
+						header >Cache-Control "no-store"
+						respond "authentication gateway unavailable" 502
+					}
+				}
+				header >Cache-Control "no-cache"
+				try_files {path} {path}/ /index.html
+				file_server
+			}
+		}
+	}
+}

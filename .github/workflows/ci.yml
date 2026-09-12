@@ -34,3 +34,8 @@ jobs:
         env:
           NGINX_IMAGE: nginx:1.29.1-alpine@sha256:42a516af16b852e33b7682d5ef8acbd5d13fe08fecadc7ed98605ba5e3b26ab8
         run: deploy/trusted-proxy/nginx/smoke-test.sh
+
+      - name: Validate and smoke-test Caddy Trusted proxy gateway matrix
+        env:
+          CADDY_IMAGE: caddy:2.10.2-alpine@sha256:55cc489b0b057671f28154c12e6efd8dc866439d973c017a384b80e6966859ea
+        run: deploy/trusted-proxy/caddy/smoke-test.sh

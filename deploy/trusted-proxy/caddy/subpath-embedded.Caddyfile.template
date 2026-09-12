@@ -1,0 +1,163 @@
+# xform Trusted proxy gateway — embedded Dashboard, /xform/ mount
+#
+# Render the markers before loading this file. Do not run a generic
+# envsubst: Caddy placeholders such as {http.request.uri} are intentional.
+#
+# Markers:
+#   __CADDY_LISTEN__                  e.g. http://:443 or https://panel.example.net
+#   __OAUTH2_PROXY_UPSTREAM__         e.g. 127.0.0.1:4180
+#   __XFORM_UPSTREAM__                unix//run/xform/xform.sock
+#   __XFORM_TRUSTED_PROXY_SECRET__    generated 64-hex Admission assertion
+#
+# oauth2-proxy must use the /xform/oauth2/ proxy prefix and the xform socket
+# must be protected by the shared gateway group.
+
+__CADDY_LISTEN__ {
+	route {
+		@oauth2_auth path /xform/oauth2/auth
+		handle @oauth2_auth {
+			respond "not found" 404
+		}
+		@oauth2_bare path /xform/oauth2
+		handle @oauth2_bare {
+			route {
+				header >Cache-Control "no-store"
+				redir @oauth2_bare /xform/oauth2/{http.request.uri.prefixed_query} 308
+			}
+		}
+		@oauth2_path path /xform/oauth2/*
+		handle @oauth2_path {
+			route {
+				header >Cache-Control "no-store"
+				reverse_proxy __OAUTH2_PROXY_UPSTREAM__ {
+					header_up Host {http.request.hostport}
+					header_up X-Auth-Request-Redirect {http.request.uri}
+					header_up -X-Xform-Authenticated
+					header_up -Authorization
+					header_up -Proxy-Authorization
+				}
+			}
+		}
+		@mount_bare path /xform
+		handle @mount_bare {
+			route {
+				redir @mount_bare /xform/{http.request.uri.prefixed_query} 308
+			}
+		}
+		@api path /xform/api /xform/api/*
+		handle @api {
+			route {
+				forward_auth __OAUTH2_PROXY_UPSTREAM__ {
+					uri /xform/oauth2/auth
+					header_up Host {http.request.hostport}
+					header_up X-Original-URL "{http.request.scheme}://{http.request.hostport}{http.request.uri}"
+					header_up X-Original-URI {http.request.uri}
+					header_up X-Original-Method {http.request.method}
+					header_up X-Auth-Request-Redirect {http.request.uri}
+					header_up X-Forwarded-Uri {http.request.uri}
+					header_up -X-Xform-Authenticated
+					header_up -Authorization
+					header_up -Proxy-Authorization
+					@api_unauth status 401
+					@api_auth_error status 3xx 4xx 5xx
+					handle_response @api_unauth {
+						header >Cache-Control "no-store"
+						respond `{"error":"unauthenticated"}` 401
+					}
+					handle_response @api_auth_error {
+						header >Cache-Control "no-store"
+						respond "authentication gateway unavailable" 502
+					}
+				}
+				uri path_regexp ^/xform(.*)$ $1
+				reverse_proxy __XFORM_UPSTREAM__ {
+					header_up Host {http.request.hostport}
+					header_up X-Xform-Authenticated __XFORM_TRUSTED_PROXY_SECRET__
+					header_up -Cookie
+					header_up -Authorization
+					header_up -Proxy-Authorization
+					header_up -X-Forwarded-*
+					header_up -Forwarded
+					header_up -X-Auth-Request-*
+					header_up -X-Access-Token
+					header_up -X-ID-Token
+					header_up -X-Id-Token
+					header_up -Remote-*
+					header_up -X-Remote-*
+					header_up -X-Authenticated-*
+					header_up -X-User
+					header_up -X-Email
+					header_up -X-Groups
+					header_up -X-Group
+					header_up -X-Original-*
+					header_up -X-SSL-Client-Cert
+					header_up -X-Client-Cert
+					header_up -X-Real-IP
+				}
+			}
+		}
+		@panel path /xform/*
+		handle @panel {
+			route {
+				forward_auth __OAUTH2_PROXY_UPSTREAM__ {
+					uri /xform/oauth2/auth
+					header_up Host {http.request.hostport}
+					header_up X-Original-URL "{http.request.scheme}://{http.request.hostport}{http.request.uri}"
+					header_up X-Original-URI {http.request.uri}
+					header_up X-Original-Method {http.request.method}
+					header_up X-Auth-Request-Redirect {http.request.uri}
+					header_up X-Forwarded-Uri {http.request.uri}
+					header_up -X-Xform-Authenticated
+					header_up -Authorization
+					header_up -Proxy-Authorization
+					@document_unauth status 401
+					@document_auth_error status 3xx 4xx 5xx
+					handle_response @document_unauth {
+						header >Cache-Control "no-store"
+						reverse_proxy __OAUTH2_PROXY_UPSTREAM__ {
+							method GET
+							rewrite /xform/oauth2/start?
+							header_up Host {http.request.hostport}
+							header_up Cookie {http.request.header.Cookie}
+							header_up X-Auth-Request-Redirect {http.request.uri}
+							header_up -Authorization
+							header_up -Proxy-Authorization
+						}
+					}
+					handle_response @document_auth_error {
+						header >Cache-Control "no-store"
+						respond "authentication gateway unavailable" 502
+					}
+				}
+				uri path_regexp ^/xform(.*)$ $1
+				reverse_proxy __XFORM_UPSTREAM__ {
+					header_up Host {http.request.hostport}
+					header_up X-Xform-Authenticated __XFORM_TRUSTED_PROXY_SECRET__
+					header_up -Cookie
+					header_up -Authorization
+					header_up -Proxy-Authorization
+					header_up -X-Forwarded-*
+					header_up -Forwarded
+					header_up -X-Auth-Request-*
+					header_up -X-Access-Token
+					header_up -X-ID-Token
+					header_up -X-Id-Token
+					header_up -Remote-*
+					header_up -X-Remote-*
+					header_up -X-Authenticated-*
+					header_up -X-User
+					header_up -X-Email
+					header_up -X-Groups
+					header_up -X-Group
+					header_up -X-Original-*
+					header_up -X-SSL-Client-Cert
+					header_up -X-Client-Cert
+					header_up -X-Real-IP
+				}
+			}
+		}
+		handle {
+			respond "not found" 404
+		}
+	}
+}

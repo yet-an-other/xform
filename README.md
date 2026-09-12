@@ -16,7 +16,7 @@ internal/config/      XFORM_* environment configuration
 internal/listener/    TCP and protected Unix HTTP listener lifecycle
 internal/cmd/xform/   the binary: wiring, embedded dashboard, committed dist/
 web/                  pure TypeScript: React 19 + Vite + Tailwind v4 + shadcn/ui
-deploy/               nginx reference configs, systemd units, and the updater script
+deploy/               nginx/Caddy reference configs, systemd units, and the updater script
 SPEC.md               panel specification · CONTEXT.md — domain glossary · docs/adr/ — decisions
 ```
 
@@ -93,10 +93,11 @@ Two same-origin shapes are supported (see [ADR-0001](docs/adr/0001-two-same-orig
 - **Embedded, fronted by a proxy** — nginx terminates TLS and proxies everything to the binary, which still serves the embedded dashboard. Reference config: [`deploy/nginx-all-proxy.conf.example`](deploy/nginx-all-proxy.conf.example).
 - **Proxy-hosted** — nginx serves the built dashboard and proxies `/api/*` to the binary on loopback. Reference config: [`deploy/nginx.conf.example`](deploy/nginx.conf.example); systemd unit: [`deploy/xform.service`](deploy/xform.service).
 - **Trusted proxy, nginx** — nginx can own the public Authentication gateway for embedded or proxy-hosted static Dashboards at root or under `/xform/`, proxying admitted API requests to xform's protected Unix socket. Reference configs, setup, and the deterministic four-shape smoke matrix: [`deploy/trusted-proxy/nginx/`](deploy/trusted-proxy/nginx/).
+- **Trusted proxy, Caddy** — Caddy v2 provides the same four-shape gateway matrix with oauth2-proxy, protected Unix-socket proxying, and static SPA serving: [`deploy/trusted-proxy/caddy/`](deploy/trusted-proxy/caddy/).
 
 The API emits no CORS headers; the dashboard is always served same-origin.
 
-**Subpath mounting**: the dashboard is built mount-point agnostic (relative asset and API URLs), so either shape can hang under a subpath of an existing vhost (e.g. `https://HOST/xform/`) instead of a dedicated one. The gateway strips the prefix from nginx's original request URI only on the xform hop so encoded email bytes remain encoded, scopes authentication endpoints and cookies under the mount, and redirects the bare subpath to its trailing-slash form. Complete Trusted proxy nginx templates and a matrix smoke test ship in [`deploy/trusted-proxy/nginx/`](deploy/trusted-proxy/nginx/); the generic proxy examples retain commented subpath variants for unauthenticated deployments.
+**Subpath mounting**: the dashboard is built mount-point agnostic (relative asset and API URLs), so either shape can hang under a subpath of an existing vhost (e.g. `https://HOST/xform/`) instead of a dedicated one. The gateway strips the prefix from the original request URI only on the xform hop so encoded email bytes remain encoded, scopes authentication endpoints and cookies under the mount, and redirects the bare subpath to its trailing-slash form. Complete Trusted proxy nginx and Caddy templates plus deterministic four-shape smoke matrices ship in [`deploy/trusted-proxy/nginx/`](deploy/trusted-proxy/nginx/) and [`deploy/trusted-proxy/caddy/`](deploy/trusted-proxy/caddy/); the generic proxy examples retain commented subpath variants for unauthenticated deployments.
 
 ## Install on the host
 
