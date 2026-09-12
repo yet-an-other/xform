@@ -44,6 +44,8 @@ import {
 } from "@/lib/format";
 
 const POLL_INTERVAL_MS = 5_000;
+const exitActionClassName =
+  "border-border text-muted-foreground hover:text-foreground rounded-lg border px-3 py-1.5 text-[0.78rem] font-bold tracking-[0.08em] uppercase";
 
 // OpenDialog is the one dialog the Dashboard has open, if any. A single slot
 // is what enforces "only one modal at a time" (SPEC §6).
@@ -735,6 +737,7 @@ export function Dashboard({
         setUsers(usersSnapshot);
         setUpdatedAt(new Date());
         setError(null);
+        onAuthenticated?.();
       } catch (cause) {
         if (cause instanceof UnauthenticatedError) {
           onUnauthenticated(cause);
@@ -750,7 +753,6 @@ export function Dashboard({
       // the whole Dashboard.
       fetchPanelInfo(controller.signal)
         .then((panelInfo) => {
-          onAuthenticated?.();
           setPanel(panelInfo);
         })
         .catch((cause) => {
@@ -808,17 +810,14 @@ export function Dashboard({
           refreshing every 5s{updatedAt ? ` · updated ${formatTime24(updatedAt)}` : ""}
         </HeaderMeta>
         {panel?.authentication_mode === "trusted_proxy" && panel.sign_out_url ? (
-          <a
-            href={panel.sign_out_url}
-            className="border-border text-muted-foreground hover:text-foreground rounded-lg border px-3 py-1.5 text-[0.78rem] font-bold tracking-[0.08em] uppercase"
-          >
+          <a href={panel.sign_out_url} className={exitActionClassName}>
             Sign out of Panel
           </a>
         ) : panel !== null && panel.authentication_mode !== "trusted_proxy" ? (
           <button
             type="button"
             onClick={() => void signOut()}
-            className="border-border text-muted-foreground hover:text-foreground rounded-lg border px-3 py-1.5 text-[0.78rem] font-bold tracking-[0.08em] uppercase"
+            className={exitActionClassName}
           >
             Log out
           </button>

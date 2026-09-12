@@ -1,4 +1,4 @@
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import App from "./App";
@@ -23,8 +23,8 @@ afterEach(() => {
 });
 
 // stubApi answers fetches by URL suffix; `authed` simulates the session cookie.
-function stubApi() {
-  let authed = false;
+function stubApi(options: { initiallyAuthed?: boolean; panelStatus?: number } = {}) {
+  let authed = options.initiallyAuthed ?? false;
   vi.stubGlobal(
     "fetch",
     vi.fn(async (input: RequestInfo | URL) => {
@@ -47,6 +47,8 @@ function stubApi() {
         });
       }
       if (url.endsWith("api/v1/panel")) {
+        const panelStatus = options.panelStatus ?? 200;
+        if (panelStatus !== 200) return new Response(null, { status: panelStatus });
         return new Response(JSON.stringify({ version: "v0.0.0-test", uptime_seconds: 300 }), {
           status: 200,
           headers: { "Content-Type": "application/json" },
@@ -112,6 +114,17 @@ describe("auth flow", () => {
     expect(await screen.findByRole("alert")).toHaveTextContent(/authentication gateway did not admit/i);
     expect(screen.queryByLabelText(/password/i)).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: /log in/i })).not.toBeInTheDocument();
+  });
+
+  it("clears the trusted redirect guard after an admitted observation", async () => {
+    sessionStorage.setItem("xform_trusted_auth_redirect", "1");
+    stubApi({ initiallyAuthed: true, panelStatus: 500 });
+    render(<App />);
+
+    expect(await screen.findByRole("heading", { name: "CPU" })).toBeInTheDocument();
+    await waitFor(() => {
+      expect(sessionStorage.getItem("xform_trusted_auth_redirect")).toBeNull();
+    });
   });
 
   it("treats an untyped gateway 401 as a trusted failure", async () => {
