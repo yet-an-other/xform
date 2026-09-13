@@ -34,6 +34,7 @@ Source of truth for decisions: [map issue #1](https://github.com/yet-an-other/xf
 - **Dashboard hosting**: embedded in the binary by default; alternatively served as static files by the same-origin reverse proxy (see §9, ADR-0001). Never cross-origin.
 - **Frontend**: React + TypeScript (Vite), pure API client, decoupled so the UI can grow (drill-down, editing) without touching the collector.
 - **User management**: the panel renders `settings.clients` for the managed inbounds into the config file and pushes adds/removes to the running xray over HandlerService — loopback-only, no auth/TLS (§4, §5, §9).
+- **Operator authentication**: one explicit Authentication mode per process. Password authentication remains the default. Trusted proxy authentication delegates OIDC and Operator authorization to a same-Host Authentication gateway and accepts only its secret, non-identifying Admission assertion (ADR-0010, §5, §9).
 
 ## 2. Prerequisites (xray side)
 
@@ -139,26 +140,34 @@ Base prefix `/api/v1`. JSON only, snake_case keys, raw integers (bytes, bytes/se
 
 | Method | Path | Auth | Purpose |
 |---|---|---|---|
-| POST | `/api/v1/login` | — | `{"password": "..."}` → 204 + `Set-Cookie`; 401 on mismatch |
-| POST | `/api/v1/logout` | session | clears cookie → 204 |
-| GET | `/api/v1/healthz` | — | `{"status":"ok"}` |
-| GET | `/api/v1/server` | session | host stats — always live |
-| GET | `/api/v1/xray` | session | xray status/version/uptime/process/speeds/totals/online counts |
-| GET | `/api/v1/panel` | session | panel identity — release version + process uptime |
-| GET | `/api/v1/users` | session | `{"stale": bool, "collected_at": ts, "users": [...]}` |
-| POST | `/api/v1/users` | session + same-origin | add a roster user → 201 with the stored record + `roster_sync`; 409 with a machine-readable reason; cross-site → 403 |
-| PATCH | `/api/v1/users/{email}` | session + same-origin | edit (optional `client_id`, optional `inbounds`) → 200 with the stored record + `roster_sync`; idempotent |
-| POST | `/api/v1/users/{email}/disable` | session + same-origin | disable (ADR-0007) → 200 with `roster_sync`; already-disabled or unknown email → 204; idempotent |
-| POST | `/api/v1/users/{email}/enable` | session + same-origin | enable (ADR-0007) → 200 with the revived record + `roster_sync`; unknown email → 404; idempotent |
-| DELETE | `/api/v1/users/{email}` | session + same-origin | delete (ADR-0007): purge from every storage once the removal applies → 200 with `roster_sync`; unknown or already-purged email → 204; idempotent |
-| GET | `/api/v1/users/{email}` | session | one user's observations + connection profiles (§7) |
-| GET | `/api/v1/logs/panel` | session | bounded Log snapshot of the panel's journal (§8) |
-| GET | `/api/v1/logs/xray` | session | bounded Log snapshot of xray's journal (§8) |
-| GET | `/api/v1/xray/config` | session | exact Config snapshot of the configured xray file (§8) |
+| POST | `/api/v1/login` | Password authentication only | `{"password": "..."}` → 204 + `Set-Cookie`; 401 on mismatch |
+| POST | `/api/v1/logout` | Password Session only | clears cookie → 204 |
+| GET | `/api/v1/healthz` | none | `{"status":"ok"}`; the public Authentication gateway still protects it |
+| GET | `/api/v1/server` | Operator | host stats — always live |
+| GET | `/api/v1/xray` | Operator | xray status/version/uptime/process/speeds/totals/online counts |
+| GET | `/api/v1/panel` | Operator | panel identity, process uptime, Authentication mode, and optional Panel sign-out URL |
+| GET | `/api/v1/users` | Operator | `{"stale": bool, "collected_at": ts, "users": [...]}` |
+| POST | `/api/v1/users` | Operator + same-origin | add a roster user → 201 with the stored record + `roster_sync`; 409 with a machine-readable reason; cross-site → 403 |
+| PATCH | `/api/v1/users/{email}` | Operator + same-origin | edit (optional `client_id`, optional `inbounds`) → 200 with the stored record + `roster_sync`; idempotent |
+| POST | `/api/v1/users/{email}/disable` | Operator + same-origin | disable (ADR-0007) → 200 with `roster_sync`; already-disabled or unknown email → 204; idempotent |
+| POST | `/api/v1/users/{email}/enable` | Operator + same-origin | enable (ADR-0007) → 200 with the revived record + `roster_sync`; unknown email → 404; idempotent |
+| DELETE | `/api/v1/users/{email}` | Operator + same-origin | delete (ADR-0007): purge from every storage once the removal applies → 200 with `roster_sync`; unknown or already-purged email → 204; idempotent |
+| GET | `/api/v1/users/{email}` | Operator | one user's observations + connection profiles (§7) |
+| GET | `/api/v1/logs/panel` | Operator | bounded Log snapshot of the panel's journal (§8) |
+| GET | `/api/v1/logs/xray` | Operator | bounded Log snapshot of xray's journal (§8) |
+| GET | `/api/v1/xray/config` | Operator | exact Config snapshot of the configured xray file (§8) |
 
-**Auth**: password from env (`XFORM_PASSWORD`, constant-time compare); `xform_session` cookie — HttpOnly, SameSite=Lax, **`Secure` always** (browsers exempt `localhost`, so SSH-tunnel access still works; every other access path is TLS-terminated), path `/`, 24h sliding expiry. All endpoints except `login`/`healthz` require it. A session expires 24h after last use and never survives a panel restart.
+**Authentication modes**: `XFORM_AUTH_MODE` accepts `password` or `trusted_proxy` and defaults to `password`. The modes SHALL NOT operate together. Invalid mode-specific configuration fails startup before stores, watchers, xray clients, or listeners start.
 
-**Same-origin only**: the API emits **no CORS headers**. The dashboard is always served from the same origin as the API — embedded in the binary or reverse-proxied (ADR-0001). Every session endpoint returns `Cache-Control: no-store`.
+**Password authentication**: `XFORM_PASSWORD` is required and checked in constant time. Trusted-proxy settings are rejected. A successful login creates a Session carried by the `xform_session` cookie: HttpOnly, SameSite=Lax, **`Secure` always** (browsers exempt `localhost`, so SSH-tunnel access still works; every other access path is TLS-terminated), path `/`, 24-hour sliding expiry. A Session never survives a Panel restart. The Dashboard and login route remain public; every API route except login and health requires the Session. An authentication failure returns `401 {"error":"unauthenticated","authentication_mode":"password"}`.
+
+**Trusted proxy authentication** (ADR-0010): `XFORM_PASSWORD` is rejected. `XFORM_TRUSTED_PROXY_SECRET` is required and SHALL contain exactly 64 lowercase hexadecimal characters. `XFORM_TRUSTED_PROXY_SIGN_OUT_URL` is optional; when set, it SHALL be a same-origin absolute path beginning with one `/`, with an optional query but no scheme, host, fragment, control character, backslash, or leading `//`. Password login and logout routes are not registered. Every xform route except health requires one exact `X-Xform-Authenticated` request header whose value matches the secret. xform hashes and constant-time compares the value, rejects missing, duplicate, or wrong assertions with the same `401 {"error":"unauthenticated","authentication_mode":"trusted_proxy"}`, removes the assertion before calling application handlers, and never logs it.
+
+Trusted mode accepts `XFORM_LISTEN=unix:/absolute/path` or an IPv4/IPv6 loopback TCP address. It rejects hostnames, wildcard, LAN, and public TCP listeners; TCP requests whose direct peer is not loopback are also rejected. Forwarding headers never establish trust. A Unix socket is `0660` inside an existing protected directory and is available only to the xform and gateway users. xform replaces only a stale socket owned by its runtime user and refuses regular files, symlinks, foreign-owned sockets, or a live listener.
+
+The Authentication gateway protects the whole public origin, including health, and owns OIDC, Operator allowlisting, its browser session, and document redirects to sign-in. It SHALL leave unauthenticated `/api/*` requests as `401` instead of replacing them with HTML. It overwrites the Admission assertion only after successful authentication and strips client identity, token, Authorization, and assertion headers before the xform hop. xform receives no Operator identity or IdP token, creates no Session, and gives every admitted Operator full authority. Gateway or IdP failure has no password fallback.
+
+**Same-origin only**: the API emits **no CORS headers**. The dashboard is always served from the same origin as the API — embedded in the binary or reverse-proxied (ADR-0001). Current Origin and `Sec-Fetch-Site` mutation checks apply in both Authentication modes. Every authentication endpoint returns `Cache-Control: no-store`.
 
 **Payloads** (200 always, when the panel itself is up):
 
@@ -194,8 +203,11 @@ GET /api/v1/users
                "disabled": false } ] }
 
 GET /api/v1/panel
-{ "version": "v0.10.0",     // the binary's release tag; "dev" outside releases
-  "uptime_seconds": 4831 }  // whole seconds since this panel process started (monotonic); resets on restart
+{ "version": "v0.10.0",               // the binary's release tag; "dev" outside releases
+  "uptime_seconds": 4831,              // whole seconds since this Panel process started; resets on restart
+  "authentication_mode": "trusted_proxy", // password | trusted_proxy
+  "sign_out_url": "/oauth2/sign_out"       // Trusted proxy only; key omitted when unconfigured
+}
 ```
 
 The dashboard fetches `/api/v1/panel` in the five-second refresh cycle rather than extrapolating uptime in the browser.
@@ -229,7 +241,7 @@ The dashboard fetches `/api/v1/panel` in the five-second refresh cycle rather th
 
 React + TS (Vite), single page per the approved prototypes in `docs/prototypes/` (user details dialog, operational viewers). Dashboard modules consume typed HTTP responses and own one-modal-at-a-time state, detail polling, manual Log snapshot refresh, copy actions, QR rendering, focus management, and browser-local retention after a failed manual refresh; SQLite stays outside these modules.
 
-- **Header**: two identity groups. Panel group: `xform` wordmark, version, panel uptime, panel-logs icon action. xray group: status indicator immediately before `xray`, version, service uptime, xray-logs icon action, xray-config icon action. Then the refresh note (cadence + last-successful-poll time, 24h clock) and Log out. Every icon-only action has an accessible name and a visible tooltip or title. Degraded banner when `status != "running"` — full copy naming what went stale and that host stats stay live.
+- **Header**: two identity groups. Panel group: `xform` wordmark, version, panel uptime, panel-logs icon action. xray group: status indicator immediately before `xray`, version, service uptime, xray-logs icon action, xray-config icon action. Then the refresh note (cadence + last-successful-poll time, 24h clock) and the mode-specific exit action. Password authentication shows Log out. Trusted proxy authentication shows Sign out of Panel only when `sign_out_url` exists; it performs full-page navigation to that path. Every icon-only action has an accessible name and a visible tooltip or title. Degraded banner when `status != "running"` — full copy naming what went stale and that host stats stay live.
 - **Server row**: four cards — CPU / RAM / storage with bars, plus a host-uptime card with load average as its sub-line.
 - **Xray row**: four cards — speed now (↑ green / ↓ blue, stacked big lines), total traffic (up + down), users online (`n / total` + unique IPs), xray process memory/goroutines.
 - **Users table**: online dot, email, protocol · security · transport labels — one line per attached inbound, config order, transport appended unless tcp —, Traffic (up/down stacked on two lines), speed now, online IPs (one per line, country flag beside each — ADR-0005), last seen (relative; literal `now` while online), and per-user icon-only actions with accessible names: details and edit — the destructive acts live in the edit view, not on the rows (ADR-0007); the section header carries the add-user action. The edit action opens the edit dialog with the user's email (immutable — the identity; change = disable + re-add), the inbound multi-select, and an editable Client ID with a generate button; saving stores the edit and applies it live (store → file render → diff push: attach/detach per inbound, remove + add on every attached inbound when the Client ID changes), showing conflicts inline and apply failures on the dialog banner + row badge (`docs/user-management-spec.md`). The edit dialog's Disable user action opens a confirmation naming what disable means — off every inbound immediately, history kept, established connections left to close naturally; POST `/disable` is idempotent. The edit dialog's Delete user action — for live and disabled users alike — opens a confirmation naming the email and stating that the traffic history is permanently erased and the act is irreversible; DELETE `/users/{email}` is idempotent. A disabled user's dialog offers Re-enable, which re-applies the stored credential and attachments (`docs/user-management-spec.md`, ADR-0007). Compact row density. Disabled users hidden behind a toggle; the toggle state and the sort selection persist in the browser store (ADR-0009). At narrow widths the table keeps its fixed columns and scrolls horizontally.
@@ -238,7 +250,7 @@ The User, Traffic, and Last seen headers SHALL sort the visible rows in the brow
 
 Traffic sorting SHALL compare combined Uplink and Downlink durable totals. Last seen sorting SHALL rank an online User as newer than every offline timestamp and SHALL place a never-seen User last in either direction. Disabled users, when shown, SHALL participate in the same ordering as other Users. Equal values SHALL resolve by case-insensitive email order, then exact email order. Each refreshed Observation SHALL reapply the selected ordering.
 
-Polls all three observation endpoints every 5s; freshness is the header refresh note, not per-card; shows "stale" speeds when `stale: true`. Login page posting to `/api/v1/login`.
+Polls all three observation endpoints every 5s; freshness is the header refresh note, not per-card; shows "stale" speeds when `stale: true`. Password authentication has a login page posting to `/api/v1/login`; Trusted proxy authentication has no Panel login form.
 
 ### User details dialog
 
@@ -257,9 +269,9 @@ Only one modal is open at a time. Each viewer reports only its own collection re
 - **Config snapshot dialog**: one fresh Config snapshot on open; the configured path and the exact text, preserving every character including final newlines; horizontal fixed-format scrolling at narrow widths; Copy, and no Refresh action. A failed Config snapshot shows the stable reason and no Copy action.
 - Log and Config snapshot data live only for the current modal opening: closing either modal aborts its request and clears the browser-local snapshot, and reopening always starts with an initial load.
 
-### Modal and session behavior
+### Modal and authentication behavior
 
-A modal traps focus, closes on Escape or its close action, and restores focus to its opener. At 560 CSS pixels or narrower, fixed-format content scrolls horizontally rather than reflowing metadata. A 401 from any modal request closes the modal and returns the dashboard to the login flow; other modal failures stay inside that modal and never trigger dashboard degraded mode.
+A modal traps focus, closes on Escape or its close action, and restores focus to its opener. At 560 CSS pixels or narrower, fixed-format content scrolls horizontally rather than reflowing metadata. A `401` from any modal request closes the modal. An xform-generated authentication `401` identifies its `authentication_mode`. A `password` failure returns to the Panel login flow. A `trusted_proxy` failure reloads the current document once so the Authentication gateway can start sign-in; a repeated failure on that navigation shows a gateway-configuration error instead of reloading forever or offering a password. A gateway-generated `401` may omit the mode and receives the same one-reload treatment as `trusted_proxy`. Other modal failures stay inside that modal and never trigger dashboard degraded mode.
 
 ## 7. Connection profiles
 
@@ -347,7 +359,7 @@ Serialization is pinned to [XTLS/Xray-core discussion 716](https://github.com/XT
 
 ## 8. Operational snapshots
 
-An operational snapshot is a point-in-time answer to an admin's explicit request: a **Log snapshot** (latest bounded journal entries for one fixed unit — best-effort, not a live stream or an atomic journal transaction) or a **Config snapshot** (the exact UTF-8 text observed during one bounded read of `XFORM_XRAY_CONFIG`). Neither is persisted by the panel; neither is part of the panel's own history (ADR-0006). The Config snapshot is separate from the parsed roster: it may show malformed JSON while the roster and profiles continue using their last valid parse.
+An operational snapshot is a point-in-time answer to an Operator's explicit request: a **Log snapshot** (latest bounded journal entries for one fixed unit — best-effort, not a live stream or an atomic journal transaction) or a **Config snapshot** (the exact UTF-8 text observed during one bounded read of `XFORM_XRAY_CONFIG`). Neither is persisted by the panel; neither is part of the panel's own history (ADR-0006). The Config snapshot is separate from the parsed roster: it may show malformed JSON while the roster and profiles continue using their last valid parse.
 
 Freshness and errors stay independent across every source: user observation freshness, xray-config parse freshness, advertised-connection freshness, each Log snapshot's success, Config snapshot success, and xray's running/stopped/unreachable status. A failure in one source is never borrowed as another source's status.
 
@@ -437,12 +449,28 @@ The panel may record a bounded error summary, but never copies journal messages 
 Two same-origin deployment shapes (ADR-0001):
 
 - **Embedded (default)**: one Go binary serving the built SPA (embedded via `embed`), the API, and the collector. Install = scp binary + systemd unit + env vars; no web server prerequisite.
-- **Proxy-hosted**: nginx (or the host's existing reverse proxy) serves the built SPA as static files and reverse-proxies `/api/*` to the Go API on loopback. Reference config: `deploy/nginx.conf.example`. Gotcha: `proxy_pass` must carry **no URI part**, otherwise `/api/v1/*` is rewritten to `/v1/*`.
-- **Subpath mounting**: the SPA is built mount-point agnostic (Vite `base: "./"`, relative API client), so either shape can hang under a subpath of an existing vhost (e.g. `/xform/`). The proxy strips the prefix — a deliberate `proxy_pass` URI rewrite, the one intentional exception to the gotcha above — and redirects the bare subpath to its trailing-slash form. Encoded user identity survives the trip: one path-segment decode at the handler, no encoded byte becomes a route separator. Commented variants ship in both `deploy/` reference configs.
+- **Proxy-hosted**: nginx, Caddy, or another static origin serves the built SPA and reverse-proxies `/api/*` to the Go API. Reference config: `deploy/nginx.conf.example`. Gotcha: nginx `proxy_pass` must carry **no URI part**, otherwise `/api/v1/*` is rewritten to `/v1/*`. Traefik does not serve local static files, so its maintained examples use the embedded shape.
+- **Subpath mounting**: the SPA is built mount-point agnostic (Vite `base: "./"`, relative API client), so either shape can hang under a subpath of an existing vhost (e.g. `/xform/`). The gateway strips the prefix before the xform hop, redirects the bare subpath to its trailing-slash form, and preserves encoded User identity: one path-segment decode at the handler, no encoded byte becomes a route separator.
 
-Configuration via env: `XFORM_LISTEN` (default `127.0.0.1:9090`), `XFORM_PASSWORD` (required), `XFORM_XRAY_API` (default `127.0.0.1:8080`), `XFORM_XRAY_CONFIG` (default `/usr/local/etc/xray/config.json`), `XFORM_DB` (default `/var/lib/xform/xform.db`), `XFORM_XRAY_UNIT` (default `xray.service`), `XFORM_GEOIP` (geoip.dat for the country flags; default searches `/usr/local/share/xray/` and the xray config's directory — flags silently off when not found), `XFORM_CONNECTIONS_CONFIG` (optional, no default — §7), `XFORM_JOURNALCTL` (default `/usr/bin/journalctl` — §8).
+Configuration via env: `XFORM_LISTEN` (default `127.0.0.1:9090`; also accepts `unix:/absolute/path`), `XFORM_AUTH_MODE` (default `password`), `XFORM_PASSWORD` (required only for Password authentication), `XFORM_TRUSTED_PROXY_SECRET` (required only for Trusted proxy authentication), `XFORM_TRUSTED_PROXY_SIGN_OUT_URL` (optional in Trusted proxy authentication), `XFORM_XRAY_API` (default `127.0.0.1:8080`), `XFORM_XRAY_CONFIG` (default `/usr/local/etc/xray/config.json`), `XFORM_DB` (default `/var/lib/xform/xform.db`), `XFORM_XRAY_UNIT` (default `xray.service`), `XFORM_GEOIP` (geoip.dat for the country flags; default searches `/usr/local/share/xray/` and the xray config's directory — flags silently off when not found), `XFORM_CONNECTIONS_CONFIG` (optional, no default — §7), `XFORM_JOURNALCTL` (default `/usr/bin/journalctl` — §8).
 
-Ships with a systemd unit (`xform.service`, `After=xray.service`). TLS terminates at the reverse proxy in both shapes — the panel itself serves plain HTTP on loopback.
+Ships with a systemd unit (`xform.service`, `After=xray.service`). TLS terminates at the public gateway; xform serves plain HTTP through a protected Unix socket or TCP listener.
+
+### Trusted proxy deployment
+
+Trusted proxy authentication is provider-neutral inside xform. The maintained deployment contract uses oauth2-proxy for OIDC and one of these gateways:
+
+| Gateway | xform transport | Embedded | Proxy-hosted static |
+| --- | --- | --- | --- |
+| nginx | Unix socket | root and subpath | root and subpath |
+| Caddy v2 | Unix socket | root and subpath | root and subpath |
+| Traefik | loopback TCP | root and subpath | separate static-file service routed through the same public origin |
+
+Root deployments expose oauth2-proxy under `/oauth2/`. A Panel mounted at `/xform/` uses `/xform/oauth2/`, including callback and Panel sign-out, and scopes the oauth2-proxy cookie to `/xform/`. Gateway routes preserve `Host`, the mount rewrite, query strings, and encoded User email bytes. nginx and Caddy share the Unix-socket group with xform. Traefik runs on the Host or with host networking so its xform upstream remains loopback.
+
+`deploy/trusted-proxy/` contains explicit root/subpath examples: nginx and Caddy for embedded and static shapes, Traefik for the embedded shape, and oauth2-proxy with ZITADEL for both mounts. The ZITADEL example uses a Web application, Authorization Code, client-secret BASIC, PKCE S256, exact HTTPS callback, issuer discovery, `openid email`, verified email, and an exact-email allowlist. It disables identity and token forwarding. Panel sign-out clears only the oauth2-proxy session by default; broader ZITADEL logout is optional and documented separately.
+
+xform does not install or manage gateways. CI pins tested versions, validates nginx, Caddy, and oauth2-proxy configuration, starts Traefik ephemerally because it has no validate-only command, and runs gateway smoke tests with a fake forward-auth source. A live ZITADEL tenant remains a documented manual acceptance test.
 
 ### Journal namespace
 
@@ -467,4 +495,4 @@ Applies push to the running xray over `HandlerService` (`AddUserOperation` / `Re
 
 ## 10. Non-goals
 
-Historical traffic graphs & long retention · free-form config editing · subscription URLs · client-specific profile formats or import guarantees · non-VLESS profiles · per-user advertised connection settings · profiles for disabled users · profile/credential persistence, masking, or audit trails · multi-server · Prometheus/Grafana export · alerting/quotas/CSV · cross-origin or CDN-hosted UI (same-origin only, ADR-0001) · live log following, pagination, search, filtering, or downloads · caller-selected units, counts, cursors, time ranges, fields, or journal expressions · log clearing or service controls · xray-managed log-file reading · Config snapshot editing, validation, formatting, download, or reload controls · historical Log/Config snapshot storage · migration of old default-journal records · broad default-journal access or a privileged journal broker · non-systemd hosts or systemd older than 245 · automatic installation of root-owned migration files by the binary updater · multiple simultaneous modals · changes to the five-second observation cadence · a new frontend framework, HTTP router, database, or persistent store · tombstones blocking a deleted email's re-adoption (ADR-0007: nothing may remain).
+Historical traffic graphs & long retention · free-form config editing · subscription URLs · client-specific profile formats or import guarantees · non-VLESS profiles · per-user advertised connection settings · profiles for disabled users · profile/credential persistence, masking, or audit trails · multi-server · Prometheus/Grafana export · alerting/quotas/CSV · cross-origin or CDN-hosted UI (same-origin only, ADR-0001) · live log following, pagination, search, filtering, or downloads · caller-selected units, counts, cursors, time ranges, fields, or journal expressions · log clearing or service controls · xray-managed log-file reading · Config snapshot editing, validation, formatting, download, or reload controls · historical Log/Config snapshot storage · migration of old default-journal records · broad default-journal access or a privileged journal broker · non-systemd hosts or systemd older than 245 · automatic installation of root-owned migration files by the binary updater · multiple simultaneous modals · changes to the five-second observation cadence · native OIDC · Operator accounts, roles, or identity audit · IdP token forwarding · unattended-client authentication · identity-provider-wide logout guarantees · automatic gateway installation or upgrades · a new frontend framework, HTTP router, database, or persistent store · tombstones blocking a deleted email's re-adoption (ADR-0007: nothing may remain).

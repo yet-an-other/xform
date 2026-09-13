@@ -1,0 +1,3 @@
+# Delegate identity-provider authentication to a trusted gateway
+
+xform keeps Password authentication as its default and adds an explicit, mutually exclusive Trusted proxy authentication mode instead of implementing OIDC. In trusted mode, a same-Host Authentication gateway owns OIDC, Operator allowlisting, and its browser session; xform accepts only a non-identifying secret Admission assertion over a protected Unix socket or loopback TCP connection, gives every admitted Operator full authority, and has no password fallback, Operator identity, role, or Session. This keeps provider and protocol complexity outside xform while supporting nginx, Caddy, and Traefik, at the cost of making gateway configuration and availability part of the Panel's security boundary.

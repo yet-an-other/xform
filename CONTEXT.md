@@ -7,7 +7,7 @@ xform is a monitoring panel for a single xray-core proxy server. It observes the
 ### The system
 
 **Panel**:
-The xform application as a whole — the thing the admin opens in a browser. It observes, and it manages the user roster.
+The xform application as a whole — the thing an Operator opens in a browser. It observes, and it manages the user roster.
 _Avoid_: dashboard (that's the page), manager, admin console
 
 **xray**:
@@ -25,6 +25,10 @@ _Avoid_: server, node, machine (alone)
 **Dashboard**:
 The single page the panel presents, showing host stats, xray status, and the users table.
 _Avoid_: home page, main screen
+
+**Operator**:
+A person admitted to the Panel. Every Operator has full authority over the Panel. An Operator is never a User, which means a client of xray.
+_Avoid_: admin, panel user, user (alone)
 
 **User**:
 A client of the xray proxy, identified by an email address. The email IS the identity — renaming an email creates a new user, it does not rename the old one.
@@ -59,7 +63,7 @@ Data the Panel gathers on its own schedule and holds onto — host stats, xray s
 _Avoid_: poll, sample, reading
 
 **Operational snapshot**:
-A Log snapshot or Config snapshot: gathered only when an admin asks for it, held no longer than the Viewer showing it, and never part of the Panel's own history (ADR-0006). The counterpart to an Observation.
+A Log snapshot or Config snapshot: gathered only when an Operator asks for it, held no longer than the Viewer showing it, and never part of the Panel's own history (ADR-0006). The counterpart to an Observation.
 _Avoid_: operational view, viewer data, log dump
 
 **Watched source**:
@@ -67,7 +71,7 @@ A file on the Host that the Panel re-reads whenever it changes and keeps the las
 _Avoid_: config watcher, file loader, reloader
 
 **Config snapshot**:
-The exact text of the configured xray file read when requested. It is distinct from the parsed Roster.
+The exact text of the configured xray file read when an Operator requests it. It is distinct from the parsed Roster.
 _Avoid_: parsed config, formatted config, config export
 
 **Log snapshot**:
@@ -98,8 +102,32 @@ _Avoid_: build, version (alone)
 The host-side automation that installs the latest release of the panel and restarts it.
 _Avoid_: auto-update, agent, cron job (that's its schedule, not the thing)
 
+**Authentication mode**:
+The one policy a running Panel uses to admit an Operator: Password authentication or Trusted proxy authentication. The modes never operate together.
+_Avoid_: login method, authentication provider
+
+**Password authentication**:
+An Authentication mode in which the Panel checks its shared password and creates a Session.
+_Avoid_: local authentication, built-in authentication
+
+**Trusted proxy authentication**:
+An Authentication mode in which the Authentication gateway authenticates and authorizes an Operator before admitting a request to the Panel. The Panel creates no Operator account, role, or Session, and Password authentication cannot bypass this boundary.
+_Avoid_: oauth2-proxy authentication (that is one deployment), SSO (that is broader)
+
+**Authentication gateway**:
+The same-Host boundary that admits requests to the Panel under Trusted proxy authentication. Only it and the Panel know the Admission assertion; it supplies no Operator identity.
+_Avoid_: identity provider (that authenticates upstream), oauth2-proxy (that is one component), reverse proxy (that is only one possible component)
+
+**Admission assertion**:
+The secret, non-identifying proof that the Authentication gateway admitted a request. Missing or invalid proof on a protected route receives an unauthorized response from the Panel, never a sign-in redirect.
+_Avoid_: identity assertion, user header, email header
+
+**Panel sign-out**:
+An optional action that ends the Authentication gateway's current browser session. It does not promise to end the Operator's identity-provider session.
+_Avoid_: logout (alone), single logout, identity-provider logout
+
 **Session**:
-A successful login's continuing right to use the API, carried by the `xform_session` cookie. It expires 24h after last use and never survives a panel restart.
+Under Password authentication, a successful login's continuing right to use the API, carried by the `xform_session` cookie. It expires 24h after last use and never survives a Panel restart. Trusted proxy authentication creates no Session.
 _Avoid_: login (that's the act that starts one), token, cookie (those are its carrier)
 
 **Panel uptime**:

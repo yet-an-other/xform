@@ -1,0 +1,115 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>xform trusted proxy authentication architecture</title>
+<style>
+:root{color-scheme:light dark;--bg:#0b1020;--card:#121a2d;--text:#e8edf7;--muted:#aab6ca;--link:#7dd3fc;--line:#2b3954;--accent:#86efac}*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--text);font:16px/1.58 system-ui,-apple-system,Segoe UI,sans-serif}main{max-width:980px;margin:auto;padding:36px 22px 70px}h1{font-size:2.2rem;line-height:1.15}h2{margin-top:2.2rem;border-bottom:1px solid var(--line);padding-bottom:.3rem}h3{margin-top:1.5rem}a{color:var(--link)}code,pre{font-family:ui-monospace,SFMono-Regular,Consolas,monospace}code{background:var(--card);padding:.1em .3em;border-radius:4px}pre{background:var(--card);border:1px solid var(--line);padding:16px;overflow:auto;white-space:pre-wrap}.decision{border-left:5px solid var(--accent);background:var(--card);padding:16px 20px;font-size:1.1rem}.warning{border:1px solid #ca8a04;background:#2b2208;padding:12px 16px}table{width:100%;border-collapse:collapse}th,td{border:1px solid var(--line);padding:10px;text-align:left;vertical-align:top}th{background:var(--card)}li{margin:.35rem 0}.muted{color:var(--muted)}@media(prefers-color-scheme:light){:root{--bg:#f8fafc;--card:#eef2f7;--text:#172033;--muted:#526078;--link:#0369a1;--line:#cbd5e1;--accent:#15803d}.warning{background:#fef9c3}}
+</style>
+</head>
+<body><main>
+<h1>Trusted proxy authentication architecture</h1>
+<p class="decision"><strong>Decision confirmed 2026-09-11:</strong> xform keeps Password authentication as its default and adds an explicit, provider-neutral <code>trusted_proxy</code> mode. An Authentication gateway owns OIDC, Operator authorization, and its browser session. xform accepts only a secret, non-identifying Admission assertion.</p>
+<p class="warning"><strong>Version warning:</strong> gateway settings change between releases. Shipped examples must pin and test exact versions.</p>
+
+<h2>Why</h2>
+<p>xform has one shared password, no Operator identity, no roles, and no Operator-keyed audit. Native OIDC would add discovery, callbacks, PKCE, state and nonce checks, token and key validation, claims, refresh, provider compatibility, and logout without adding authorization value. oauth2-proxy already owns those duties.</p>
+<p>See the normative <a href="../../SPEC.md">SPEC</a>, the domain language in <a href="../../CONTEXT.md">CONTEXT</a>, and <a href="../adr/0010-delegate-idp-authentication-to-a-trusted-gateway.md">ADR-0010</a>.</p>
+
+<h2>Trust contract</h2>
+<pre>browser -- HTTPS --&gt; nginx, Caddy, or Traefik
+                       |-- authentication endpoints --&gt; oauth2-proxy --&gt; ZITADEL
+                       |-- forward-auth check --------&gt; oauth2-proxy
+                       `-- admitted request ----------&gt; xform</pre>
+<p>The gateway protects the whole public origin. Document requests without a gateway session redirect to sign-in. API requests return <code>401</code>, never sign-in HTML. The public gateway protects health even though xform leaves its private health route assertion-free.</p>
+<p>After authentication, the gateway overwrites one header:</p>
+<pre>X-Xform-Authenticated: &lt;64-lowercase-hex-secret&gt;</pre>
+<p><code>XFORM_TRUSTED_PROXY_SECRET</code> holds the same 256-bit value. Generate it with <code>openssl rand -hex 32</code>. It is separate from the oauth2-proxy cookie secret and OIDC client secret.</p>
+<ul>
+<li>Remove client copies before setting the assertion.</li>
+<li>Forward no Operator identity, access token, ID token, or Authorization header.</li>
+<li>Require exactly one value, hash it, compare in constant time, then remove it before application handlers run.</li>
+<li>Return the same JSON <code>401</code> for missing, duplicate, and wrong assertions. Every xform-generated authentication failure includes <code>authentication_mode</code>. Never log the secret.</li>
+</ul>
+
+<h2>Mode contract</h2>
+<table><thead><tr><th>Setting</th><th>Password</th><th>Trusted proxy</th></tr></thead><tbody>
+<tr><td><code>XFORM_AUTH_MODE</code></td><td><code>password</code>, the default</td><td><code>trusted_proxy</code>, explicit</td></tr>
+<tr><td><code>XFORM_PASSWORD</code></td><td>required</td><td>rejected</td></tr>
+<tr><td><code>XFORM_TRUSTED_PROXY_SECRET</code></td><td>rejected</td><td>required, 64 lowercase hex</td></tr>
+<tr><td><code>XFORM_TRUSTED_PROXY_SIGN_OUT_URL</code></td><td>rejected</td><td>optional same-origin absolute path; no scheme, host, leading <code>//</code>, backslash, fragment, or control character</td></tr>
+<tr><td>Session</td><td>sliding 24-hour Panel Session</td><td>none</td></tr>
+<tr><td>Password fallback</td><td>not applicable</td><td>never</td></tr>
+</tbody></table>
+<p>Trusted mode accepts a protected Unix listener such as <code>unix:/run/xform/xform.sock</code> or an IPv4/IPv6 loopback TCP listener. It rejects hostnames, wildcard, LAN, and public TCP listeners. TCP requests must also have a direct loopback peer. Forwarding headers never establish trust.</p>
+<p>xform creates Unix sockets as <code>0660</code> in an existing protected directory. It replaces only its own stale socket and refuses files, symlinks, foreign sockets, or a live listener.</p>
+
+<h2>Routes and browser behavior</h2>
+<ul>
+<li>Health is the only assertion-free xform route.</li>
+<li>Password login and logout routes do not exist in trusted mode.</li>
+<li>Origin and <code>Sec-Fetch-Site</code> mutation checks remain active.</li>
+<li><code>GET /api/v1/panel</code> always reports <code>authentication_mode</code> and optionally reports <code>sign_out_url</code>.</li>
+<li>An xform-generated <code>401</code> identifies its mode. Password failures open the login form. Trusted or gateway-generated failures reload the document once; a second failure shows a gateway configuration error.</li>
+<li>Panel sign-out is optional. When configured it ends the gateway session, not necessarily the identity-provider session.</li>
+</ul>
+
+<h2>Gateway support</h2>
+<table><thead><tr><th>Gateway</th><th>xform transport</th><th>Embedded dashboard</th><th>Proxy-hosted static</th></tr></thead><tbody>
+<tr><td>nginx</td><td>Unix socket</td><td>root and subpath</td><td>root and subpath</td></tr>
+<tr><td>Caddy v2</td><td>Unix socket</td><td>root and subpath</td><td>root and subpath</td></tr>
+<tr><td>Traefik</td><td>loopback TCP</td><td>root and subpath</td><td>separate static-file service routed through the same public origin</td></tr>
+</tbody></table>
+<p>Traefik's <a href="https://github.com/traefik/traefik/issues/4881">Unix-backend request</a> remains open, so its xform upstream uses loopback TCP plus the secret assertion. Traefik also declined <a href="https://github.com/traefik/traefik/issues/4240">local static-file serving</a>, so the maintained Traefik examples use xform's embedded dashboard.</p>
+<p>nginx and Caddy examples cover embedded and static deployments at root and under a subpath. Traefik covers embedded root and subpath deployments. xform does not install or manage gateways.</p>
+
+<h2>ZITADEL example</h2>
+<p>The full example creates a ZITADEL Project and a Web Application with Authorization Code, client-secret BASIC, PKCE S256, exact HTTPS callback, issuer discovery, and scopes <code>openid email</code>. A file containing exact verified email addresses denies every other identity. Domain and flat role-array policies are optional alternatives.</p>
+<table><thead><tr><th>Mount</th><th>Callback</th><th>oauth2-proxy prefix</th><th>Cookie</th></tr></thead><tbody>
+<tr><td>root</td><td><code>https://panel.example.com/oauth2/callback</code></td><td><code>/oauth2</code></td><td><code>__Host-xform_oauth2</code>, path <code>/</code></td></tr>
+<tr><td><code>/xform/</code></td><td><code>https://host.example.com/xform/oauth2/callback</code></td><td><code>/xform/oauth2</code></td><td><code>__Secure-xform_oauth2</code>, path <code>/xform/</code></td></tr>
+</tbody></table>
+<p>The callback registered in ZITADEL must exactly match oauth2-proxy. Identity and token forwarding options remain disabled. oauth2-proxy uses a non-xform sink upstream because the gateway makes the final xform request after a successful auth check.</p>
+<p>Local oauth2-proxy sign-out is the default. Optional ZITADEL end-session configuration can log out every ZITADEL session represented by the browser cookie, so it must be labeled and tested rather than silently enabled.</p>
+
+<h2>Code shape</h2>
+<p>A deep <code>internal/auth</code> module wraps the Panel handler and exposes immutable frontend authentication information. It owns both modes, password Sessions, assertions, mode-specific routes, health exemption, and unauthorized responses. <code>internal/api</code> no longer depends on session storage.</p>
+<p>A separate <code>internal/listener</code> module owns TCP and Unix listener lifecycle. <code>internal/config</code> parses typed values and rejects unsafe combinations before startup side effects.</p>
+
+<h2>Verification</h2>
+<p>Go and frontend tests cover the configuration matrix, Password compatibility, assertion failures and stripping, listener safety, route policy, CSRF, optional sign-out, trusted-mode reauthentication, subpaths, and encoded User emails.</p>
+<p>Gateway smoke tests use a deterministic fake forward-auth server. CI pins versions, validates nginx, Caddy, and oauth2-proxy, starts Traefik ephemerally, and checks redirects, API <code>401</code>, spoofed-header replacement, secret forwarding, Host and URI preservation, and supported transports. A real ZITADEL tenant remains a manual acceptance test.</p>
+
+<h2>Rejected designs</h2>
+<ul>
+<li>Native OIDC in xform.</li>
+<li>oauth2-proxy-specific xform code.</li>
+<li>Operator identity or token forwarding.</li>
+<li>A public assertion value such as <code>1</code>.</li>
+<li>Unix-only ingress, which excludes Traefik.</li>
+<li>Password fallback in trusted mode.</li>
+<li>API redirects that replace JSON failures with sign-in HTML.</li>
+</ul>
+
+<h2>Primary sources</h2>
+<ul>
+<li><a href="https://openid.net/specs/openid-connect-core-1_0.html">OpenID Connect Core</a>, <a href="https://openid.net/specs/openid-connect-discovery-1_0.html">Discovery</a>, and <a href="https://openid.net/specs/openid-connect-rpinitiated-1_0.html">RP-Initiated Logout</a></li>
+<li><a href="https://oauth2-proxy.github.io/oauth2-proxy/configuration/overview/">oauth2-proxy configuration</a>, <a href="https://oauth2-proxy.github.io/oauth2-proxy/features/endpoints/">endpoints</a>, and integrations for <a href="https://oauth2-proxy.github.io/oauth2-proxy/configuration/integrations/nginx/">nginx</a>, <a href="https://oauth2-proxy.github.io/oauth2-proxy/configuration/integrations/caddy">Caddy</a>, and <a href="https://oauth2-proxy.github.io/oauth2-proxy/configuration/integrations/traefik">Traefik</a></li>
+<li><a href="https://caddyserver.com/docs/caddyfile/directives/forward_auth">Caddy forward_auth</a> and <a href="https://caddyserver.com/docs/caddyfile/directives/reverse_proxy">reverse_proxy</a></li>
+<li><a href="https://doc.traefik.io/traefik/reference/routing-configuration/http/middlewares/forwardauth/">Traefik ForwardAuth</a> and <a href="https://doc.traefik.io/traefik/reference/routing-configuration/http/load-balancing/service/">HTTP services</a></li>
+<li><a href="https://zitadel.com/docs/examples/identity-proxy/oauth2-proxy">ZITADEL oauth2-proxy example</a>, <a href="https://zitadel.com/docs/guides/integrate/login/oidc/login-users">OIDC login and PKCE</a>, <a href="https://zitadel.com/docs/apis/openidoauth/endpoints">endpoints</a>, <a href="https://zitadel.com/docs/apis/openidoauth/scopes">scopes</a>, <a href="https://zitadel.com/docs/apis/openidoauth/claims">claims</a>, and <a href="https://zitadel.com/docs/guides/integrate/login/oidc/logout">logout</a></li>
+<li><a href="https://nginx.org/en/docs/http/ngx_http_auth_request_module.html">nginx auth_request</a> and <a href="https://nginx.org/en/docs/http/ngx_http_proxy_module.html#proxy_set_header">proxy_set_header</a></li>
+</ul>
+
+<h2>Remaining risks</h2>
+<ul>
+<li>Gateway examples still need implementation and executable CI coverage.</li>
+<li>No live ZITADEL tenant was tested during design.</li>
+<li>Any process that reads the Admission assertion secret has full Panel authority.</li>
+<li>Middleware ordering must ensure the gateway injects the assertion only after successful authentication.</li>
+<li>Traefik requires a Host process or host-network container for loopback access.</li>
+</ul>
+<p class="muted">No credentials, tokens, private hosts, personal addresses, or private IPs appear in this report. Values are public examples, loopback addresses, or placeholders.</p>
+</main></body>
+</html>

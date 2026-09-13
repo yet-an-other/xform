@@ -1,0 +1,574 @@
+<!doctype html>
+<!-- PROTOTYPE. Only the users table <thead> changes between variants.
+     Title, controls, columns, widths, alignment, typography, and rows stay fixed. -->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>xform users header prototype</title>
+<style>
+  :root {
+    --bg: #0b0f14;
+    --fg: #e9eef5;
+    --card: #17212d;
+    --surface: #121922;
+    --border: #253242;
+    --border-strong: #34465a;
+    --muted-fg: #8d9aaa;
+    --primary: #55d6a8;
+    --primary-fg: #0b0f14;
+    --accent: rgba(85, 214, 168, .14);
+    --accent-fg: #a9ecd3;
+  }
+
+  * { box-sizing: border-box; border-color: var(--border); }
+
+  body {
+    min-height: 100vh;
+    margin: 0;
+    color: var(--fg);
+    background:
+      radial-gradient(circle at 85% -10%, rgba(61, 107, 145, .23), transparent 38rem),
+      var(--bg);
+    font: 14px/1.45 Inter, ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    font-synthesis: none;
+    text-rendering: optimizeLegibility;
+  }
+
+  button { font: inherit; }
+  .mono { font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; }
+  .muted { color: var(--muted-fg); }
+
+  main {
+    width: min(1180px, calc(100% - 40px));
+    margin: 0 auto;
+    padding: 32px 0 96px;
+  }
+
+  @media (max-width: 640px) {
+    main { width: calc(100% - 28px); }
+  }
+
+  /* Static dashboard context. */
+  .app-header {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 12px;
+    margin-bottom: 24px;
+  }
+
+  .app-header h1 {
+    margin: 0;
+    font-size: 18px;
+    font-weight: 600;
+    letter-spacing: -.01em;
+  }
+
+  .app-header .meta { color: var(--muted-fg); font-size: 12px; }
+  .app-header .spacer { flex: 1; }
+
+  .metrics {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 16px;
+    margin-bottom: 16px;
+  }
+
+  @media (max-width: 900px) {
+    .metrics { grid-template-columns: repeat(2, 1fr); }
+  }
+
+  .metric {
+    min-height: 120px;
+    padding: 20px;
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    background: var(--card);
+  }
+
+  .metric .label {
+    color: var(--muted-fg);
+    font-size: 12px;
+    font-weight: 700;
+    letter-spacing: .13em;
+    text-transform: uppercase;
+  }
+
+  .metric .value {
+    margin-top: 12px;
+    font: 600 18px/1.45 ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  }
+
+  .metric .detail { margin-top: 12px; color: var(--muted-fg); font-size: 12px; }
+
+  .meter {
+    height: 5px;
+    margin-top: 12px;
+    overflow: hidden;
+    border-radius: 99px;
+    background: var(--border);
+  }
+
+  .meter i {
+    display: block;
+    height: 100%;
+    border-radius: inherit;
+    background: linear-gradient(90deg, #3fb98e, #6ee6b9);
+  }
+
+  .plain-button,
+  .primary-button {
+    border-radius: 8px;
+    padding: 4px 10px;
+    font-size: 11.2px;
+    font-weight: 700;
+    letter-spacing: .08em;
+    text-transform: uppercase;
+    cursor: pointer;
+  }
+
+  .plain-button {
+    border: 1px solid var(--border);
+    color: var(--muted-fg);
+    background: transparent;
+  }
+
+  .plain-button:hover { color: var(--fg); }
+
+  .primary-button {
+    border: 0;
+    color: var(--primary-fg);
+    background: var(--primary);
+  }
+
+  /* Shared users card. This never changes between variants. */
+  .users-card {
+    margin-top: 16px;
+    overflow: hidden;
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    background: rgba(18, 25, 34, .8);
+  }
+
+  .users-title {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 16px;
+    padding: 16px 20px 10px;
+  }
+
+  .users-title h2 {
+    margin: 0;
+    color: var(--muted-fg);
+    font-size: 12px;
+    font-weight: 700;
+    letter-spacing: .13em;
+    text-transform: uppercase;
+  }
+
+  .users-actions { display: flex; align-items: center; gap: 8px; }
+  .table-scroll { overflow-x: auto; }
+
+  table {
+    width: 100%;
+    min-width: 68.5rem;
+    border-collapse: collapse;
+    table-layout: fixed;
+  }
+
+  th,
+  td {
+    padding: 6px 8px;
+    text-align: left;
+    white-space: nowrap;
+  }
+
+  .col-dot { width: 40px; padding-left: 20px; }
+  .col-protocol { width: 192px; }
+  .col-traffic { width: 112px; padding-left: 20px; }
+  .col-speed { width: 208px; }
+  .col-ips { width: 160px; }
+  .col-seen { width: 96px; text-align: right; }
+  .col-actions { width: 128px; padding-right: 20px; text-align: right; }
+
+  /* One header type treatment for every option. */
+  .users-table thead {
+    color: var(--muted-fg);
+    font-size: 11.2px;
+    font-weight: 700;
+    letter-spacing: .08em;
+    text-transform: uppercase;
+  }
+
+  .users-table thead tr {
+    height: 40px;
+    background: transparent;
+    box-shadow: inset 0 -1px 0 var(--border);
+  }
+
+  .users-table thead th { height: 40px; }
+
+  .users-table thead button {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    padding: 0;
+    border: 0;
+    color: inherit;
+    background: transparent;
+    font: inherit;
+    text-transform: inherit;
+    letter-spacing: inherit;
+    cursor: pointer;
+  }
+
+  .users-table thead button:hover { color: var(--primary); }
+
+  .sort-mark {
+    display: inline-block;
+    width: .85rem;
+    text-align: center;
+  }
+
+  .users-table thead th[aria-sort="ascending"],
+  .users-table thead th[aria-sort="descending"] { color: var(--fg); }
+
+  /* A. A quiet fill borrowed from the metric cards. */
+  .users-table.variant-a thead tr {
+    background: rgba(23, 33, 45, .76);
+    box-shadow:
+      inset 0 1px 0 rgba(52, 70, 90, .48),
+      inset 0 -1px 0 var(--border-strong);
+  }
+
+  /* B. A darker recessed strip with column dividers. */
+  .users-table.variant-b thead tr {
+    background: rgba(11, 15, 20, .68);
+    box-shadow:
+      inset 0 1px 0 rgba(52, 70, 90, .7),
+      inset 0 -1px 0 rgba(52, 70, 90, .9);
+  }
+
+  .users-table.variant-b thead th:not(:first-child) {
+    box-shadow: inset 1px 0 0 rgba(52, 70, 90, .34);
+  }
+
+  /* C. A restrained primary wash and a two-pixel lower edge. */
+  .users-table.variant-c thead tr {
+    background: linear-gradient(
+      90deg,
+      rgba(85, 214, 168, .075),
+      rgba(85, 214, 168, .035) 55%,
+      rgba(85, 214, 168, .01)
+    );
+    box-shadow:
+      inset 0 1px 0 rgba(85, 214, 168, .08),
+      inset 0 -2px 0 rgba(85, 214, 168, .3);
+  }
+
+  /* Shared body. No variant selector reaches this section. */
+  .users-table tbody tr {
+    border-bottom: 1px solid var(--border);
+    transition: background-color .15s;
+  }
+
+  .users-table tbody tr:last-child { border-bottom: 0; }
+  .users-table tbody tr:hover { background: rgba(18, 25, 34, .5); }
+
+  .users-table td.mono-cell {
+    font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+    font-size: 12px;
+  }
+
+  .email {
+    overflow: hidden;
+    font-weight: 600;
+    text-overflow: ellipsis;
+  }
+
+  .stack { display: flex; flex-direction: column; }
+
+  .presence {
+    display: inline-block;
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    background: var(--border);
+  }
+
+  .presence.online {
+    background: var(--primary);
+    box-shadow: 0 0 6px rgba(85, 214, 168, .3);
+  }
+
+  .row-actions { display: inline-flex; gap: 6px; }
+
+  .icon-button {
+    display: inline-grid;
+    width: 30px;
+    height: 30px;
+    place-items: center;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    color: var(--fg);
+    background: transparent;
+    cursor: pointer;
+  }
+
+  .icon-button:hover {
+    border-color: var(--primary);
+    color: var(--primary);
+    background: var(--accent);
+  }
+
+  .prototype-note {
+    margin-top: 18px;
+    color: var(--muted-fg);
+    font-size: 12px;
+  }
+
+  .switcher {
+    position: fixed;
+    bottom: 16px;
+    left: 50%;
+    z-index: 50;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 6px 8px;
+    transform: translateX(-50%);
+    border: 1px solid var(--border-strong);
+    border-radius: 99px;
+    background: var(--card);
+    box-shadow: 0 24px 80px rgba(0, 0, 0, .58);
+  }
+
+  .switcher button {
+    display: grid;
+    width: 28px;
+    height: 28px;
+    place-items: center;
+    border: 0;
+    border-radius: 50%;
+    color: var(--fg);
+    background: transparent;
+    cursor: pointer;
+  }
+
+  .switcher button:hover { color: var(--accent-fg); background: var(--accent); }
+
+  .switcher-label {
+    min-width: 164px;
+    text-align: center;
+    font: 12px/1.45 ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  }
+</style>
+</head>
+<body>
+<main>
+  <header class="app-header">
+    <h1>xform</h1>
+    <span class="meta mono">1.4.2</span>
+    <span class="meta">·</span>
+    <span class="meta mono">up 41d 12h</span>
+    <span class="spacer"></span>
+    <span class="meta mono">refreshing every 5s · updated 14:32</span>
+    <button class="plain-button">Log out</button>
+  </header>
+
+  <section class="metrics" aria-label="Server resources">
+    <div class="metric">
+      <div class="label">CPU</div><div class="value">23.4%</div>
+      <div class="meter"><i style="width:23.4%"></i></div><div class="detail">4 cores</div>
+    </div>
+    <div class="metric">
+      <div class="label">RAM</div><div class="value">41.2%</div>
+      <div class="meter"><i style="width:41.2%"></i></div><div class="detail">6.7 GiB of 16 GiB</div>
+    </div>
+    <div class="metric">
+      <div class="label">Storage</div><div class="value">62.8%</div>
+      <div class="meter"><i style="width:62.8%"></i></div><div class="detail">151 GiB of 240 GiB on /</div>
+    </div>
+    <div class="metric">
+      <div class="label">Host uptime</div><div class="value">41d 12h</div>
+      <div class="detail">load 0.42 0.51 0.48</div>
+    </div>
+  </section>
+
+  <section class="users-card" aria-label="Users">
+    <div class="users-title">
+      <h2>Users</h2>
+      <span class="users-actions">
+        <button class="plain-button">Show disabled (1)</button>
+        <button class="primary-button">+ Add user</button>
+      </span>
+    </div>
+    <div class="table-scroll">
+      <table class="users-table" id="users-table">
+        <thead id="users-head"></thead>
+        <tbody id="users-body"></tbody>
+      </table>
+    </div>
+  </section>
+
+  <p class="prototype-note">
+    Only the column-header strip changes. Header type, casing, height, labels, column widths, alignment, controls, and rows stay fixed.
+  </p>
+</main>
+
+<div class="switcher">
+  <button id="previous" type="button" aria-label="Previous option">◀</button>
+  <span class="switcher-label" id="switcher-label"></span>
+  <button id="next" type="button" aria-label="Next option">▶</button>
+</div>
+
+<script>
+"use strict";
+
+const USERS = [
+  { email: "alice@example.com", online: true,  protocol: "vless · reality", up: 13.3e9, down: 196.7e9, upBps: 2.1e6, downBps: 9.8e6, ips: [["192.0.2.18", "🇩🇪"]], seen: null },
+  { email: "bob@example.com",   online: true,  protocol: "vless · tls · ws", up: 3.3e9, down: 48e9, upBps: 131e3, downBps: 1.2e6, ips: [["198.51.100.42", "🇬🇧"]], seen: null },
+  { email: "erin@example.com",  online: true,  protocol: "vless · tls", up: 24.6e9, down: 442.9e9, upBps: 5.4e6, downBps: 21.3e6, ips: [["203.0.113.7", "🇸🇬"], ["192.0.2.18", "🇩🇪"]], seen: null },
+  { email: "heidi@example.com", online: true,  protocol: "vless · reality", up: 317e6, down: 8.3e9, upBps: 45e3, downBps: 625e3, ips: [["192.0.2.91", "🇳🇱"]], seen: null },
+  { email: "carol@example.com", online: false, protocol: "vless · reality", up: 778e6, down: 9.8e9, upBps: 0, downBps: 0, ips: [], seen: 14 * 60 },
+  { email: "grace@example.com", online: false, protocol: "vless · tls · grpc", up: 1.7e9, down: 30.4e9, upBps: 0, downBps: 0, ips: [], seen: 26 * 60 },
+  { email: "dave@example.com",  online: false, protocol: "vless · none", up: 93e6, down: 1.3e9, upBps: 0, downBps: 0, ips: [], seen: 3 * 3600 },
+];
+
+const OPTIONS = [
+  { key: "current", label: "current" },
+  { key: "a", label: "A · card fill" },
+  { key: "b", label: "B · dark grid" },
+  { key: "c", label: "C · mint edge" },
+];
+
+const DEFAULT_DIRECTIONS = { email: "ascending", traffic: "descending", lastSeen: "descending" };
+let option = OPTIONS.find((item) => item.key === location.hash.slice(1))?.key ?? "current";
+let sort = null;
+
+function formatBytes(value) {
+  const units = [["GiB", 2 ** 30], ["MiB", 2 ** 20], ["KiB", 2 ** 10]];
+  for (const [unit, size] of units) {
+    if (value >= size) return `${(value / size).toFixed(value >= 10 * size ? 0 : 1)} ${unit}`;
+  }
+  return `${Math.round(value)} B`;
+}
+
+function formatSpeed(value) { return `${formatBytes(value)}/s`; }
+
+function formatAgo(seconds) {
+  if (seconds < 3600) return `${Math.round(seconds / 60)}m ago`;
+  if (seconds < 86400) return `${Math.round(seconds / 3600)}h ago`;
+  return `${Math.round(seconds / 86400)}d ago`;
+}
+
+function sortedUsers() {
+  if (sort === null) return [...USERS];
+  const direction = sort.direction === "ascending" ? 1 : -1;
+  return [...USERS].sort((left, right) => {
+    if (sort.key === "email") return direction * left.email.localeCompare(right.email);
+    if (sort.key === "traffic") {
+      return direction * ((left.up + left.down) - (right.up + right.down));
+    }
+    const seen = (user) => user.online ? Number.MAX_SAFE_INTEGER : user.seen ?? 0;
+    return direction * (seen(left) - seen(right));
+  });
+}
+
+function sortMark(key) {
+  if (sort?.key !== key) return "↕";
+  return sort.direction === "ascending" ? "↑" : "↓";
+}
+
+function sortState(key) {
+  return sort?.key === key ? sort.direction : "none";
+}
+
+/* This is the only header markup. Every option uses it unchanged. */
+function headerHtml() {
+  return `<tr>
+    <th class="col-dot" aria-label="Online"></th>
+    <th aria-sort="${sortState("email")}"><button type="button" data-sort="email">User <span class="sort-mark">${sortMark("email")}</span></button></th>
+    <th class="col-protocol">Protocol</th>
+    <th class="col-traffic" aria-sort="${sortState("traffic")}"><button type="button" data-sort="traffic">Traffic <span class="sort-mark">${sortMark("traffic")}</span></button></th>
+    <th class="col-speed">Speed now</th>
+    <th class="col-ips">Online IPs</th>
+    <th class="col-seen" aria-sort="${sortState("lastSeen")}"><button type="button" data-sort="lastSeen">Last seen <span class="sort-mark">${sortMark("lastSeen")}</span></button></th>
+    <th class="col-actions" aria-label="Actions"></th>
+  </tr>`;
+}
+
+/* This is the only body markup. No option argument reaches it. */
+function bodyHtml() {
+  return sortedUsers().map((user) => {
+    const speed = user.upBps || user.downBps
+      ? `<div class="stack"><span>↑ ${formatSpeed(user.upBps)}</span><span>↓ ${formatSpeed(user.downBps)}</span></div>`
+      : '<span class="muted">idle</span>';
+    const ips = user.ips.length
+      ? user.ips.map(([ip, flag]) => `<div><span style="margin-right:6px">${flag}</span>${ip}</div>`).join("")
+      : '<span class="muted">—</span>';
+    const seen = user.online ? "now" : formatAgo(user.seen);
+    const [protocol, ...detail] = user.protocol.split(" · ");
+
+    return `<tr>
+      <td class="col-dot"><span class="presence ${user.online ? "online" : ""}"></span></td>
+      <td class="email">${user.email}</td>
+      <td class="col-protocol"><span class="muted">${protocol} · </span>${detail.join(" · ")}</td>
+      <td class="col-traffic mono-cell"><div class="stack"><span>↑ ${formatBytes(user.up)}</span><span>↓ ${formatBytes(user.down)}</span></div></td>
+      <td class="col-speed mono-cell">${speed}</td>
+      <td class="col-ips mono-cell">${ips}</td>
+      <td class="col-seen mono-cell">${seen}</td>
+      <td class="col-actions"><span class="row-actions"><button class="icon-button" title="Details">ⓘ</button><button class="icon-button" title="Edit">✎</button></span></td>
+    </tr>`;
+  }).join("");
+}
+
+function render() {
+  const table = document.getElementById("users-table");
+  table.className = `users-table${option === "current" ? "" : ` variant-${option}`}`;
+  document.getElementById("users-head").innerHTML = headerHtml();
+  document.getElementById("users-body").innerHTML = bodyHtml();
+  document.getElementById("switcher-label").textContent = OPTIONS.find((item) => item.key === option).label;
+}
+
+function cycle(step) {
+  const index = OPTIONS.findIndex((item) => item.key === option);
+  option = OPTIONS[(index + step + OPTIONS.length) % OPTIONS.length].key;
+  history.replaceState(null, "", `#${option}`);
+  render();
+}
+
+document.getElementById("users-head").addEventListener("click", (event) => {
+  const button = event.target.closest("button[data-sort]");
+  if (button === null) return;
+  const key = button.dataset.sort;
+  sort = sort?.key === key
+    ? { key, direction: sort.direction === "ascending" ? "descending" : "ascending" }
+    : { key, direction: DEFAULT_DIRECTIONS[key] };
+  render();
+});
+
+document.getElementById("previous").addEventListener("click", () => cycle(-1));
+document.getElementById("next").addEventListener("click", () => cycle(1));
+
+window.addEventListener("keydown", (event) => {
+  const target = event.target;
+  if (target?.tagName === "INPUT" || target?.tagName === "TEXTAREA" || target?.isContentEditable) return;
+  if (event.key === "ArrowLeft") cycle(-1);
+  if (event.key === "ArrowRight") cycle(1);
+});
+
+window.addEventListener("hashchange", () => {
+  const selected = OPTIONS.find((item) => item.key === location.hash.slice(1));
+  if (selected !== undefined) {
+    option = selected.key;
+    render();
+  }
+});
+
+render();
+</script>
+</body>
+</html>
