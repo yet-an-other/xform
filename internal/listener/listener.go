@@ -387,18 +387,6 @@ type fileIdentity struct {
 	uid uint32
 }
 
-func identityFromFileInfo(info os.FileInfo) (fileIdentity, error) {
-	stat, ok := info.Sys().(*syscall.Stat_t)
-	if !ok {
-		return fileIdentity{}, fmt.Errorf("unexpected file metadata type %T", info.Sys())
-	}
-	return fileIdentity{
-		dev: uint64(stat.Dev),
-		ino: uint64(stat.Ino),
-		uid: uint32(stat.Uid),
-	}, nil
-}
-
 func identityFromUnixStat(stat *unix.Stat_t) fileIdentity {
 	return fileIdentity{
 		dev: uint64(stat.Dev),

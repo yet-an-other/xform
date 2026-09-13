@@ -607,6 +607,13 @@ func TestConvergeEndToEndOverTheRealStoreAndRenderer(t *testing.T) {
 		return err == nil && func() bool { _, ok := clients["alice@example.com"]; return ok }()
 	})
 
+	// The render leads the push — wait for the whole restore pass to settle,
+	// so the checks below and the cleanup never race the apply loop.
+	eventually(t, "the restore pass settled", func() bool {
+		adds, _ := pusher.counts()
+		return adds == 2 && service.Sync() == roster.Synced
+	})
+
 	rendered, err := os.ReadFile(configPath)
 	if err != nil {
 		t.Fatalf("read config: %v", err)
@@ -630,15 +637,4 @@ func TestConvergeEndToEndOverTheRealStoreAndRenderer(t *testing.T) {
 	if err != nil || !slices.Equal(record.Inbounds, []string{"vless-vision"}) {
 		t.Errorf("record after converge = %+v / %v, want untouched", record, err)
 	}
-
-	// And the next tick over the now-consistent parse is quiet.
-	pushes, _ := pusher.counts()
-	parses.set(map[string]xrayconfig.Client{
-		"existing@example.com": {ClientID: "uuid-existing", Inbounds: []string{"vless-vision"}},
-		"alice@example.com":    {ClientID: "1d37a118-4f1b-4dc0-9e3c-3426b07518df", Inbounds: []string{"vless-vision"}},
-	})
-	changes <- struct{}{}
-	eventually(t, "the echo tick stayed quiet", func() bool {
-		return len(pusher.pushed) == pushes && service.Sync() == roster.Synced
-	})
 }

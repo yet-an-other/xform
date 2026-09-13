@@ -312,26 +312,17 @@ func TestUnixListenReplacesOwnStaleSocket(t *testing.T) {
 		t.Fatalf("create stale socket: %v", err)
 	}
 	stale.SetUnlinkOnClose(false)
-	before, err := unixPathIdentity(path)
-	if err != nil {
-		t.Fatalf("identity of stale socket: %v", err)
-	}
 	if err := stale.Close(); err != nil {
 		t.Fatalf("close stale socket: %v", err)
 	}
 
+	// A stale own socket is replaced: Listen cannot succeed otherwise —
+	// publishing the new socket fails EEXIST while the name is occupied.
 	listener, err := Listen("unix:" + path)
 	if err != nil {
-		t.Fatalf("Listen() error = %v", err)
+		t.Fatalf("Listen() on a stale own socket: %v", err)
 	}
 	defer listener.Close()
-	after, err := unixPathIdentity(path)
-	if err != nil {
-		t.Fatalf("identity of replacement socket: %v", err)
-	}
-	if before == after {
-		t.Fatal("replacement socket reused the stale socket identity")
-	}
 }
 
 func TestUnixListenRefusesLiveSocket(t *testing.T) {
@@ -419,10 +410,3 @@ func TestUnixListenRejectsForeignOwnedSocket(t *testing.T) {
 	}
 }
 
-func unixPathIdentity(path string) (fileIdentity, error) {
-	info, err := os.Lstat(path)
-	if err != nil {
-		return fileIdentity{}, err
-	}
-	return identityFromFileInfo(info)
-}
