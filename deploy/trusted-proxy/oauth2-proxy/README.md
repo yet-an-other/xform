@@ -47,7 +47,12 @@ Create one ZITADEL application in the project used for the Panel:
 3. Select client authentication **BASIC** (`client_secret_basic`). Do not put
    the generated client secret in this repository, a command argument, or a
    gateway configuration.
-4. Enable PKCE and use **S256**. Do not use `plain`.
+4. Do not select the console's **PKCE** preset, and know that PKCE needs no
+   ZITADEL setting: that preset is a public client (authentication method
+   None, no secret), and oauth2-proxy refuses to start without a
+   `client_secret`. The templates send the challenge themselves with
+   `code_challenge_method = "S256"`, and ZITADEL honors the per-request
+   challenge for confidential clients. Never switch this to `plain`.
 5. Register exactly one of these HTTPS callbacks, matching the selected
    template and its `redirect_url` byte-for-byte:
 

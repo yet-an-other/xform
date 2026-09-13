@@ -11,7 +11,10 @@ issue/CI logs.
       device, or client-credentials.
 - [ ] Grant is **Authorization Code**.
 - [ ] Client authentication is **BASIC** (`client_secret_basic`).
-- [ ] PKCE is enabled with **S256**.
+- [ ] PKCE arrives from the proxy, not from ZITADEL: the rendered config
+      sets `code_challenge_method = "S256"`, and no ZITADEL PKCE setting is
+      required — the console's PKCE preset is a public client without a
+      secret and is not used.
 - [ ] OIDC issuer discovery is enabled; issuer/TLS verification is not
       disabled.
 - [ ] Requested scopes are exactly `openid email`.
