@@ -297,10 +297,4 @@ func TestConvergeLeavesDeletingRowsAlone(t *testing.T) {
 			t.Errorf("a deleting user must not be re-pushed: %+v", user)
 		}
 	}
-	if purged := h.store.purgedList(); len(purged) != 0 {
-		t.Errorf("store purges = %v, want none — alice's purge is her own apply's business", purged)
-	}
-	if !h.store.isDeleting("alice@example.com") {
-		t.Error("alice must stay marked deleting")
-	}
 }

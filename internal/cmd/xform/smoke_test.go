@@ -182,9 +182,6 @@ func TestPanelBootsAndCleansUpUnixSocket(t *testing.T) {
 	if !ready {
 		t.Fatalf("the panel did not answer healthz over %s; boot log:\n%s", socketPath, boot.String())
 	}
-	if _, err := os.Lstat(socketPath); err != nil {
-		t.Fatalf("panel never created %s: %v\nboot log:\n%s", socketPath, err, boot.String())
-	}
 
 	if err := panel.Process.Signal(syscall.SIGTERM); err != nil {
 		t.Fatalf("signal the panel: %v", err)

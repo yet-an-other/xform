@@ -125,11 +125,18 @@ func TestWatcherWarnsWhenXrayBecomesAvailableAfterAdvertisements(t *testing.T) {
 	logger := slog.New(slog.NewTextHandler(&logs, nil))
 	watcher := advertisements.NewWatcher(advertisementPath).WithInbounds(xraySource).WithLogger(logger)
 	watcher.Start(ctx)
-	waitForAdvertisements(t, "the first advertisements load", func() bool {
-		return watcher.Snapshot().Available()
+	// The load log lands right before the warning decision, so waiting for
+	// it proves the decision point was reached — a bare Available() wait
+	// could return before reportLoads ran at all.
+	waitForAdvertisements(t, "the first load reported", func() bool {
+		return strings.Contains(logs.String(), "Advertised connection settings updated")
 	})
-	if strings.Contains(logs.String(), "reference no current xray inbound") {
-		t.Fatalf("warning emitted before xray config loaded: %s", logs.String())
+	deadline := time.Now().Add(100 * time.Millisecond)
+	for time.Now().Before(deadline) {
+		if strings.Contains(logs.String(), "reference no current xray inbound") {
+			t.Fatalf("warning emitted before xray config loaded: %s", logs.String())
+		}
+		time.Sleep(5 * time.Millisecond)
 	}
 
 	writeAdvertisements(t, xrayPath, `{
@@ -178,11 +185,15 @@ func TestWatcherDefersUnknownWarningWhileXrayViewIsStale(t *testing.T) {
 	logger := slog.New(slog.NewTextHandler(&logs, nil))
 	watcher := advertisements.NewWatcher(advertisementPath).WithInbounds(xraySource).WithLogger(logger)
 	watcher.Start(ctx)
-	waitForAdvertisements(t, "the first advertisements load", func() bool {
-		return watcher.Snapshot().Available()
+	waitForAdvertisements(t, "the first load reported", func() bool {
+		return strings.Contains(logs.String(), "Advertised connection settings updated")
 	})
-	if strings.Contains(logs.String(), "reference no current xray inbound") {
-		t.Fatalf("warning used a stale xray view: %s", logs.String())
+	deadline := time.Now().Add(100 * time.Millisecond)
+	for time.Now().Before(deadline) {
+		if strings.Contains(logs.String(), "reference no current xray inbound") {
+			t.Fatalf("warning used a stale xray view: %s", logs.String())
+		}
+		time.Sleep(5 * time.Millisecond)
 	}
 
 	writeAdvertisements(t, xrayPath, `{

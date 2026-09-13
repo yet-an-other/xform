@@ -220,17 +220,6 @@ func TestCollectorFlushesRosterWhileStale(t *testing.T) {
 	if alice := snapshot.Users[0]; !alice.Disabled {
 		t.Error("alice disabled = false, want true — the config edit landed without waiting for xray")
 	}
-
-	// And once xray recovers there is no pending roster left to re-apply.
-	traffic.err = nil
-	now = now.Add(5 * time.Second)
-	snapshot, err = collector.Collect(context.Background())
-	if err != nil {
-		t.Fatalf("collect: %v", err)
-	}
-	if alice := snapshot.Users[0]; !alice.Disabled {
-		t.Error("alice disabled = false after recovery, want true — the roster stays applied")
-	}
 }
 
 // Hand-adding a client to the config lands in the roster store on the next

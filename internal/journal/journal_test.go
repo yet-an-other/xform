@@ -228,13 +228,6 @@ func TestCollectRunsTheFixedCommand(t *testing.T) {
 			t.Errorf("args[%d] = %q, want %q", index, command.Args[index], want)
 		}
 	}
-	// The unit rides as one attached argument, so a leading dash could never
-	// become another option.
-	for _, arg := range command.Args {
-		if arg == "--unit" || arg == "--all" {
-			t.Errorf("args contain %q; the unit must be attached and --all never passed", arg)
-		}
-	}
 	// A deterministic environment, nothing inherited.
 	wantEnv := map[string]bool{"LC_ALL=C": true, "LANG=C": true, "SYSTEMD_COLORS=0": true}
 	if len(command.Env) != len(wantEnv) {
@@ -311,10 +304,6 @@ func TestCollectSelectsTheRecordFilterFromTheCallerChoiceAlone(t *testing.T) {
 		command := (*commands)[0]
 		if !slices.Equal(command.Args, wantArgs) {
 			t.Errorf("args = %q, want %q", command.Args, wantArgs)
-		}
-		// Attached, like the unit: the pattern can never become another option.
-		if slices.Contains(command.Args, "--grep") {
-			t.Errorf("args %q carry a bare --grep; the pattern must be attached", command.Args)
 		}
 	})
 

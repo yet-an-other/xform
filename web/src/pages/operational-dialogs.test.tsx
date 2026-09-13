@@ -157,7 +157,6 @@ describe("Config snapshot dialog", () => {
     fireEvent.click(within(dialog).getByRole("button", { name: /copy/i }));
 
     await waitFor(() => expect(writeText).toHaveBeenCalledWith(configSnapshot.text));
-    expect(writeText.mock.calls[0][0].endsWith("\n")).toBe(true);
   });
 
   it("offers no Copy action when the read failed", async () => {

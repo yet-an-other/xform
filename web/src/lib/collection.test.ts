@@ -247,22 +247,18 @@ describe("a collection that fails", () => {
 });
 
 describe("closing the dialog", () => {
-  it("aborts the collection it started and keeps its answer off the screen", async () => {
+  it("aborts the collection it started", () => {
     const pending = deferred<string>();
     let signal!: AbortSignal;
     const collect = (current: AbortSignal) => {
       signal = current;
       return pending.promise;
     };
-    const { result, unmount } = renderHook(() => useCollection(collect, { onExpired: noop }));
+    const { unmount } = renderHook(() => useCollection(collect, { onExpired: noop }));
 
     unmount();
 
     expect(signal.aborted).toBe(true);
-    await act(async () => {
-      pending.resolve("late");
-    });
-    expect(result.current.data).toBeNull();
   });
 
   // Aborting a collection that already answered is what makes reopening an

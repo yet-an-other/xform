@@ -1387,18 +1387,20 @@ func TestConvergeRestoresAUserDeletedFromTheConfig(t *testing.T) {
 	h.parses.set(map[string]xrayconfig.Client{
 		"existing@example.com": {ClientID: "uuid-existing", Inbounds: []string{"vless-vision", "vless-ws"}},
 	})
+	h.renderer.mu.Lock()
+	renders := len(h.renderer.plans)
+	h.renderer.mu.Unlock()
+	adds, _ := h.pusher.counts()
 	h.changes <- struct{}{}
 
-	eventually(t, "the file restored and the pushes landed", func() bool {
-		renders := 0
+	// The add's own pass already settled, so any new render or push can
+	// only be convergence's restore.
+	eventually(t, "convergence re-rendered and re-pushed alice", func() bool {
 		h.renderer.mu.Lock()
-		for _, plan := range h.renderer.plans {
-			if got := plan.Adds["vless-vision"]; len(got) > 0 && got[0].Email == "alice@example.com" {
-				renders++
-			}
-		}
+		settled := len(h.renderer.plans)
 		h.renderer.mu.Unlock()
-		return renders > 0 && h.service.Sync() == roster.Synced
+		addsNow, _ := h.pusher.counts()
+		return settled > renders && addsNow > adds && h.service.Sync() == roster.Synced
 	})
 
 	plan := h.renderer.lastPlan()
@@ -1483,11 +1485,17 @@ func TestConvergeSkipsPendingGoneAndForeign(t *testing.T) {
 		adds, _ := h.pusher.counts()
 		return adds > pushes
 	})
-	h.renderer.mu.Lock()
-	rendersAfterFire := len(h.renderer.plans)
-	h.renderer.mu.Unlock()
-	if rendersAfterFire > renders+1 {
-		t.Errorf("renders = %d, want the retry only — convergence skips pending users", rendersAfterFire)
+	// Convergence runs after the retry inside the same fire and would land
+	// on a later pass — hold the line at the retry's render for a window.
+	deadline := time.Now().Add(300 * time.Millisecond)
+	for time.Now().Before(deadline) {
+		h.renderer.mu.Lock()
+		rendersNow := len(h.renderer.plans)
+		h.renderer.mu.Unlock()
+		if rendersNow > renders+1 {
+			t.Fatalf("renders = %d, want the retry only — convergence skips pending users", rendersNow)
+		}
+		time.Sleep(5 * time.Millisecond)
 	}
 
 	// The push recovers; the next watch fire retries and settles.
@@ -1508,14 +1516,19 @@ func TestConvergeSkipsPendingGoneAndForeign(t *testing.T) {
 		"alice@example.com":    {ClientID: "1d37a118-4f1b-4dc0-9e3c-3426b07518df", Inbounds: []string{"vless-vision"}},
 	})
 	h.changes <- struct{}{}
-	eventually(t, "the watch fire settled with no ops", func() bool {
+	// A wrongful re-apply would land within the window — hold the line at
+	// the disable's counts.
+	deadline = time.Now().Add(300 * time.Millisecond)
+	for time.Now().Before(deadline) {
 		h.renderer.mu.Lock()
-		defer h.renderer.mu.Unlock()
-		return len(h.renderer.plans) == renders && h.service.Sync() == roster.Synced
-	})
-	adds, _ := h.pusher.counts()
-	if adds != pushes {
-		t.Errorf("pushes = %d, want %d — a gone user must not be re-applied", adds, pushes)
+		rendersNow := len(h.renderer.plans)
+		h.renderer.mu.Unlock()
+		addsNow, _ := h.pusher.counts()
+		if rendersNow != renders || addsNow != pushes {
+			t.Fatalf("renders/pushes = %d/%d, want %d/%d — a gone user must not be re-applied",
+				rendersNow, addsNow, renders, pushes)
+		}
+		time.Sleep(5 * time.Millisecond)
 	}
 }
 
@@ -1531,17 +1544,21 @@ func TestConvergeRunsAtStartup(t *testing.T) {
 
 	// A fresh service over the drifted parse converges on its own.
 	events := &[]string{}
-	service := roster.NewService(h.store, h.views, h.parses, &fakeRenderer{events: events, parses: h.parses}, &fakePusher{events: events}, h.status, h.changes).
+	renderer := &fakeRenderer{events: events, parses: h.parses}
+	service := roster.NewService(h.store, h.views, h.parses, renderer, &fakePusher{events: events}, h.status, h.changes).
 		WithSettleWait(2 * time.Second).
 		WithStatusPoll(10 * time.Millisecond)
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
 	service.Start(ctx)
 
+	// The restore lands on the fresh service's own renderer.
 	eventually(t, "startup convergence restored alice", func() bool {
-		return service.Sync() == roster.Synced && h.parses.clientCount() == 1
+		renderer.mu.Lock()
+		defer renderer.mu.Unlock()
+		return len(renderer.plans) > 0
 	})
-	plan := h.renderer.lastPlan()
+	plan := renderer.lastPlan()
 	if got := plan.Adds["vless-vision"]; len(got) != 1 || got[0].Email != "alice@example.com" {
 		t.Errorf("startup converge plan = %+v, want alice restored", plan.Adds)
 	}
@@ -1592,12 +1609,16 @@ func TestConvergeIsQuietWhenTheFileMatches(t *testing.T) {
 		"alice@example.com":    {ClientID: "1d37a118-4f1b-4dc0-9e3c-3426b07518df", Inbounds: []string{"vless-vision"}},
 	})
 	h.changes <- struct{}{}
-	eventually(t, "the watch fire settled", func() bool {
+	// The fire's pass runs asynchronously, so quietness needs a window —
+	// a first-poll check would pass before the pass even ran.
+	deadline := time.Now().Add(300 * time.Millisecond)
+	for time.Now().Before(deadline) {
 		h.renderer.mu.Lock()
-		defer h.renderer.mu.Unlock()
-		return len(h.renderer.plans) == renders && h.service.Sync() == roster.Synced
-	})
-	if len(h.renderer.plans) != renders {
-		t.Error("a matching parse must render nothing")
+		rendersNow := len(h.renderer.plans)
+		h.renderer.mu.Unlock()
+		if rendersNow != renders {
+			t.Fatalf("renders = %d, want %d — a matching parse must render nothing (echo loop)", rendersNow, renders)
+		}
+		time.Sleep(5 * time.Millisecond)
 	}
 }

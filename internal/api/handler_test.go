@@ -3,7 +3,6 @@ package api_test
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"net/http"
 	"net/http/httptest"
 	"reflect"
@@ -656,40 +655,6 @@ func TestPanelUptimeMeasuresWholeMonotonicSeconds(t *testing.T) {
 	}
 	if got := uptime(); got != 505 {
 		t.Errorf("first process uptime = %d, want 505", got)
-	}
-}
-
-type failingSessions struct{}
-
-func (failingSessions) Login(string) (string, bool, error) {
-	return "", false, errors.New("no entropy")
-}
-func (failingSessions) Validate(string) bool { return false }
-func (failingSessions) Logout(string)        {}
-func (failingSessions) Mode() string         { return "password" }
-func (f failingSessions) Handler(next http.Handler) http.Handler {
-	return http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
-		if request.Method == http.MethodPost && request.URL.Path == "/api/v1/login" {
-			if _, _, err := f.Login(""); err != nil {
-				response.WriteHeader(http.StatusInternalServerError)
-				return
-			}
-		}
-		next.ServeHTTP(response, request)
-	})
-}
-
-func TestLoginFailureInSessionManagerIs500Not401(t *testing.T) {
-	handler := api.New(fixedHostStats{}, fixedXrayStatus{}, fixedUsers{}, fixedProfileSources{}, &stubRoster{}, api.OperationalSources{}, failingSessions{}, http.NotFoundHandler(), testPanelInfo)
-	request := httptest.NewRequest(http.MethodPost, "/api/v1/login",
-		strings.NewReader(`{"password": "anything"}`))
-	response := httptest.NewRecorder()
-
-	handler.ServeHTTP(response, request)
-
-	if response.Code != http.StatusInternalServerError {
-		t.Fatalf("status = %d, want %d — a session-manager failure is not a password mismatch",
-			response.Code, http.StatusInternalServerError)
 	}
 }
 

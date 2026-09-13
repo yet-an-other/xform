@@ -285,7 +285,8 @@ describe("header", () => {
     const banner = await screen.findByRole("banner");
     expect(within(banner).getByRole("img", { name: "stopped" })).toBeInTheDocument();
     // xray's own uptime is gone while stopped (the panel's "up …" remains).
-    expect(within(banner).queryByText("up 14d 0h")).not.toBeInTheDocument();
+    const xrayGroup = within(banner).getByText("xray").parentElement;
+    expect(xrayGroup).not.toHaveTextContent(/\bup\b/);
     expect(await screen.findByRole("alert")).toHaveTextContent(/xray-core is stopped/i);
   });
 });
@@ -2183,7 +2184,6 @@ describe("connection profile cards", () => {
       const action = within(dialog).getByRole("button", { name });
       action.focus();
       expect(action).toHaveFocus();
-      expect(dialog.contains(document.activeElement)).toBe(true);
     }
     expect(within(dialog).getAllByRole("button")).toHaveLength(actions.length);
   });

@@ -123,7 +123,7 @@ describe("edit user dialog", () => {
     await waitFor(() => expect(onClose).toHaveBeenCalled());
     const [, init] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
     const body = JSON.parse(String(init.body)) as { client_id: string; inbounds: string[] };
-    expect(body.client_id).toMatch(/^[0-9a-f-]{36}$/);
+    expect(body.client_id).toBe(after);
     expect(body.inbounds).toEqual(["vless-vision", "vless-ws"]);
   });
 
