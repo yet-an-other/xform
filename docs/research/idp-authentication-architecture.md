@@ -113,16 +113,12 @@ xform does not install, start, or upgrade any Authentication gateway.
 
 ## Complete ZITADEL example contract
 
-The maintained identity-provider example uses one ZITADEL Project with a **Web Application** configured for:
+The maintained identity-provider example uses one ZITADEL Project with a **Web Application** configured in the console for:
 
-- Authorization Code flow;
-- client authentication method **BASIC**, which means `client_secret_basic`;
-- PKCE `S256`;
-- an exact HTTPS callback URI;
-- discovery from the ZITADEL issuer;
-- scopes `openid email`;
-- verified email;
-- a deny-by-default exact-email allowlist.
+- the **Code** flow preset, which sets the authentication method **BASIC** (`client_secret_basic`) and the Authorization Code grant;
+- an exact HTTPS callback URI.
+
+The remaining contract values are oauth2-proxy configuration, not ZITADEL application settings: issuer discovery from the ZITADEL issuer, scopes `openid email`, verified email, a deny-by-default exact-email allowlist, and PKCE `S256` via `code_challenge_method`. The console's PKCE preset is a different choice entirely: a public client with authentication method None and no secret, which oauth2-proxy cannot use because it refuses to start without a `client_secret` (oauth2-proxy issue 2929). The proxy sends the challenge itself, and ZITADEL honors the per-request challenge for confidential clients — ZITADEL documents Web apps as "Authorization Code Flow (PKCE recommended) with a Client Secret".
 
 Do not select Native, User Agent, API, implicit, device, or client-credentials flows. Do not enable ZITADEL's development mode in production.
 

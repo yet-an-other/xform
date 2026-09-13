@@ -65,7 +65,7 @@
 <p>nginx and Caddy examples cover embedded and static deployments at root and under a subpath. Traefik covers embedded root and subpath deployments. xform does not install or manage gateways.</p>
 
 <h2>ZITADEL example</h2>
-<p>The full example creates a ZITADEL Project and a Web Application with Authorization Code, client-secret BASIC, PKCE S256, exact HTTPS callback, issuer discovery, and scopes <code>openid email</code>. A file containing exact verified email addresses denies every other identity. Domain and flat role-array policies are optional alternatives.</p>
+<p>The full example creates a ZITADEL Project and a Web Application with the Code flow preset: authentication method <code>BASIC</code> (<code>client_secret_basic</code>) and an exact HTTPS callback. Everything else in the contract is oauth2-proxy configuration, not ZITADEL settings: issuer discovery, scopes <code>openid email</code>, verified email, an exact-email allowlist, and PKCE <code>S256</code> via <code>code_challenge_method</code>. The console's PKCE preset is a public client with no secret, which oauth2-proxy cannot use; the proxy sends the challenge itself and ZITADEL honors it for confidential clients. Domain and flat role-array policies are optional alternatives.</p>
 <table><thead><tr><th>Mount</th><th>Callback</th><th>oauth2-proxy prefix</th><th>Cookie</th></tr></thead><tbody>
 <tr><td>root</td><td><code>https://panel.example.com/oauth2/callback</code></td><td><code>/oauth2</code></td><td><code>__Host-xform_oauth2</code>, path <code>/</code></td></tr>
 <tr><td><code>/xform/</code></td><td><code>https://host.example.com/xform/oauth2/callback</code></td><td><code>/xform/oauth2</code></td><td><code>__Secure-xform_oauth2</code>, path <code>/xform/</code></td></tr>
